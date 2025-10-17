@@ -181,20 +181,60 @@ const updateTutorProfile = async (req, res) => {
       }
     }
     
+    // Normalize inputs
+    const normalizedGender = (gender || '').toString().toLowerCase();
+    const normalizedTeachingMode = (teachingMode || 'both').toString().toLowerCase();
+
+    // Determine schema expectation for experience at runtime
+    const experienceSchemaType = (TutorProfile.schema && TutorProfile.schema.paths && TutorProfile.schema.paths.experience && TutorProfile.schema.paths.experience.instance) || 'String';
+
+    // Helper: map label to numeric midpoint when schema expects Number
+    const mapExperienceToNumber = (label) => {
+      if (!label) return 0;
+      const lower = label.toString().toLowerCase().trim();
+      const table = {
+        'less than 1 year': 0.5,
+        '1–2 years': 1.5,
+        '1-2 years': 1.5,
+        '3–5 years': 4,
+        '3-5 years': 4,
+        '6–10 years': 8,
+        '6-10 years': 8,
+        '10+ years': 10,
+      };
+      if (table.hasOwnProperty(lower)) return table[lower];
+      const num = parseFloat(lower);
+      return isNaN(num) ? 0 : num;
+    };
+
+    const normalizedExperience = experienceSchemaType === 'Number'
+      ? mapExperienceToNumber(experience)
+      : (experience || '').toString();
+
+    const parseArray = (val) => {
+      try {
+        if (!val) return [];
+        const parsed = JSON.parse(val);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    };
+
     // Create profile data object
     const profileData = {
       userId,
       name,
       email,
-      gender,
+      gender: normalizedGender,
       qualification,
-      experience: experience || '',
-      subjects: subjects ? JSON.parse(subjects) : [],
-      classLevels: classLevels ? JSON.parse(classLevels) : [],
-      teachingMode: teachingMode || 'both',
+      experience: normalizedExperience,
+      subjects: parseArray(subjects),
+      classLevels: parseArray(classLevels),
+      teachingMode: normalizedTeachingMode,
       hourlyRate: parseFloat(hourlyRate) || 0,
       monthlyRate: parseFloat(monthlyRate) || 0,
-      availableDays: availableDays ? JSON.parse(availableDays) : [],
+      availableDays: parseArray(availableDays),
       bio: bio || '',
       achievements: achievements || '',
       pincode: pincode || '',
