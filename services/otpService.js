@@ -84,15 +84,38 @@ const verifyOTP = (requestId, providedOTP) => {
   };
 };
 
+
+// Twilio integration
+const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
+const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
+let twilioClient = null;
+if (twilioSid && twilioAuth) {
+  twilioClient = require('twilio')(twilioSid, twilioAuth);
+}
+
 const sendOTP = async (phone, otp) => {
-  // For development, just log the OTP
-  console.log('==================================');
-  console.log(`📱 New OTP Request`);
-  console.log(`📞 Phone: ${phone}`);
-  console.log(`🔐 OTP: ${otp}`);
-  console.log(`⏰ Time: ${new Date().toISOString()}`);
-  console.log('==================================');
-  return true;
+  if (!twilioClient || !twilioFrom) {
+    console.log('Twilio not configured. Logging OTP instead.');
+    console.log('==================================');
+    console.log(`📱 New OTP Request`);
+    console.log(`📞 Phone: ${phone}`);
+    console.log(`🔐 OTP: ${otp}`);
+    console.log(`⏰ Time: ${new Date().toISOString()}`);
+    console.log('==================================');
+    return false;
+  }
+  try {
+    await twilioClient.messages.create({
+      body: `Your OTP is: ${otp}`,
+      from: twilioFrom,
+      to: phone
+    });
+    return true;
+  } catch (err) {
+    console.error('Twilio SMS error:', err);
+    return false;
+  }
 };
 
 module.exports = {

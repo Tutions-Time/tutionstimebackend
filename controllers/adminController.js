@@ -5,42 +5,68 @@ const TutorProfile = require('../models/TutorProfile');
 // Get all users with pagination
 const getAllUsers = async (req, res) => {
   try {
-    const { page = 1, limit = 10, role, status } = req.query;
-    const skip = (page - 1) * limit;
-    
-    // Build query
-    const query = {};
-    if (role) query.role = role;
-    if (status) query.status = status;
-    
-    // Get users with pagination
-    const users = await User.find(query)
-      .select('-refreshToken')
-      .skip(skip)
-      .limit(parseInt(limit))
-      .sort({ createdAt: -1 });
-    
-    // Get total count
-    const total = await User.countDocuments(query);
-    
+    // Fetch all users (no passwords or refresh tokens)
+    const users = await User.find().select('-password -refreshToken').lean();
+
+    // Fetch student and tutor profiles
+    const studentProfiles = await StudentProfile.find().lean();
+    const tutorProfiles = await TutorProfile.find().lean();
+
+    // Create maps for quick lookup
+    const studentMap = new Map(studentProfiles.map((p) => [p.userId.toString(), p]));
+    const tutorMap = new Map(tutorProfiles.map((p) => [p.userId.toString(), p]));
+
+    // Merge user data with corresponding profile data
+    const mergedUsers = users.map((u) => {
+      let profile = null;
+      let name = null;
+      let email = null;
+      let photoUrl = null;
+
+      if (u.role === 'student' && studentMap.has(u._id.toString())) {
+        profile = studentMap.get(u._id.toString());
+        name = profile.name || null;
+        email = profile.email || null;
+        photoUrl = profile.photoUrl || null;
+      } else if (u.role === 'tutor' && tutorMap.has(u._id.toString())) {
+        profile = tutorMap.get(u._id.toString());
+        name = profile.name || null;
+        email = profile.email || null;
+        photoUrl = profile.photoUrl || null;
+      }
+
+      return {
+        _id: u._id,
+        name,
+        email,
+        phone: u.phone,
+        role: u.role,
+        status: u.status,
+        isProfileComplete: u.isProfileComplete,
+        lastLogin: u.lastLogin,
+        createdAt: u.createdAt,
+        profilePhoto: photoUrl,
+      };
+    });
+
     res.status(200).json({
       success: true,
       data: {
-        users,
+        users: mergedUsers,
         pagination: {
-          total,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          pages: Math.ceil(total / limit)
-        }
-      }
+          total: mergedUsers.length,
+          page: 1,
+          limit: mergedUsers.length,
+          pages: 1,
+        },
+      },
     });
   } catch (error) {
     console.error('Get All Users Error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error',
-      error: error.message
+      error: error.message,
     });
   }
 };
@@ -83,48 +109,7 @@ const getUserById = async (req, res) => {
   }
 };
 
-// Update user status
-const updateUserStatus = async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { status } = req.body;
-    
-    if (!status || !['active', 'inactive', 'suspended'].includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Valid status is required'
-      });
-    }
-    
-    const user = await User.findById(userId);
-    
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-    
-    user.status = status;
-    await user.save();
-    
-    res.status(200).json({
-      success: true,
-      message: 'User status updated successfully',
-      data: {
-        id: user._id,
-        status: user.status
-      }
-    });
-  } catch (error) {
-    console.error('Update User Status Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
-  }
-};
+
 
 // Verify tutor
 const verifyTutor = async (req, res) => {
@@ -169,9 +154,50 @@ const verifyTutor = async (req, res) => {
   }
 };
 
+const updateUserStatus = async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const { status } = req.body;
+
+    if (!['active', 'inactive'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status value. Use active or inactive.',
+      });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { status },
+      { new: true }
+    ).select('-password -refreshToken');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `User ${status === 'active' ? 'activated' : 'deactivated'} successfully`,
+      user,
+    });
+  } catch (error) {
+    console.error('Update User Status Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getAllUsers,
   getUserById,
   updateUserStatus,
-  verifyTutor
+  verifyTutor,
+  updateUserStatus
 };

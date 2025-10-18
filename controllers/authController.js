@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 
 // Admin credentials (Move to environment variables in production)
 const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = '$2a$10$yYQaJrHzjOgD5wWCud6khOiZEf97/K0ODwqf4GksCgP.b2FoGwuQy'; // "admin123"
+const ADMIN_PASSWORD = '$2b$10$TCUXGHzI/sxObzQLY7zRBePZqLVYpOE.6hZ/1nlVWAHy5PGxw2DP2'; // "admin123"
 
 // Admin login
 const adminLogin = async (req, res) => {

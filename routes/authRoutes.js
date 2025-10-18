@@ -8,6 +8,7 @@ router.post('/send-otp', authController.sendOTP);
 
 // Verify OTP route
 router.post('/verify-otp', authController.verifyOTP);
+router.post('/admin-login', authController.adminLogin);
 
 // Get current user
 router.get('/me', authenticate, authController.getCurrentUser);
