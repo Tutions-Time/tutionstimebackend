@@ -132,7 +132,7 @@ const verifyOTP = async (req, res) => {
     }
     
     // Verify OTP
-    const verification = otpService.verifyOTP(requestId, otp);
+    const verification = otpService.verifyOTP(requestId, otp, phone);
     
     if (!verification.valid) {
       return res.status(400).json({
