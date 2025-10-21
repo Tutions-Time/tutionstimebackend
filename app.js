@@ -12,25 +12,14 @@ const app = express();
 
 // Security middleware
 app.use(helmet());
-// CORS configuration for frontend origins
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  'http://localhost:3000',
-  'https://tutionstimefrontend.vercel.app'
-].filter(Boolean);
-
+// CORS configuration (allow all origins with credentials)
 const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow non-browser requests (no origin)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    return callback(new Error('Not allowed by CORS'));
-  },
+  origin: true, // reflect request origin
   credentials: true,
   methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Origin'],
+  exposedHeaders: ['Content-Length', 'X-RateLimit-Remaining', 'X-RateLimit-Limit'],
+  optionsSuccessStatus: 200
 };
 
 app.use(cors(corsOptions));
