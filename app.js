@@ -27,6 +27,8 @@ app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/subjects', require('./routes/subjectRoutes'));
 app.use('/api/bookings', require('./routes/bookingRoutes'));
+app.use('/api/availability', require('./routes/availabilityRoutes'));
+// app.use('/api/payments', require('./routes/paymentRoutes'));
 app.use('/api/wallet', require('./routes/walletRoutes'));
 
 // Health check endpoint
