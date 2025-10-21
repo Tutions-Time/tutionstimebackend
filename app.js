@@ -1,9 +1,9 @@
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const errorHandler = require('./middleware/errorHandler');
+const express = require("express");
+const cors = require("cors");
+const helmet = require("helmet");
+const errorHandler = require("./middleware/errorHandler");
 
-const connectDB = require('./config/database');
+const connectDB = require("./config/database");
 
 // Connect to MongoDB
 connectDB();
@@ -13,45 +13,54 @@ const app = express();
 // Security middleware
 app.use(helmet());
 // CORS configuration (allow all origins with credentials)
-const corsOptions = {
-  origin: true, // reflect request origin
-  credentials: true,
-  methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Origin'],
-  exposedHeaders: ['Content-Length', 'X-RateLimit-Remaining', 'X-RateLimit-Limit'],
-  optionsSuccessStatus: 200
-};
-
-app.use(cors(corsOptions));
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "Accept",
+      "X-Requested-With",
+      "Origin",
+    ],
+    exposedHeaders: [
+      "Content-Length",
+      "X-RateLimit-Remaining",
+      "X-RateLimit-Limit",
+    ],
+  })
+);
+app.options("*", cors());
 // Handle preflight requests for all routes
-app.options('*', cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 // Body parser
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Serve static files from uploads directory
-app.use('/uploads', express.static('uploads'));
-
+app.use("/uploads", express.static("uploads"));
+app.get("/", (req, res) => res.status(200).json({ status: "cors donw" }));
 // Routes
-app.use('/api/auth', require('./routes/authRoutes'));
-app.use('/api/users', require('./routes/userRoutes'));
-app.use('/api/admin', require('./routes/adminRoutes'));
-app.use('/api/subjects', require('./routes/subjectRoutes'));
-app.use('/api/bookings', require('./routes/bookingRoutes'));
-app.use('/api/wallet', require('./routes/walletRoutes'));
+app.use("/api/auth", require("./routes/authRoutes"));
+app.use("/api/users", require("./routes/userRoutes"));
+app.use("/api/admin", require("./routes/adminRoutes"));
+app.use("/api/subjects", require("./routes/subjectRoutes"));
+app.use("/api/bookings", require("./routes/bookingRoutes"));
+app.use("/api/wallet", require("./routes/walletRoutes"));
 
 // Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok' });
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok" });
 });
 
 // Mock endpoint for testing
-app.get('/api/test', (req, res) => {
-  res.status(200).json({ 
-    success: true, 
-    message: 'API is working!',
-    timestamp: new Date().toISOString()
+app.get("/api/test", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "API is working!",
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -59,7 +68,7 @@ app.get('/api/test', (req, res) => {
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    message: 'Endpoint not found'
+    message: "Endpoint not found",
   });
 });
 
