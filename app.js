@@ -2,7 +2,6 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const errorHandler = require("./middleware/errorHandler");
-
 const connectDB = require("./config/database");
 
 // Connect to MongoDB
@@ -10,39 +9,45 @@ connectDB();
 
 const app = express();
 
-// Security middleware
+// ==================== SECURITY MIDDLEWARE ====================
 app.use(helmet());
-// CORS configuration (allow all origins with credentials)
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "Accept",
-      "X-Requested-With",
-      "Origin",
-    ],
-    exposedHeaders: [
-      "Content-Length",
-      "X-RateLimit-Remaining",
-      "X-RateLimit-Limit",
-    ],
-  })
-);
-app.options("*", cors());
-// Handle preflight requests for all routes
+
+// ==================== CORS CONFIGURATION ====================
+// ✅ Allow all origins (safe for dev/public API)
+const corsOptions = {
+  origin: "*",
+  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "Accept",
+    "X-Requested-With",
+    "Origin",
+  ],
+  exposedHeaders: [
+    "Content-Length",
+    "X-RateLimit-Remaining",
+    "X-RateLimit-Limit",
+  ],
+  optionsSuccessStatus: 200,
+};
+
+app.use(cors(corsOptions));
+// Handle all preflight (OPTIONS) requests
 app.options("*", cors(corsOptions));
 
-// Body parser
+// ==================== BODY PARSERS ====================
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files from uploads directory
+// ==================== STATIC FILES ====================
 app.use("/uploads", express.static("uploads"));
-app.get("/", (req, res) => res.status(200).json({ status: "cors donw" }));
-// Routes
+
+// ==================== ROUTES ====================
+app.get("/", (req, res) =>
+  res.status(200).json({ status: "CORS enabled and working!" })
+);
+
 app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/admin", require("./routes/adminRoutes"));
@@ -50,12 +55,11 @@ app.use("/api/subjects", require("./routes/subjectRoutes"));
 app.use("/api/bookings", require("./routes/bookingRoutes"));
 app.use("/api/wallet", require("./routes/walletRoutes"));
 
-// Health check endpoint
+// ==================== HEALTH & TEST ENDPOINTS ====================
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
-// Mock endpoint for testing
 app.get("/api/test", (req, res) => {
   res.status(200).json({
     success: true,
@@ -64,7 +68,7 @@ app.get("/api/test", (req, res) => {
   });
 });
 
-// 404 handler
+// ==================== 404 HANDLER ====================
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -72,7 +76,7 @@ app.use((req, res) => {
   });
 });
 
-// Error handling
+// ==================== ERROR HANDLER ====================
 app.use(errorHandler);
 
 module.exports = app;
