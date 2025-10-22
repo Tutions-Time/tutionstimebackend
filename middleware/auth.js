@@ -45,9 +45,12 @@ const authenticate = async (req, res, next) => {
 };
 
 // Check if user has required role
-const checkRole = (role) => {
+const checkRole = (roles) => {
   return (req, res, next) => {
-    if (req.user.role !== role) {
+    // roles can be string or array
+    const allowedRoles = Array.isArray(roles) ? roles : [roles];
+
+    if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: 'Access denied',
@@ -57,5 +60,6 @@ const checkRole = (role) => {
     next();
   };
 };
+
 
 module.exports = { authenticate, checkRole };

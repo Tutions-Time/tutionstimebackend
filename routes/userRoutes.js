@@ -6,9 +6,11 @@ const upload = require('../middleware/upload');
 
 // Get user profile
 router.get('/profile', authenticate, userController.getUserProfile);
+router.get('/', authenticate,  userController.getAllUsers);
+
 
 // Update student profile with photo upload
-router.post('/student-profile', 
+router.post('/student-profile',   
   authenticate,
   upload.fields([{ name: 'photo', maxCount: 1 }]),
   userController.updateStudentProfile

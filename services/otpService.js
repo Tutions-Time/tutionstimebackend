@@ -97,6 +97,16 @@ const verifyOTP = (requestId, providedOTP, phone) => {
   };
 };
 
+
+// Twilio integration
+const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
+const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
+let twilioClient = null;
+if (twilioSid && twilioAuth) {
+  twilioClient = require('twilio')(twilioSid, twilioAuth);
+}
+
 const sendOTP = async (phone, otp) => {
   // For development, just log the OTP
   console.log("==================================");

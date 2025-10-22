@@ -22,3 +22,5 @@ build/
 # IDE files
 .vscode/
 .idea/
+
+server.js
