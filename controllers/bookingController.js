@@ -1,6 +1,7 @@
 const Booking = require('../models/Booking');
 const { markSlotBooked, releaseSlot } = require('./availabilityController');
 const { createOrder } = require('../services/payments/razorpay');
+const crypto = require('crypto');
 
 /**
  * Create a new booking (demo or regular)
@@ -127,6 +128,68 @@ exports.updateBookingStatus = async (req, res) => {
     });
   }
 };
+
+
+
+
+
+// ✅ Verify Razorpay payment & confirm booking
+exports.verifyPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+
+    // 1️⃣ Validate input
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing payment verification details',
+      });
+    }
+
+    // 2️⃣ Find booking
+    const booking = await Booking.findById(id);
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found',
+      });
+    }
+
+    // 3️⃣ Verify signature using Razorpay secret key
+    const expectedSignature = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(razorpay_order_id + '|' + razorpay_payment_id)
+      .digest('hex');
+
+    if (expectedSignature !== razorpay_signature) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment verification failed (invalid signature)',
+      });
+    }
+
+    // 4️⃣ Update booking
+    booking.paymentId = razorpay_payment_id;
+    booking.paymentStatus = 'completed';
+    booking.status = 'confirmed';
+    await booking.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment verified successfully. Booking confirmed.',
+      data: booking,
+    });
+  } catch (error) {
+    console.error('Error verifying payment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error verifying payment',
+      error: error.message,
+    });
+  }
+};
+
 
 /**
  * Convert demo booking → paid class

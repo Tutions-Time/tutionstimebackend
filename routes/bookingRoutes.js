@@ -20,6 +20,10 @@ router.post('/', checkRole(['student']), bookingController.createBooking);
  */
 router.get('/', bookingController.getUserBookings);
 
+
+router.post('/:id/payment/verify', checkRole(['student']), bookingController.verifyPayment);
+
+
 /**
  * @route   PATCH /api/bookings/:id/status
  * @desc    Update booking status (pending → confirmed/cancelled/completed)

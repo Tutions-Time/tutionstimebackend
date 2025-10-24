@@ -52,17 +52,13 @@ app.use('/api/bookings', require('./routes/bookingRoutes'));
 app.use('/api/availability', require('./routes/availabilityRoutes'));
 // app.use('/api/payments', require('./routes/paymentRoutes'));
 app.use('/api/wallet', require('./routes/walletRoutes'));
+app.use('/api/tutors', require('./routes/tutorRoutes'));
+
 // ==================== ROUTES ====================
 app.get("/", (req, res) =>
   res.status(200).json({ status: "CORS enabled and working!" })
 );
 
-app.use("/api/auth", require("./routes/authRoutes"));
-app.use("/api/users", require("./routes/userRoutes"));
-app.use("/api/admin", require("./routes/adminRoutes"));
-app.use("/api/subjects", require("./routes/subjectRoutes"));
-app.use("/api/bookings", require("./routes/bookingRoutes"));
-app.use("/api/wallet", require("./routes/walletRoutes"));
 
 // ==================== HEALTH & TEST ENDPOINTS ====================
 app.get("/health", (req, res) => {
