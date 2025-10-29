@@ -13,6 +13,10 @@ router.use(authenticate);
  */
 router.post('/', checkRole(['student']), bookingController.createBooking);
 
+// Tutor bookings list
+router.get('/tutor', checkRole(['tutor']), bookingController.getTutorBookings);
+
+
 /**
  * @route   GET /api/bookings
  * @desc    Get bookings of logged-in user (student/tutor)

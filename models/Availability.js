@@ -5,6 +5,7 @@ const availabilitySchema = new Schema({
   startTime: { type: Date, required: true },
   endTime: { type: Date, required: true },
   isBooked: { type: Boolean, default: false },
+   slotType: { type: String, enum: ['demo', 'regular'], default: 'demo' }
 }, { timestamps: true });
 
 

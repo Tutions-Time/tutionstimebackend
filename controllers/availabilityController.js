@@ -12,7 +12,13 @@ exports.setSlots = async (req, res) => {
     for (const s of slots) {
       await Availability.updateOne(
         { tutorId, startTime: s.startTime },
-        { tutorId, startTime: s.startTime, endTime: s.endTime, isBooked: false },
+        {
+          tutorId,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          isBooked: false,
+          slotType: s.slotType || 'demo'
+        },
         { upsert: true }
       );
     }
@@ -28,7 +34,8 @@ exports.setSlots = async (req, res) => {
 exports.getTutorSlots = async (req, res) => {
   try {
     const { tutorId } = req.params;
-    const slots = await Availability.find({ tutorId, isBooked: false })
+    const type = req.query.type || 'demo';
+    const slots = await Availability.find({ tutorId, isBooked: false, slotType: type })
       .sort({ startTime: 1 });
     res.status(200).json({ success: true, data: slots });
   } catch (err) {

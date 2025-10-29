@@ -41,3 +41,32 @@ exports.searchTutors = async (req, res) => {
     });
   }
 };
+
+exports.getTutorById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const tutor = await TutorProfile.findById(id)
+      .populate('userId', 'phone role email')
+      .lean();
+
+    if (!tutor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Tutor not found',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: tutor,
+    });
+  } catch (error) {
+    console.error('Error fetching tutor profile:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch tutor profile',
+      error: error.message,
+    });
+  }
+};

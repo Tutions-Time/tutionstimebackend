@@ -1,6 +1,7 @@
 const Booking = require('../models/Booking');
 const { markSlotBooked, releaseSlot } = require('./availabilityController');
 const { createOrder } = require('../services/payments/razorpay');
+const walletService = require('../services/payments/walletService');
 const crypto = require('crypto');
 
 /**
@@ -39,10 +40,57 @@ exports.createBooking = async (req, res) => {
       console.warn('Slot not found or already booked:', startTime);
     }
 
+    // ✅ Send notifications
+    try {
+      const User = require('../models/User');
+      const notificationService = require('../services/notificationService');
+      const student = await User.findById(req.user.id).lean();
+      const tutor = await User.findById(tutorId).lean();
+
+      const when = new Date(startTime).toLocaleString('en-IN', {
+        dateStyle: 'medium',
+        timeStyle: 'short'
+      });
+
+      // In-app notifications
+      await Promise.all([
+        notificationService.createInApp(
+          tutorId,
+          'New Demo Booking',
+          `${student?.name || 'A student'} booked a demo for ${subject} on ${when}.`,
+          { bookingId: booking._id, type }
+        ),
+        notificationService.createInApp(
+          student._id,
+          'Demo Booked Successfully',
+          `Your demo with ${tutor?.name || 'the tutor'} is scheduled on ${when}.`,
+          { bookingId: booking._id, type }
+        )
+      ]);
+
+      // Email placeholders
+      if (tutor?.email)
+        await notificationService.sendEmail(
+          tutor.email,
+          'New Demo Booking',
+          `${student?.name || 'A student'} booked a demo on ${when}.`
+        );
+
+      if (student?.email)
+        await notificationService.sendEmail(
+          student.email,
+          'Demo Booked Successfully',
+          `Your demo with ${tutor?.name || 'the tutor'} is scheduled on ${when}.`
+        );
+    } catch (notifyErr) {
+      console.warn('Notification error:', notifyErr.message);
+    }
+
     res.status(201).json({
       success: true,
       data: booking,
     });
+
   } catch (error) {
     console.error('Error creating booking:', error);
     res.status(500).json({
@@ -51,6 +99,30 @@ exports.createBooking = async (req, res) => {
     });
   }
 };
+
+/**
+ * Get bookings for logged-in tutor (filtered by demo/pending)
+ */
+exports.getTutorBookings = async (req, res) => {
+  try {
+    const tutorId = req.user.id;
+    const { status, type } = req.query;
+
+    const filter = { tutorId };
+    if (status) filter.status = status;
+    if (type) filter.type = type;
+
+    const bookings = await Booking.find(filter)
+      .populate('studentId', 'name email')
+      .sort({ startTime: 1 });
+
+    res.status(200).json({ success: true, data: bookings });
+  } catch (error) {
+    console.error('Error fetching tutor bookings:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch tutor bookings' });
+  }
+};
+
 
 /**
  * Get all bookings for current user (student or tutor)
@@ -89,18 +161,21 @@ exports.updateBookingStatus = async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
 
-    if (!status || !['pending', 'confirmed', 'cancelled', 'completed'].includes(status)) {
+    // ✅ Validate new status
+    const validStatuses = ['pending', 'confirmed', 'cancelled', 'completed'];
+    if (!status || !validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid booking status',
       });
     }
 
+    // ✅ Fetch booking
     const booking = await Booking.findById(id);
     if (!booking)
       return res.status(404).json({ success: false, message: 'Booking not found' });
 
-    // Authorization check
+    // ✅ Authorization
     const userId = req.user.id;
     const userRole = req.user.role;
     if (userRole === 'student' && booking.studentId.toString() !== userId)
@@ -108,14 +183,75 @@ exports.updateBookingStatus = async (req, res) => {
     if (userRole === 'tutor' && booking.tutorId.toString() !== userId)
       return res.status(403).json({ success: false, message: 'Not authorized' });
 
+    // ✅ Update booking status
     booking.status = status;
     await booking.save();
 
-    // Release slot if cancelled
+    // ✅ Notify student when tutor accepts/rejects demo
+    try {
+      const User = require('../models/User');
+      const { createInApp, sendEmail } = require('../services/notificationService');
+      const student = await User.findById(booking.studentId).lean();
+      const tutor = await User.findById(booking.tutorId).lean();
+
+      if (userRole === 'tutor' && ['confirmed', 'cancelled'].includes(status)) {
+        const action = status === 'confirmed' ? 'accepted' : 'declined';
+
+        await createInApp(
+          student._id,
+          `Demo ${status === 'confirmed' ? 'Accepted' : 'Rejected'}`,
+          `${tutor?.name || 'Tutor'} has ${action} your demo request.`,
+          { bookingId: booking._id, status }
+        );
+
+        if (student?.email) {
+          await sendEmail(
+            student.email,
+            `Demo ${status === 'confirmed' ? 'Accepted' : 'Rejected'}`,
+            `Your tutor ${tutor?.name || ''} has ${action} your demo booking.`
+          );
+        }
+      }
+
+      // Optional: notify tutor when student cancels
+      if (userRole === 'student' && status === 'cancelled') {
+        await createInApp(
+          booking.tutorId,
+          'Demo Cancelled',
+          `${student?.name || 'A student'} has cancelled the demo.`,
+          { bookingId: booking._id, status }
+        );
+
+        if (tutor?.email)
+          await sendEmail(
+            tutor.email,
+            'Demo Cancelled',
+            `${student?.name || 'A student'} cancelled the demo session.`
+          );
+      }
+    } catch (notifyErr) {
+      console.warn('Notification error:', notifyErr.message);
+    }
+
+    // ✅ Handle completion logic
+    if (status === 'completed') {
+      const tutorId = booking.tutorId;
+      const amountToCredit = booking.amount * 0.9; // 10% commission
+      await walletService.creditWallet(
+        tutorId,
+        'tutor',
+        amountToCredit,
+        `Class completed (Booking #${booking._id})`,
+        booking._id.toString()
+      );
+    }
+
+    // ✅ Release slot if cancelled
     if (status === 'cancelled') {
       await releaseSlot(booking.tutorId, booking.startTime);
     }
 
+    // ✅ Respond
     res.status(200).json({
       success: true,
       data: booking,
@@ -125,9 +261,11 @@ exports.updateBookingStatus = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to update booking',
+      error: error.message,
     });
   }
 };
+
 
 
 
