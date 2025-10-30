@@ -90,4 +90,3 @@ const tutorProfileSchema = new mongoose.Schema({
 module.exports =
   mongoose.models.TutorProfile ||
   mongoose.model('TutorProfile', tutorProfileSchema);
-
