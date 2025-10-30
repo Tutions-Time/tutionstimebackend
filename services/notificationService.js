@@ -13,7 +13,7 @@ exports.createInApp = async (userId, title, body, meta = {}) => {
 
 // --- Gmail-only Transporter ---
 console.log('📨 Using Gmail SMTP for emails');
-    console.log('✅ .env loaded, SMTP_USER =', process.env.SMTP_USER);
+    // console.log('✅ .env loaded, SMTP_USER =', process.env.SMTP_USER);
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.gmail.com',
