@@ -80,6 +80,17 @@ const tutorProfileSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+    // --- KYC Fields ---
+  aadhaarUrls: [{ type: String }], // store both front/back
+  panUrl: { type: String },
+  bankProofUrl: { type: String },
+  kycStatus: {
+    type: String,
+    enum: ['pending', 'submitted', 'approved', 'rejected'],
+    default: 'pending'
+  },
+  kycRemarks: { type: String, trim: true }, // optional for admin feedback
+
   isVerified: {
     type: Boolean,
     default: false
@@ -90,4 +101,3 @@ const tutorProfileSchema = new mongoose.Schema({
 module.exports =
   mongoose.models.TutorProfile ||
   mongoose.model('TutorProfile', tutorProfileSchema);
-

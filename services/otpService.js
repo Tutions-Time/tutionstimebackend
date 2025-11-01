@@ -3,7 +3,7 @@ let otpStore = {};
 
 // Add persistence helper functions
 const saveOTPStore = () => {
-  console.log("Current OTP Store State:", otpStore);
+  // console.log("Current OTP Store State:", otpStore);
 };
 
 const generateOTP = () => {
@@ -25,17 +25,17 @@ const storeOTP = (phone, purpose) => {
     createdAt: Date.now(),
   };
 
-  console.log(
-    `Storing OTP - RequestID: ${requestId}, Phone: ${phone}, OTP: ${otp}`
-  );
+  // console.log(
+  //   `Storing OTP - RequestID: ${requestId}, Phone: ${phone}, OTP: ${otp}`
+  // );
   saveOTPStore();
 
   return { otp, requestId, expiresAt };
 };
 
 const verifyOTP = (requestId, providedOTP, phone) => {
-  console.log('Verifying OTP:', { requestId, providedOTP, phone });
-  console.log('Current OTP Store:', otpStore);
+  // console.log('Verifying OTP:', { requestId, providedOTP, phone });
+  // console.log('Current OTP Store:', otpStore);
 
   let otpData = otpStore[requestId];
 
@@ -56,11 +56,11 @@ const verifyOTP = (requestId, providedOTP, phone) => {
     return { valid: false, message: 'Invalid or expired request ID' };
   }
 
-  console.log('Found OTP data:', {
-    ...otpData,
-    otp: '***',
-    age: Math.round((Date.now() - otpData.createdAt) / 1000) + ' seconds'
-  });
+  // console.log('Found OTP data:', {
+  //   ...otpData,
+  //   otp: '***',
+  //   age: Math.round((Date.now() - otpData.createdAt) / 1000) + ' seconds'
+  // });
 
   if (Date.now() > otpData.expiresAt) {
     console.log('OTP expired:', {
@@ -86,7 +86,7 @@ const verifyOTP = (requestId, providedOTP, phone) => {
   }
 
   // OTP is valid, delete it to prevent reuse
-  console.log('OTP verified successfully for phone:', otpData.phone);
+  // console.log('OTP verified successfully for phone:', otpData.phone);
   delete otpStore[requestId];
   saveOTPStore();
 

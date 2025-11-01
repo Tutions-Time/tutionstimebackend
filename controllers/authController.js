@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const otpService = require('../services/otpService');
 const tokenService = require('../services/tokenService');
+const walletService = require("../services/payments/walletService");
 const bcrypt = require('bcryptjs');
 
 // Admin credentials (Move to environment variables in production)
@@ -11,7 +12,7 @@ const ADMIN_PASSWORD = '$2b$10$TCUXGHzI/sxObzQLY7zRBePZqLVYpOE.6hZ/1nlVWAHy5PGxw
 const adminLogin = async (req, res) => {
   try {
     const { username, password } = req.body;
-    
+
     // Validate input
     if (!username || !password) {
       return res.status(400).json({
@@ -19,7 +20,7 @@ const adminLogin = async (req, res) => {
         message: 'Username and password are required'
       });
     }
-    
+
     // Check username
     if (username !== ADMIN_USERNAME) {
       return res.status(401).json({
@@ -27,7 +28,7 @@ const adminLogin = async (req, res) => {
         message: 'Invalid credentials'
       });
     }
-    
+
     // Verify password
     const isValid = await bcrypt.compare(password, ADMIN_PASSWORD);
     if (!isValid) {
@@ -36,17 +37,17 @@ const adminLogin = async (req, res) => {
         message: 'Invalid credentials'
       });
     }
-    
+
     // Generate tokens
     const adminUser = {
       id: 'admin',
       role: 'admin',
       isProfileComplete: true
     };
-    
+
     const accessToken = tokenService.generateAccessToken(adminUser.id, adminUser.role);
     const refreshToken = tokenService.generateRefreshToken(adminUser.id);
-    
+
     res.status(200).json({
       success: true,
       message: 'Login successful',
@@ -71,20 +72,20 @@ const adminLogin = async (req, res) => {
 const sendOTP = async (req, res) => {
   try {
     const { phone, purpose } = req.body;
-    
+
     if (!phone || !purpose || !['login', 'signup'].includes(purpose)) {
       return res.status(400).json({
         success: false,
         message: 'Phone number and valid purpose are required'
       });
     }
-    
+
     // Generate and store OTP
     const { otp, requestId, expiresAt } = otpService.storeOTP(phone, purpose);
-    
+
     // Send OTP via SMS (mock in development)
     const sent = await otpService.sendOTP(phone, otp);
-    
+
     res.status(200).json({
       success: true,
       message: 'OTP sent successfully',
@@ -105,15 +106,15 @@ const sendOTP = async (req, res) => {
 const verifyOTP = async (req, res) => {
   try {
     const { phone, otp, requestId, role } = req.body;
-    
-    console.log('Verify OTP Request:', {
-      phone,
-      otp,
-      requestId,
-      role,
-      timestamp: new Date().toISOString()
-    });
-    
+
+    // console.log('Verify OTP Request:', {
+    //   phone,
+    //   otp,
+    //   requestId,
+    //   role,
+    //   timestamp: new Date().toISOString()
+    // });
+
     // Validate required fields
     if (!phone || !otp || !requestId) {
       console.log('Missing required fields:', { phone, otp, requestId });
@@ -130,19 +131,19 @@ const verifyOTP = async (req, res) => {
         message: 'Invalid phone number format'
       });
     }
-    
+
     // Verify OTP
     const verification = otpService.verifyOTP(requestId, otp, phone);
-    
+
     if (!verification.valid) {
       return res.status(400).json({
         success: false,
         message: verification.message
       });
     }
-    
+
     let user;
-    
+
     // For signup, create a new user if not exists
     if (verification.purpose === 'signup') {
       if (!role || !['student', 'tutor'].includes(role)) {
@@ -151,17 +152,17 @@ const verifyOTP = async (req, res) => {
           message: 'Valid role is required for signup'
         });
       }
-      
+
       // Check if user already exists
       const existingUser = await User.findOne({ phone });
-      
+
       if (existingUser) {
         return res.status(400).json({
           success: false,
           message: 'User already exists. Please login instead'
         });
       }
-      
+
       // Validate phone number
       if (!phone || !/^[0-9]{10}$/.test(phone)) {
         return res.status(400).json({
@@ -171,39 +172,40 @@ const verifyOTP = async (req, res) => {
       }
 
       try {
-      // Log the user data before creation
-      console.log('Creating new user with data:', {
-        phone: phone.trim(),
-        role,
-        isProfileComplete: false,
-        status: 'active'
-      });
+        // Log the user data before creation
+        // console.log('Creating new user with data:', {
+        //   phone: phone.trim(),
+        //   role,
+        //   isProfileComplete: false,
+        //   status: 'active'
+        // });
 
-      // Create new user
-      user = await User.create({
-        phone: phone.trim(),
-        role,
-        isProfileComplete: false,
-        status: 'active'
-      });
+        // Create new user
+        user = await User.create({
+          phone: phone.trim(),
+          role,
+          isProfileComplete: false,
+          status: 'active'
+        });
+        await walletService.ensureWallet(user._id, user.role);
 
-      console.log('User created successfully:', {
-        id: user._id,
-        phone: user.phone,
-        role: user.role
-      });
-    } catch (error) {
-      console.error('User creation error:', {
-        phone: phone.trim(),
-        role,
-        error: error.message
-      });
-      throw error;
-    }
+        // console.log('User created successfully:', {
+        //   id: user._id,
+        //   phone: user.phone,
+        //   role: user.role
+        // });
+      } catch (error) {
+        console.error('User creation error:', {
+          phone: phone.trim(),
+          role,
+          error: error.message
+        });
+        throw error;
+      }
     } else {
       // For login, find existing user
       user = await User.findOne({ phone });
-      
+
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -211,14 +213,14 @@ const verifyOTP = async (req, res) => {
         });
       }
     }
-    
+
     // Generate tokens
     const accessToken = tokenService.generateAccessToken(user._id, user.role);
     const refreshToken = tokenService.generateRefreshToken(user._id);
-    
+
     // Save refresh token to user
     await tokenService.saveRefreshToken(user._id, refreshToken);
-    
+
     res.status(200).json({
       success: true,
       message: 'OTP verified successfully',

@@ -1,3 +1,4 @@
+// routes/bookingRoutes.js
 const express = require('express');
 const router = express.Router();
 const bookingController = require('../controllers/bookingController');
@@ -14,16 +15,33 @@ router.use(authenticate);
 router.post('/', checkRole(['student']), bookingController.createBooking);
 
 /**
+ * @route   GET /api/bookings/tutor
+ * @desc    Tutor bookings list
+ * @access  Tutor
+ */
+router.get('/tutor', checkRole(['tutor']), bookingController.getTutorBookings);
+
+/**
  * @route   GET /api/bookings
  * @desc    Get bookings of logged-in user (student/tutor)
  * @access  Authenticated users
  */
+
+router.get('/my', checkRole(['student', 'tutor']), bookingController.getUserBookings);
+
 router.get('/', bookingController.getUserBookings);
+
+/**
+ * @route   POST /api/bookings/:id/payment/verify
+ * @desc    Verify Razorpay payment
+ * @access  Student
+ */
+router.post('/:id/payment/verify', checkRole(['student']), bookingController.verifyPayment);
 
 /**
  * @route   PATCH /api/bookings/:id/status
  * @desc    Update booking status (pending → confirmed/cancelled/completed)
- * @access  Tutor or Student
+ * @access  Student or Tutor
  */
 router.patch('/:id/status', checkRole(['student', 'tutor']), bookingController.updateBookingStatus);
 
@@ -36,9 +54,16 @@ router.post('/:id/convert', checkRole(['student']), bookingController.convertDem
 
 /**
  * @route   PATCH /api/bookings/:id/rating
- * @desc    Add rating and feedback to completed booking
+ * @desc    Add rating/feedback to completed booking
  * @access  Student
  */
 router.patch('/:id/rating', checkRole(['student']), bookingController.addRatingAndFeedback);
+
+/**
+ * @route   PATCH /api/bookings/:id/cancel
+ * @desc    Cancel booking (student)
+ * @access  Student
+ */
+router.patch('/:id/cancel', checkRole(['student']), bookingController.cancelBooking);
 
 module.exports = router;
