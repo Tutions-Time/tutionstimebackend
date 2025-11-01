@@ -12,7 +12,7 @@ exports.createInApp = async (userId, title, body, meta = {}) => {
 };
 
 // --- Gmail-only Transporter ---
-console.log('📨 Using Gmail SMTP for emails');
+// console.log('📨 Using Gmail SMTP for emails');
     // console.log('✅ .env loaded, SMTP_USER =', process.env.SMTP_USER);
 
 const transporter = nodemailer.createTransport({
@@ -30,7 +30,7 @@ exports.sendEmail = async (to, subject, text, html = null) => {
   if (!transporter) return console.error('❌ No transporter configured');
   if (!to) return console.warn('⚠️ Missing recipient email');
 
-  console.log('📧 Preparing to send email:', { to, subject });
+  // console.log('📧 Preparing to send email:', { to, subject });
 
   try {
     const mailOptions = {
@@ -42,7 +42,7 @@ exports.sendEmail = async (to, subject, text, html = null) => {
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Email sent successfully to ${to}: ${info.messageId}`);
+    // console.log(`✅ Email sent successfully to ${to}: ${info.messageId}`);
     return info;
   } catch (err) {
     console.error('❌ Email send failed:', err.message);

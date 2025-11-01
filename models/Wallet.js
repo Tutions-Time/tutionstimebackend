@@ -1,13 +1,13 @@
-const mongoose = require('mongoose');
+// models/Wallet.js
+const mongoose = require("mongoose");
 
-const walletSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['credit', 'debit'], required: true },
-  amount: { type: Number, required: true },
-  description: { type: String },
-  referenceId: { type: String }, 
-  status: { type: String, enum: ['success', 'failed', 'pending'], default: 'success' },
-  balanceAfter: { type: Number },
-}, { timestamps: true });
+const walletSchema = new mongoose.Schema(
+  {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, unique: true },
+    role: { type: String, enum: ["student", "tutor"], required: true },
+    balance: { type: Number, default: 0 }, // Current wallet balance in INR
+  },
+  { timestamps: true }
+);
 
-module.exports = mongoose.model('Wallet', walletSchema);
+module.exports = mongoose.model("Wallet", walletSchema);

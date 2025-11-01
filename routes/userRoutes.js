@@ -27,4 +27,17 @@ router.post('/tutor-profile',
   userController.updateTutorProfile
 );
 
+router.post(
+  '/tutor-kyc',
+  authenticate,
+  upload.fields([
+    { name: 'aadhaar', maxCount: 2 },
+    { name: 'pan', maxCount: 1 },
+    { name: 'bankProof', maxCount: 1 },
+  ]),
+  userController.uploadTutorKyc
+);
+
+
+
 module.exports = router;

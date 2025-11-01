@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const StudentProfile = require('../models/StudentProfile');
 const TutorProfile = require('../models/TutorProfile');
+const path = require("path");
 
 // Get user profile
 const getUserProfile = async (req, res) => {
@@ -129,6 +130,68 @@ const updateStudentProfile = async (req, res) => {
     });
   }
 };
+
+// Upload Tutor KYC Documents
+const uploadTutorKyc = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const tutor = await TutorProfile.findOne({ userId });
+
+    if (!tutor) {
+      return res.status(404).json({
+        success: false,
+        message: "Tutor profile not found",
+      });
+    }
+
+    // Build public URLs (relative to /uploads) for frontend preview
+    const buildPublicPath = (filePath) => {
+      // Example: turn "C:\project\uploads\kyc\aadhaar-1234.png"
+      // into "/uploads/kyc/aadhaar-1234.png"
+      const relative = path.relative(path.join(__dirname, ".."), filePath);
+      return "/" + relative.replace(/\\/g, "/");
+    };
+
+    const aadhaarUrls = [];
+    if (req.files?.aadhaar) {
+      req.files.aadhaar.forEach((file) => {
+        aadhaarUrls.push(buildPublicPath(file.path));
+      });
+    }
+
+    const panUrl = req.files?.pan?.[0]
+      ? buildPublicPath(req.files.pan[0].path)
+      : tutor.panUrl;
+
+    const bankProofUrl = req.files?.bankProof?.[0]
+      ? buildPublicPath(req.files.bankProof[0].path)
+      : tutor.bankProofUrl;
+
+    // Update tutor KYC data
+    tutor.aadhaarUrls = aadhaarUrls.length ? aadhaarUrls : tutor.aadhaarUrls;
+    tutor.panUrl = panUrl;
+    tutor.bankProofUrl = bankProofUrl;
+    tutor.kycStatus = "submitted";
+
+    await tutor.save();
+
+    res.status(200).json({
+      success: true,
+      message: "KYC documents submitted successfully for review",
+      data: tutor,
+    });
+  } catch (error) {
+    console.error("uploadTutorKyc Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while uploading KYC",
+      error: error.message,
+    });
+  }
+};
+
+
+
 
 
 
@@ -304,5 +367,6 @@ module.exports = {
   getUserProfile,
   updateStudentProfile,
   updateTutorProfile,
-  getAllUsers
+  getAllUsers,
+  uploadTutorKyc
 };

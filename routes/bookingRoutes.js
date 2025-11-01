@@ -26,6 +26,9 @@ router.get('/tutor', checkRole(['tutor']), bookingController.getTutorBookings);
  * @desc    Get bookings of logged-in user (student/tutor)
  * @access  Authenticated users
  */
+
+router.get('/my', checkRole(['student', 'tutor']), bookingController.getUserBookings);
+
 router.get('/', bookingController.getUserBookings);
 
 /**

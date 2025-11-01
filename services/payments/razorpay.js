@@ -1,5 +1,10 @@
 // services/payments/razorpay.js
 const Razorpay = require('razorpay');
+// console.log("🔍 Razorpay Credentials Loaded:", {
+//   RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
+//   RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET ? "✅ [secret exists]" : "❌ MISSING",
+// });
+
 const enabled = !!(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET);
 
 const client = enabled

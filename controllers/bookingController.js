@@ -289,32 +289,37 @@ exports.verifyPayment = async (req, res) => {
     const booking = await Booking.findById(id);
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
+    // Verify signature
     const expectedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(razorpay_order_id + '|' + razorpay_payment_id)
       .digest('hex');
 
     if (expectedSignature !== razorpay_signature) {
-      return res.status(400).json({ success: false, message: 'Payment verification failed (invalid signature)' });
+      return res.status(400).json({ success: false, message: 'Payment verification failed' });
     }
 
-    booking.paymentId = razorpay_payment_id;
+    // ✅ Only here: mark paid + convert demo → regular
     booking.paymentStatus = 'completed';
     booking.status = 'confirmed';
+    booking.type = 'regular';
+    booking.paymentId = razorpay_payment_id;
     await booking.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Payment verified successfully. Booking confirmed.',
+      message: 'Payment verified successfully. Booking upgraded to regular.',
       data: booking,
     });
   } catch (error) {
     console.error('Error verifying payment:', error);
-    res.status(500).json({ success: false, message: 'Server error verifying payment', error: error.message });
+    res.status(500).json({ success: false, message: 'Server error verifying payment' });
   }
 };
 
+
 // ✅ Convert demo booking → paid
+// controllers/bookingController.js
 exports.convertDemoToPaid = async (req, res) => {
   try {
     const { id } = req.params;
@@ -325,22 +330,24 @@ exports.convertDemoToPaid = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Only demo bookings can be converted' });
     }
 
+    // Create Razorpay order
     const order = await createOrder({
       amountInPaise: Math.max((booking.amount || 0) * 100, 100),
       receipt: booking._id.toString(),
     });
 
-    booking.type = 'regular';
-    booking.paymentId = order.id;
+    // 👉 Do NOT change type yet, wait for payment verification
     booking.paymentStatus = 'initiated';
+    booking.paymentId = order.id;
     await booking.save();
 
-    res.status(200).json({ success: true, order, data: booking });
+    return res.status(200).json({ success: true, order });
   } catch (error) {
-    console.error('Error converting booking to paid:', error);
-    res.status(500).json({ success: false, message: 'Failed to convert demo to paid booking' });
+    console.error('Error converting demo to paid:', error);
+    res.status(500).json({ success: false, message: 'Failed to create payment order' });
   }
 };
+
 
 // ✅ Add rating and feedback
 exports.addRatingAndFeedback = async (req, res) => {
