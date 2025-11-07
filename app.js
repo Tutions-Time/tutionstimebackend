@@ -10,7 +10,7 @@ connectDB();
 
 const app = express();
 
-// ==================== SECURITY MIDDLEWARE ====================
+
 app.use(helmet());
 
 // ==================== CORS CONFIGURATION ====================
@@ -34,14 +34,19 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-// Handle all preflight (OPTIONS) requests
+
 app.options("*", cors(corsOptions));
 
-// ==================== BODY PARSERS ====================
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ==================== STATIC FILES ====================
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+  })
+);
+
 app.use("/uploads", express.static("uploads"));
 
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -60,13 +65,13 @@ app.use('/api/tutors', require('./routes/tutorRoutes'));
 app.use('/api/subscriptions', require('./routes/subscriptionRoutes'));
 
 
-// ==================== ROUTES ====================
+
 app.get("/", (req, res) =>
   res.status(200).json({ status: "CORS enabled and working!" })
 );
 
 
-// ==================== HEALTH & TEST ENDPOINTS ====================
+
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
@@ -79,7 +84,7 @@ app.get("/api/test", (req, res) => {
   });
 });
 
-// ==================== 404 HANDLER ====================
+
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -87,19 +92,19 @@ app.use((req, res) => {
   });
 });
 
-// ==================== ERROR HANDLER ====================
+
 app.use(errorHandler);
 
-// ==================== AUTO MARK COMPLETED CLASSES ====================
+
 const cron = require("node-cron");
 const Booking = require("./models/Booking");
 
-// 🕒 Runs every minute (change to */10 for every 10 mins)
+
 cron.schedule("*/1 * * * *", async () => {
   try {
     const now = new Date();
 
-    // Find all confirmed sessions whose end time has passed
+ 
     const expiredBookings = await Booking.find({
       status: "confirmed",
       endTime: { $lt: now },
