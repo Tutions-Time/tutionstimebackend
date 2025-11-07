@@ -171,33 +171,64 @@ const uploadTutorKyc = async (req, res) => {
   }
 };
 
+
+
 const updateTutorProfile = async (req, res) => {
   try {
     const userId = req.user.id;
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-    if (user.role !== "tutor")
-      return res.status(403).json({ success: false, message: "Only tutors can update tutor profiles" });
+    if (!user)
+      return res.status(404).json({ success: false, message: "User not found" });
 
+    if (user.role !== "tutor")
+      return res
+        .status(403)
+        .json({ success: false, message: "Only tutors can update tutor profiles" });
+
+    // Extract body fields
     const {
-      name, email, gender, qualification, experience, subjects,
-      classLevels, teachingMode, hourlyRate, monthlyRate,
-      availableDays, bio, achievements, demoVideoUrl, pincode
+      name,
+      email,
+      gender,
+      qualification,
+      specialization,
+      experience,
+      subjects,
+      classLevels,
+      boards,
+      exams,
+      studentTypes,
+      groupSize,
+      teachingMode,
+      hourlyRate,
+      monthlyRate,
+      availability,
+      bio,
+      achievements,
+      pincode,
     } = req.body;
 
-    if (!name || !email || !gender || !qualification || !subjects || !hourlyRate || !bio)
-      return res.status(400).json({ success: false, message: "Missing required fields" });
+    if (!name || !email || !gender || !qualification || !subjects || !hourlyRate || !bio) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing required fields" });
+    }
 
-    let photoUrl = null, certificateUrl = null, demoVideoFileUrl = null;
+    // Handle files
+    let photoUrl = null,
+      demoVideoUrl = null,
+      resumeUrl = null;
+
     if (req.files) {
       if (req.files.photo)
         photoUrl = "/" + req.files.photo[0].path.replace(/\\/g, "/");
-      if (req.files.certificate)
-        certificateUrl = "/" + req.files.certificate[0].path.replace(/\\/g, "/");
       if (req.files.demoVideo)
-        demoVideoFileUrl = "/" + req.files.demoVideo[0].path.replace(/\\/g, "/");
+        demoVideoUrl = "/" + req.files.demoVideo[0].path.replace(/\\/g, "/");
+      if (req.files.resume)
+        resumeUrl = "/" + req.files.resume[0].path.replace(/\\/g, "/");
     }
 
+    // Helper: safely parse arrays
     const parseArray = (val) => {
       try {
         if (!val) return [];
@@ -214,20 +245,24 @@ const updateTutorProfile = async (req, res) => {
       email,
       gender,
       qualification,
+      specialization,
       experience,
       subjects: parseArray(subjects),
       classLevels: parseArray(classLevels),
+      boards: parseArray(boards),
+      exams: parseArray(exams),
+      studentTypes: parseArray(studentTypes),
+      groupSize,
       teachingMode,
       hourlyRate: parseFloat(hourlyRate) || 0,
       monthlyRate: parseFloat(monthlyRate) || 0,
-      availableDays: parseArray(availableDays),
+      availability: parseArray(availability),
       bio,
       achievements,
       pincode,
       ...(photoUrl && { photoUrl }),
-      ...(certificateUrl && { certificateUrl }),
-      ...(demoVideoFileUrl && { demoVideoUrl: demoVideoFileUrl }),
-      ...(demoVideoUrl && !demoVideoFileUrl && { demoVideoUrl }),
+      ...(demoVideoUrl && { demoVideoUrl }),
+      ...(resumeUrl && { resumeUrl }),
     };
 
     const profile = await TutorProfile.findOneAndUpdate(
@@ -241,11 +276,20 @@ const updateTutorProfile = async (req, res) => {
       await user.save();
     }
 
-    res.status(200).json({ success: true, message: "Tutor profile updated successfully", data: profile });
+    res.status(200).json({
+      success: true,
+      message: "Tutor profile updated successfully",
+      data: profile,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error", error: error.message });
+    console.error("Profile Update Error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
   }
 };
+
+
 
 const getAllUsers = async (req, res) => {
   try {

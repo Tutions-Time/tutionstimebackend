@@ -21,7 +21,7 @@ router.post('/tutor-profile',
   authenticate,
   upload.fields([
     { name: 'photo', maxCount: 1 },
-    { name: 'certificate', maxCount: 1 },
+    { name: 'resume', maxCount: 1 },
     { name: 'demoVideo', maxCount: 1 }
   ]),
   userController.updateTutorProfile
