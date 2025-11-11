@@ -8,11 +8,13 @@ const Booking = require('../models/Booking');
 exports.buildTutorFilter = (query) => {
   const {
     city,
+    pincode,  
     subject,
     classLevel,
     board,
     gender,
     teachingMode,
+    tuitionType,
     minExp,
     maxExp,
     minRate,
@@ -27,6 +29,7 @@ exports.buildTutorFilter = (query) => {
   if (board) filter['boards'] = { $regex: board, $options: 'i' };
   if (gender) filter['gender'] = gender;
   if (teachingMode) filter['teachingMode'] = teachingMode;
+  if (pincode) filter['pincode'] = { $regex: pincode, $options: 'i' };
 
   // 🔹 Experience range (assuming experience stored as number of years)
   if (minExp || maxExp) {

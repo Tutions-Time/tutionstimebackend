@@ -171,8 +171,6 @@ const uploadTutorKyc = async (req, res) => {
   }
 };
 
-
-
 const updateTutorProfile = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -205,30 +203,42 @@ const updateTutorProfile = async (req, res) => {
       availability,
       bio,
       achievements,
+      addressLine1,
+      addressLine2,
+      city,
+      state,
       pincode,
     } = req.body;
 
+    // Required fields check
     if (!name || !email || !gender || !qualification || !subjects || !hourlyRate || !bio) {
       return res
         .status(400)
         .json({ success: false, message: "Missing required fields" });
     }
 
-    // Handle files
+    // ✅ Normalize file paths (cross-platform safe)
+    const normalize = (file) => {
+      const p = file.path.replace(/\\/g, "/");
+      const idx = p.indexOf("uploads");
+      return idx !== -1 ? "/" + p.slice(idx) : "/" + p;
+    };
+
+    // Handle files (photo, resume, demoVideo)
     let photoUrl = null,
       demoVideoUrl = null,
       resumeUrl = null;
 
     if (req.files) {
-      if (req.files.photo)
-        photoUrl = "/" + req.files.photo[0].path.replace(/\\/g, "/");
-      if (req.files.demoVideo)
-        demoVideoUrl = "/" + req.files.demoVideo[0].path.replace(/\\/g, "/");
-      if (req.files.resume)
-        resumeUrl = "/" + req.files.resume[0].path.replace(/\\/g, "/");
+      if (req.files.photo && req.files.photo[0])
+        photoUrl = normalize(req.files.photo[0]);
+      if (req.files.demoVideo && req.files.demoVideo[0])
+        demoVideoUrl = normalize(req.files.demoVideo[0]);
+      if (req.files.resume && req.files.resume[0])
+        resumeUrl = normalize(req.files.resume[0]);
     }
 
-    // Helper: safely parse arrays
+    // ✅ Helper to safely parse arrays (coming as JSON strings)
     const parseArray = (val) => {
       try {
         if (!val) return [];
@@ -239,6 +249,7 @@ const updateTutorProfile = async (req, res) => {
       }
     };
 
+    // ✅ Construct update object
     const profileData = {
       userId,
       name,
@@ -246,7 +257,7 @@ const updateTutorProfile = async (req, res) => {
       gender,
       qualification,
       specialization,
-      experience,
+      experience: Number(experience) || 0,
       subjects: parseArray(subjects),
       classLevels: parseArray(classLevels),
       boards: parseArray(boards),
@@ -259,33 +270,42 @@ const updateTutorProfile = async (req, res) => {
       availability: parseArray(availability),
       bio,
       achievements,
+      addressLine1,
+      addressLine2,
+      city,
+      state,
       pincode,
       ...(photoUrl && { photoUrl }),
       ...(demoVideoUrl && { demoVideoUrl }),
       ...(resumeUrl && { resumeUrl }),
     };
 
+    // ✅ Update or create tutor profile
     const profile = await TutorProfile.findOneAndUpdate(
       { userId },
       { $set: profileData },
-      { new: true, upsert: true }
+      { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
+    // ✅ Mark profile complete if not already
     if (!user.isProfileComplete) {
       user.isProfileComplete = true;
       await user.save();
     }
 
-    res.status(200).json({
+    // ✅ Response
+    return res.status(200).json({
       success: true,
       message: "Tutor profile updated successfully",
       data: profile,
     });
   } catch (error) {
-    console.error("Profile Update Error:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Server error", error: error.message });
+    console.error("❌ Profile Update Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while updating tutor profile",
+      error: error.message,
+    });
   }
 };
 

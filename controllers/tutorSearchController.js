@@ -18,7 +18,12 @@ exports.searchTutors = async (req, res) => {
       const sortParam = req.query.sort || 'createdAt_desc';
       let sort = {};
       const [field, order] = sortParam.split('_');
-      sort[field] = order === 'asc' ? 1 : -1;
+      const validSorts = ['createdAt', 'experience', 'hourlyRate', 'lastLogin', 'isFeatured'];
+      if (validSorts.includes(field)) {
+        sort[field] = order === 'asc' ? 1 : -1;
+      } else {
+        sort['createdAt'] = -1;
+      }
 
       // Pagination
       const page = parseInt(req.query.page) || 1;
@@ -27,10 +32,11 @@ exports.searchTutors = async (req, res) => {
 
       // Fetch tutors
       const tutors = await TutorProfile.find(filter)
-        .populate('userId', 'phone role')
+        .populate('userId', 'phone role lastLogin')
         .sort(sort)
         .skip(skip)
         .limit(limit)
+        .select('name photoUrl city pincode qualification specialization experience hourlyRate gender subjects addressLine1 lastLogin rating isFeatured')
         .lean();
 
       const total = await TutorProfile.countDocuments(filter);

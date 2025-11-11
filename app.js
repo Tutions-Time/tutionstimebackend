@@ -57,12 +57,15 @@ app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/subjects', require('./routes/subjectRoutes'));
 app.use('/api/bookings', require('./routes/bookingRoutes'));
+app.use('/api/enquiries', require('./routes/enquiryRoutes'));
 app.use('/api/availability', require('./routes/availabilityRoutes'));
 // app.use('/api/payments', require('./routes/paymentRoutes'));
 app.use('/api/wallet', require('./routes/walletRoutes'));
 app.use('/api/tutors', require('./routes/tutorRoutes'));
 
 app.use('/api/subscriptions', require('./routes/subscriptionRoutes'));
+app.use('/api/meta', require('./routes/metaRoutes.js'));
+
 
 
 

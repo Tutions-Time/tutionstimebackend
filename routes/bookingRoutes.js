@@ -4,66 +4,37 @@ const router = express.Router();
 const bookingController = require('../controllers/bookingController');
 const { authenticate, checkRole } = require('../middleware/auth');
 
-// 🔒 All routes require authentication
+// All booking routes require login
 router.use(authenticate);
 
 /**
- * @route   POST /api/bookings
- * @desc    Create a new booking (demo or regular)
- * @access  Student
+ * POST /api/bookings/demo
+ * Create a new demo booking (logged-in student)
  */
-router.post('/', checkRole(['student']), bookingController.createBooking);
+router.post('/demo', checkRole(['student']), bookingController.createDemoBooking);
 
 /**
- * @route   GET /api/bookings/tutor
- * @desc    Tutor bookings list
- * @access  Tutor
+ * GET /api/bookings/student
+ * List logged-in student's demo bookings
+ */
+router.get('/student', checkRole(['student']), bookingController.getStudentBookings);
+
+/**
+ * GET /api/bookings/tutor
+ * List logged-in tutor's incoming demo requests
  */
 router.get('/tutor', checkRole(['tutor']), bookingController.getTutorBookings);
 
 /**
- * @route   GET /api/bookings
- * @desc    Get bookings of logged-in user (student/tutor)
- * @access  Authenticated users
+ * PATCH /api/bookings/:id/status
+ * Tutor accepts/rejects (confirm/cancel) a demo booking
  */
-
-router.get('/my', checkRole(['student', 'tutor']), bookingController.getUserBookings);
-
-router.get('/', bookingController.getUserBookings);
+router.patch('/:id/status', checkRole(['tutor']), bookingController.updateDemoStatus);
 
 /**
- * @route   POST /api/bookings/:id/payment/verify
- * @desc    Verify Razorpay payment
- * @access  Student
+ * PATCH /api/bookings/:id/feedback
+ * Student gives rating/feedback after completion
  */
-router.post('/:id/payment/verify', checkRole(['student']), bookingController.verifyPayment);
-
-/**
- * @route   PATCH /api/bookings/:id/status
- * @desc    Update booking status (pending → confirmed/cancelled/completed)
- * @access  Student or Tutor
- */
-router.patch('/:id/status', checkRole(['student', 'tutor']), bookingController.updateBookingStatus);
-
-/**
- * @route   POST /api/bookings/:id/convert
- * @desc    Convert demo booking → paid (create Razorpay order)
- * @access  Student
- */
-router.post('/:id/convert', checkRole(['student']), bookingController.convertDemoToPaid);
-
-/**
- * @route   PATCH /api/bookings/:id/rating
- * @desc    Add rating/feedback to completed booking
- * @access  Student
- */
-router.patch('/:id/rating', checkRole(['student']), bookingController.addRatingAndFeedback);
-
-/**
- * @route   PATCH /api/bookings/:id/cancel
- * @desc    Cancel booking (student)
- * @access  Student
- */
-router.patch('/:id/cancel', checkRole(['student']), bookingController.cancelBooking);
+router.patch('/:id/feedback', checkRole(['student']), bookingController.addFeedback);
 
 module.exports = router;
