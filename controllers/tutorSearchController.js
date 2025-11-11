@@ -1,29 +1,58 @@
 const TutorProfile = require('../models/TutorProfile');
 const { buildTutorFilter, getRecommendedTutors } = require('../services/tutorService');
 
+/**
+ * GET /api/tutors/search
+ * Supports filters: city, subject, classLevel, board, gender, teachingMode,
+ * minExp, maxExp, minRate, maxRate, sort, pagination (page, limit)
+ */
 exports.searchTutors = async (req, res) => {
   try {
     const hasFilters = Object.keys(req.query).length > 0;
 
     if (hasFilters) {
-      // 🔹 Apply standard filters
+      // 🧩 Build query filter
       const filter = buildTutorFilter(req.query);
+
+      // Sorting
+      const sortParam = req.query.sort || 'createdAt_desc';
+      let sort = {};
+      const [field, order] = sortParam.split('_');
+      const validSorts = ['createdAt', 'experience', 'hourlyRate', 'lastLogin', 'isFeatured'];
+      if (validSorts.includes(field)) {
+        sort[field] = order === 'asc' ? 1 : -1;
+      } else {
+        sort['createdAt'] = -1;
+      }
+
+      // Pagination
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 20;
+      const skip = (page - 1) * limit;
+
+      // Fetch tutors
       const tutors = await TutorProfile.find(filter)
-        .populate('userId', 'phone role')
-        .sort({ createdAt: -1 })
-        .limit(20)
+        .populate('userId', 'phone role lastLogin')
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .select('name photoUrl city pincode qualification specialization experience hourlyRate gender subjects addressLine1 lastLogin rating isFeatured')
         .lean();
+
+      const total = await TutorProfile.countDocuments(filter);
 
       return res.status(200).json({
         success: true,
         mode: 'filter',
+        page,
+        total,
         count: tutors.length,
         data: tutors,
       });
     }
 
-    // 🧠 No filters → Use AI recommendation
-    const studentId = req.user?.id || null; // use JWT if logged in
+    // 🧠 No filters → Use AI recommendation logic
+    const studentId = req.user?.id || null;
     const recommended = await getRecommendedTutors(studentId);
 
     return res.status(200).json({
@@ -42,10 +71,13 @@ exports.searchTutors = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/tutors/:id
+ * Fetch single tutor profile
+ */
 exports.getTutorById = async (req, res) => {
   try {
     const { id } = req.params;
-
     const tutor = await TutorProfile.findById(id)
       .populate('userId', 'phone role email')
       .lean();

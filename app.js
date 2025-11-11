@@ -10,7 +10,7 @@ connectDB();
 
 const app = express();
 
-// ==================== SECURITY MIDDLEWARE ====================
+
 app.use(helmet());
 
 // ==================== CORS CONFIGURATION ====================
@@ -34,14 +34,19 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-// Handle all preflight (OPTIONS) requests
+
 app.options("*", cors(corsOptions));
 
-// ==================== BODY PARSERS ====================
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ==================== STATIC FILES ====================
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+  })
+);
+
 app.use("/uploads", express.static("uploads"));
 
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -52,21 +57,24 @@ app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/subjects', require('./routes/subjectRoutes'));
 app.use('/api/bookings', require('./routes/bookingRoutes'));
+app.use('/api/enquiries', require('./routes/enquiryRoutes'));
 app.use('/api/availability', require('./routes/availabilityRoutes'));
 // app.use('/api/payments', require('./routes/paymentRoutes'));
 app.use('/api/wallet', require('./routes/walletRoutes'));
 app.use('/api/tutors', require('./routes/tutorRoutes'));
 
 app.use('/api/subscriptions', require('./routes/subscriptionRoutes'));
+app.use('/api/meta', require('./routes/metaRoutes.js'));
 
 
-// ==================== ROUTES ====================
+
+
 app.get("/", (req, res) =>
   res.status(200).json({ status: "CORS enabled and working!" })
 );
 
 
-// ==================== HEALTH & TEST ENDPOINTS ====================
+
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
@@ -79,7 +87,7 @@ app.get("/api/test", (req, res) => {
   });
 });
 
-// ==================== 404 HANDLER ====================
+
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -87,38 +95,10 @@ app.use((req, res) => {
   });
 });
 
-// ==================== ERROR HANDLER ====================
+
 app.use(errorHandler);
 
-// ==================== AUTO MARK COMPLETED CLASSES ====================
-const cron = require("node-cron");
-const Booking = require("./models/Booking");
 
-// 🕒 Runs every minute (change to */10 for every 10 mins)
-cron.schedule("*/1 * * * *", async () => {
-  try {
-    const now = new Date();
-
-    // Find all confirmed sessions whose end time has passed
-    const expiredBookings = await Booking.find({
-      status: "confirmed",
-      endTime: { $lt: now },
-    });
-
-    if (expiredBookings.length === 0) return;
-
-    for (const booking of expiredBookings) {
-      booking.status = "completed";
-      booking.completedAt = now;
-      await booking.save();
-      console.log(`✅ Marked booking ${booking._id} as completed`);
-    }
-
-    console.log(`🔁 ${expiredBookings.length} bookings auto-completed at ${now.toLocaleString()}`);
-  } catch (err) {
-    console.error("❌ Error in auto-complete cron:", err.message);
-  }
-});
 
 
 module.exports = app;

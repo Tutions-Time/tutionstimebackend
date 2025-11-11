@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const tutorSearchController = require('../controllers/tutorSearchController');
-const {authenticate} = require('../middleware/auth'); 
+const { authenticate } = require('../middleware/auth');
 
-// ✅ Hybrid route — serves both search and AI recommendations
+// ✅ Hybrid route — filters OR AI recommendations
 router.get('/search', authenticate, tutorSearchController.searchTutors);
 
+// ✅ Get single tutor profile
 router.get('/:id', tutorSearchController.getTutorById);
 
 module.exports = router;

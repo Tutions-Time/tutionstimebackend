@@ -1,26 +1,28 @@
-const User = require('../models/User');
-const StudentProfile = require('../models/StudentProfile');
-const TutorProfile = require('../models/TutorProfile');
-const path = require("path");
+const User = require("../models/User");
+const StudentProfile = require("../models/StudentProfile");
+const TutorProfile = require("../models/TutorProfile");
 
-// Get user profile
 const getUserProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const user = await User.findById(userId).select('-refreshToken');
+    const user = await User.findById(userId).select("-refreshToken -password");
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
+    let profile = null;
+    let roleDetails = {};
 
-    let profile;
-    if (user.role === 'student') {
-      profile = await StudentProfile.findOne({ userId });
-    } else if (user.role === 'tutor') {
-      profile = await TutorProfile.findOne({ userId });
+    if (user.role === "student") {
+      profile = await StudentProfile.findOne({ userId }).lean();
+    } else if (user.role === "tutor") {
+      const tutor = await TutorProfile.findOne({ userId }).lean();
+      if (tutor) {
+        roleDetails = {
+          kycStatus: tutor.kycStatus || "pending",
+          hasKyc: !!(tutor.aadhaarUrls?.length || tutor.panUrl || tutor.bankProofUrl),
+          isVerified: tutor.status === "approved",
+        };
+        profile = tutor;
+      }
     }
 
     res.status(200).json({
@@ -30,161 +32,278 @@ const getUserProfile = async (req, res) => {
           id: user._id,
           phone: user.phone,
           role: user.role,
+          email: user.email,
           isProfileComplete: user.isProfileComplete,
           status: user.status,
-          lastLogin: user.lastLogin
+          lastLogin: user.lastLogin,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
         },
-        profile: profile || null
-      }
+        profile: profile || null,
+        roleDetails,
+      },
     });
   } catch (error) {
-    console.error('Get Profile Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: "Server error", error: error.message });
   }
 };
 
-// Create/Update student profile
 const updateStudentProfile = async (req, res) => {
   try {
     const userId = req.user.id;
     const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (user.role !== "student")
+      return res.status(403).json({ success: false, message: "Only students can update student profiles" });
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
+    const parseArray = (raw) => {
+      try {
+        if (!raw) return [];
+        const v = JSON.parse(raw);
+        return Array.isArray(v) ? v : [];
+      } catch {
+        return [];
+      }
+    };
 
-    if (user.role !== 'student') {
-      return res.status(403).json({
-        success: false,
-        message: 'Only students can update student profiles'
-      });
-    }
-
-    const { name, email, gender, classLevel, subjects, goals, pincode } = req.body;
-
-    // Validate required fields
-    if (!name || !email || !gender || !classLevel) {
-      return res.status(400).json({
-        success: false,
-        message: 'Name, email, gender, and class level are required'
-      });
-    }
-
-    // Handle photo upload
     let photoUrl = null;
-    if (req.files && req.files.photo) {
-      photoUrl = req.files.photo[0].path;
-    }
+    if (req.files && req.files.photo)
+      photoUrl = "/" + req.files.photo[0].path.replace(/\\/g, "/");
 
-    // Find existing profile or create new one
-    let profile = await StudentProfile.findOne({ userId });
+    const b = req.body;
+
+    if (!b.name || !b.email)
+      return res.status(400).json({ success: false, message: "Name and email are required" });
+    if (b.track === "school" && !b.classLevel)
+      return res.status(400).json({ success: false, message: "classLevel is required for school track" });
+    if (b.track === "college" && (!b.program || !b.discipline || !b.yearSem))
+      return res.status(400).json({ success: false, message: "program, discipline and yearSem are required for college track" });
+    if (b.track === "competitive" && !b.exam)
+      return res.status(400).json({ success: false, message: "exam is required for competitive track" });
 
     const profileData = {
       userId,
-      name,
-      email,
-      gender,
-      classLevel,
-      subjects: subjects ? JSON.parse(subjects) : [],
-      goals: goals || '',
-      pincode: pincode || '',
-      ...(photoUrl && { photoUrl })
+      name: b.name,
+      email: b.email,
+      altPhone: b.altPhone || "",
+      gender: b.gender || "",
+      genderOther: b.gender === "Other" ? b.genderOther || "" : "",
+      addressLine1: b.addressLine1 || "",
+      addressLine2: b.addressLine2 || "",
+      city: b.city || "",
+      state: b.state || "",
+      pincode: b.pincode || "",
+      track: b.track || "",
+      board: b.board || "",
+      boardOther: b.board === "Other" ? b.boardOther || "" : "",
+      classLevel: b.classLevel || "",
+      classLevelOther: b.classLevel === "Other" ? b.classLevelOther || "" : "",
+      stream: b.stream || "",
+      streamOther: b.stream === "Other" ? b.streamOther || "" : "",
+      program: b.program || "",
+      programOther: b.program === "Other" ? b.programOther || "" : "",
+      discipline: b.discipline || "",
+      disciplineOther: b.discipline === "Other" ? b.disciplineOther || "" : "",
+      yearSem: b.yearSem || "",
+      yearSemOther: b.yearSem === "Other" ? b.yearSemOther || "" : "",
+      exam: b.exam || "",
+      examOther: b.exam === "Other" ? b.examOther || "" : "",
+      targetYear: b.targetYear || "",
+      targetYearOther: b.targetYear === "Other" ? b.targetYearOther || "" : "",
+      subjects: parseArray(b.subjects),
+      subjectOther:
+        Array.isArray(parseArray(b.subjects)) && parseArray(b.subjects).includes("Other")
+          ? b.subjectOther || ""
+          : "",
+      tutorGenderPref: b.tutorGenderPref || "No Preference",
+      tutorGenderOther: b.tutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
+      availability: parseArray(b.availability),
+      goals: b.goals || "",
+      ...(photoUrl && { photoUrl }),
     };
 
-    if (profile) {
-      // Update existing profile
-      profile = await StudentProfile.findOneAndUpdate(
-        { userId },
-        profileData,
-        { new: true }
-      );
-    } else {
-      // Create new profile
-      profile = await StudentProfile.create(profileData);
-    }
+    const profile = await StudentProfile.findOneAndUpdate(
+      { userId },
+      { $set: profileData },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
 
-    // Update user's profile completion status
     if (!user.isProfileComplete) {
       user.isProfileComplete = true;
       await user.save();
     }
 
-    res.status(200).json({
-      success: true,
-      message: 'Student profile updated successfully',
-      data: profile
-    });
+    res.status(200).json({ success: true, message: "Student profile updated successfully", data: profile });
   } catch (error) {
-    console.error('Update Student Profile Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: "Server error", error: error.message });
   }
 };
 
-// Upload Tutor KYC Documents
 const uploadTutorKyc = async (req, res) => {
   try {
     const userId = req.user.id;
     const tutor = await TutorProfile.findOne({ userId });
-
-    if (!tutor) {
-      return res.status(404).json({
-        success: false,
-        message: "Tutor profile not found",
-      });
-    }
-
-    // Build public URLs (relative to /uploads) for frontend preview
-    const buildPublicPath = (filePath) => {
-      // Example: turn "C:\project\uploads\kyc\aadhaar-1234.png"
-      // into "/uploads/kyc/aadhaar-1234.png"
-      const relative = path.relative(path.join(__dirname, ".."), filePath);
-      return "/" + relative.replace(/\\/g, "/");
-    };
+    if (!tutor) return res.status(404).json({ success: false, message: "Tutor profile not found" });
 
     const aadhaarUrls = [];
-    if (req.files?.aadhaar) {
-      req.files.aadhaar.forEach((file) => {
-        aadhaarUrls.push(buildPublicPath(file.path));
-      });
-    }
+    if (req.files?.aadhaar)
+      req.files.aadhaar.forEach((file) =>
+        aadhaarUrls.push("/" + file.path.replace(/\\/g, "/"))
+      );
 
     const panUrl = req.files?.pan?.[0]
-      ? buildPublicPath(req.files.pan[0].path)
+      ? "/" + req.files.pan[0].path.replace(/\\/g, "/")
       : tutor.panUrl;
 
     const bankProofUrl = req.files?.bankProof?.[0]
-      ? buildPublicPath(req.files.bankProof[0].path)
+      ? "/" + req.files.bankProof[0].path.replace(/\\/g, "/")
       : tutor.bankProofUrl;
 
-    // Update tutor KYC data
     tutor.aadhaarUrls = aadhaarUrls.length ? aadhaarUrls : tutor.aadhaarUrls;
     tutor.panUrl = panUrl;
     tutor.bankProofUrl = bankProofUrl;
     tutor.kycStatus = "submitted";
-
     await tutor.save();
 
-    res.status(200).json({
+    res.status(200).json({ success: true, message: "KYC documents submitted successfully", data: tutor });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server error while uploading KYC", error: error.message });
+  }
+};
+
+const updateTutorProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findById(userId);
+    if (!user)
+      return res.status(404).json({ success: false, message: "User not found" });
+
+    if (user.role !== "tutor")
+      return res
+        .status(403)
+        .json({ success: false, message: "Only tutors can update tutor profiles" });
+
+    // Extract body fields
+    const {
+      name,
+      email,
+      gender,
+      qualification,
+      specialization,
+      experience,
+      subjects,
+      classLevels,
+      boards,
+      exams,
+      studentTypes,
+      groupSize,
+      teachingMode,
+      hourlyRate,
+      monthlyRate,
+      availability,
+      bio,
+      achievements,
+      addressLine1,
+      addressLine2,
+      city,
+      state,
+      pincode,
+    } = req.body;
+
+    // Required fields check
+    if (!name || !email || !gender || !qualification || !subjects || !hourlyRate || !bio) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing required fields" });
+    }
+
+    // ✅ Normalize file paths (cross-platform safe)
+    const normalize = (file) => {
+      const p = file.path.replace(/\\/g, "/");
+      const idx = p.indexOf("uploads");
+      return idx !== -1 ? "/" + p.slice(idx) : "/" + p;
+    };
+
+    // Handle files (photo, resume, demoVideo)
+    let photoUrl = null,
+      demoVideoUrl = null,
+      resumeUrl = null;
+
+    if (req.files) {
+      if (req.files.photo && req.files.photo[0])
+        photoUrl = normalize(req.files.photo[0]);
+      if (req.files.demoVideo && req.files.demoVideo[0])
+        demoVideoUrl = normalize(req.files.demoVideo[0]);
+      if (req.files.resume && req.files.resume[0])
+        resumeUrl = normalize(req.files.resume[0]);
+    }
+
+    // ✅ Helper to safely parse arrays (coming as JSON strings)
+    const parseArray = (val) => {
+      try {
+        if (!val) return [];
+        const parsed = JSON.parse(val);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    };
+
+    // ✅ Construct update object
+    const profileData = {
+      userId,
+      name,
+      email,
+      gender,
+      qualification,
+      specialization,
+      experience: Number(experience) || 0,
+      subjects: parseArray(subjects),
+      classLevels: parseArray(classLevels),
+      boards: parseArray(boards),
+      exams: parseArray(exams),
+      studentTypes: parseArray(studentTypes),
+      groupSize,
+      teachingMode,
+      hourlyRate: parseFloat(hourlyRate) || 0,
+      monthlyRate: parseFloat(monthlyRate) || 0,
+      availability: parseArray(availability),
+      bio,
+      achievements,
+      addressLine1,
+      addressLine2,
+      city,
+      state,
+      pincode,
+      ...(photoUrl && { photoUrl }),
+      ...(demoVideoUrl && { demoVideoUrl }),
+      ...(resumeUrl && { resumeUrl }),
+    };
+
+    // ✅ Update or create tutor profile
+    const profile = await TutorProfile.findOneAndUpdate(
+      { userId },
+      { $set: profileData },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    // ✅ Mark profile complete if not already
+    if (!user.isProfileComplete) {
+      user.isProfileComplete = true;
+      await user.save();
+    }
+
+    // ✅ Response
+    return res.status(200).json({
       success: true,
-      message: "KYC documents submitted successfully for review",
-      data: tutor,
+      message: "Tutor profile updated successfully",
+      data: profile,
     });
   } catch (error) {
-    console.error("uploadTutorKyc Error:", error);
-    res.status(500).json({
+    console.error("❌ Profile Update Error:", error);
+    return res.status(500).json({
       success: false,
-      message: "Server error while uploading KYC",
+      message: "Server error while updating tutor profile",
       error: error.message,
     });
   }
@@ -192,174 +311,12 @@ const uploadTutorKyc = async (req, res) => {
 
 
 
-
-
-
-// Create/Update tutor profile
-const updateTutorProfile = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const user = await User.findById(userId);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    if (user.role !== 'tutor') {
-      return res.status(403).json({
-        success: false,
-        message: 'Only tutors can update tutor profiles'
-      });
-    }
-
-    const {
-      name, email, gender, qualification, experience, subjects,
-      classLevels, teachingMode, hourlyRate, monthlyRate,
-      availableDays, bio, achievements, demoVideoUrl, pincode
-    } = req.body;
-
-    // Validate required fields
-    if (!name || !email || !gender || !qualification || !subjects || !hourlyRate || !bio) {
-      return res.status(400).json({
-        success: false,
-        message: 'Name, email, gender, qualification, subjects, hourlyRate, and bio are required'
-      });
-    }
-
-    // Handle file uploads
-    let photoUrl = null;
-    let certificateUrl = null;
-    let demoVideoFileUrl = null;
-
-    if (req.files) {
-      if (req.files.photo) {
-        photoUrl = req.files.photo[0].path;
-      }
-      if (req.files.certificate) {
-        certificateUrl = req.files.certificate[0].path;
-      }
-      if (req.files.demoVideo) {
-        demoVideoFileUrl = req.files.demoVideo[0].path;
-      }
-    }
-
-    // Normalize inputs
-    const normalizedGender = (gender || '').toString().toLowerCase();
-    const normalizedTeachingMode = (teachingMode || 'both').toString().toLowerCase();
-
-    // Determine schema expectation for experience at runtime
-    const experienceSchemaType = (TutorProfile.schema && TutorProfile.schema.paths && TutorProfile.schema.paths.experience && TutorProfile.schema.paths.experience.instance) || 'String';
-
-    // Helper: map label to numeric midpoint when schema expects Number
-    const mapExperienceToNumber = (label) => {
-      if (!label) return 0;
-      const lower = label.toString().toLowerCase().trim();
-      const table = {
-        'less than 1 year': 0.5,
-        '1–2 years': 1.5,
-        '1-2 years': 1.5,
-        '3–5 years': 4,
-        '3-5 years': 4,
-        '6–10 years': 8,
-        '6-10 years': 8,
-        '10+ years': 10,
-      };
-      if (table.hasOwnProperty(lower)) return table[lower];
-      const num = parseFloat(lower);
-      return isNaN(num) ? 0 : num;
-    };
-
-    const normalizedExperience = experienceSchemaType === 'Number'
-      ? mapExperienceToNumber(experience)
-      : (experience || '').toString();
-
-    const parseArray = (val) => {
-      try {
-        if (!val) return [];
-        const parsed = JSON.parse(val);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch (e) {
-        return [];
-      }
-    };
-
-    // Create profile data object
-    const profileData = {
-      userId,
-      name,
-      email,
-      gender: normalizedGender,
-      qualification,
-      experience: normalizedExperience,
-      subjects: parseArray(subjects),
-      classLevels: parseArray(classLevels),
-      teachingMode: normalizedTeachingMode,
-      hourlyRate: parseFloat(hourlyRate) || 0,
-      monthlyRate: parseFloat(monthlyRate) || 0,
-      availableDays: parseArray(availableDays),
-      bio: bio || '',
-      achievements: achievements || '',
-      pincode: pincode || '',
-      ...(photoUrl && { photoUrl }),
-      ...(certificateUrl && { certificateUrl }),
-      ...(demoVideoFileUrl && { demoVideoUrl: demoVideoFileUrl }),
-      ...(demoVideoUrl && !demoVideoFileUrl && { demoVideoUrl })
-    };
-
-    // Find existing profile or create new one
-    let profile = await TutorProfile.findOne({ userId });
-
-    if (profile) {
-      // Update existing profile
-      profile = await TutorProfile.findOneAndUpdate(
-        { userId },
-        profileData,
-        { new: true }
-      );
-    } else {
-      // Create new profile
-      profile = await TutorProfile.create(profileData);
-    }
-
-    // Update user's profile completion status
-    if (!user.isProfileComplete) {
-      user.isProfileComplete = true;
-      await user.save();
-    }
-
-    res.status(200).json({
-      success: true,
-      message: 'Tutor profile updated successfully',
-      data: profile
-    });
-  } catch (error) {
-    console.error('Update Tutor Profile Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
-  }
-};
-
 const getAllUsers = async (req, res) => {
   try {
-    const users = await User.find().select('-password -refreshToken');
-    res.status(200).json({
-      success: true,
-      count: users.length,
-      data: users
-    });
+    const users = await User.find().select("-password -refreshToken");
+    res.status(200).json({ success: true, count: users.length, data: users });
   } catch (error) {
-    console.error('Get All Users Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: "Server error", error: error.message });
   }
 };
 
@@ -368,5 +325,5 @@ module.exports = {
   updateStudentProfile,
   updateTutorProfile,
   getAllUsers,
-  uploadTutorKyc
+  uploadTutorKyc,
 };

@@ -1,78 +1,86 @@
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 
-// Configure multer storage
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    let basePath = path.join(__dirname, '..', 'uploads');
-    let uploadPath = basePath;
+  destination: (req, file, cb) => {
+    const base = "uploads";
+    let subdir = "";
 
-    // Determine subfolder dynamically
-    if (file.fieldname === 'photo') {
-      uploadPath = path.join(basePath, 'photos');
-    } 
-    else if (file.fieldname === 'certificate') {
-      // Separate PDFs vs images for certificates
-      if (file.mimetype === 'application/pdf') {
-        uploadPath = path.join(basePath, 'certificates', 'pdfs');
-      } else {
-        uploadPath = path.join(basePath, 'certificates', 'images');
-      }
-    } 
-    else if (file.fieldname === 'demoVideo') {
-      uploadPath = path.join(basePath, 'videos');
-    }
-    // ✅ NEW: handle tutor KYC uploads
-    else if (['aadhaar', 'pan', 'bankProof'].includes(file.fieldname)) {
-      uploadPath = path.join(basePath, 'kyc');
+    switch (file.fieldname) {
+      case "photo":
+        subdir = "photos";
+        break;
+      case "certificate":
+        subdir =
+          file.mimetype === "application/pdf"
+            ? path.join("certificates", "pdfs")
+            : path.join("certificates", "images");
+        break;
+      case "demoVideo":
+        subdir = "videos";
+        break;
+      case "aadhaar":
+      case "pan":
+      case "bankProof":
+        subdir = "kyc";
+        break;
+      case "resume":
+        subdir = "resumes";
+        break;
+      default:
+        subdir = "misc";
+        break;
     }
 
-    // Ensure directory exists
-    fs.mkdirSync(uploadPath, { recursive: true });
-    cb(null, uploadPath);
+    const dest = path.join(base, subdir);
+    fs.mkdirSync(dest, { recursive: true });
+    cb(null, dest);
   },
 
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, `${file.fieldname}-${uniqueSuffix}${path.extname(file.originalname)}`);
+  filename: (req, file, cb) => {
+    const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, `${file.fieldname}-${unique}${path.extname(file.originalname)}`);
   },
 });
 
-// File filter for validation
 const fileFilter = (req, file, cb) => {
   const { fieldname, mimetype } = file;
 
-  if (fieldname === 'photo') {
-    if (!mimetype.startsWith('image/')) {
-      return cb(new Error('Only image files are allowed for photos!'), false);
-    }
-  } 
-  else if (fieldname === 'certificate') {
-    if (!mimetype.startsWith('image/') && mimetype !== 'application/pdf') {
-      return cb(new Error('Only image and PDF files are allowed for certificates!'), false);
-    }
-  } 
-  else if (fieldname === 'demoVideo') {
-    if (!mimetype.startsWith('video/')) {
-      return cb(new Error('Only video files are allowed for demo videos!'), false);
-    }
-  } 
-  // ✅ NEW: validation for KYC
-  else if (['aadhaar', 'pan', 'bankProof'].includes(fieldname)) {
-    if (!mimetype.startsWith('image/') && mimetype !== 'application/pdf') {
-      return cb(new Error('Only images or PDFs allowed for KYC documents!'), false);
-    }
+  if (fieldname === "photo" && !mimetype.startsWith("image/"))
+    return cb(new Error("Only image files are allowed for photos!"), false);
+
+  if (
+    fieldname === "certificate" &&
+    !mimetype.startsWith("image/") &&
+    mimetype !== "application/pdf"
+  )
+    return cb(
+      new Error("Only image or PDF files allowed for certificates!"),
+      false
+    );
+
+  if (fieldname === "demoVideo" && !mimetype.startsWith("video/"))
+    return cb(new Error("Only video files are allowed for demo videos!"), false);
+
+  if (["aadhaar", "pan", "bankProof"].includes(fieldname)) {
+    if (!mimetype.startsWith("image/") && mimetype !== "application/pdf")
+      return cb(
+        new Error("Only image or PDF files allowed for KYC documents!"),
+        false
+      );
   }
+
+  if (fieldname === "resume" && mimetype !== "application/pdf")
+    return cb(new Error("Only PDF files are allowed for resumes!"), false);
 
   cb(null, true);
 };
 
-// Configure multer
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max per file
+  limits: { fileSize: 50 * 1024 * 1024 },
 });
 
 module.exports = upload;
