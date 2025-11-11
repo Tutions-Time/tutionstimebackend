@@ -66,6 +66,29 @@ const tutorProfileSchema = new mongoose.Schema(
     resumeUrl: { type: String },
     demoVideoUrl: { type: String },
 
+    // Location
+    addressLine1: { type: String, trim: true },
+    addressLine2: { type: String, trim: true },
+    city: { type: String, trim: true },
+    state: { type: String, trim: true },
+    pincode: { type: String, trim: true },
+
+    // KYC and Verification
+    aadhaarUrls: [String],
+    panUrl: { type: String },
+    bankProofUrl: { type: String },
+    kycStatus: {
+      type: String,
+      enum: ["pending", "submitted", "approved", "rejected"],
+      default: "pending",
+    },
+    status: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
+    },
+
+
     // Verification
     isVerified: { type: Boolean, default: false },
   },

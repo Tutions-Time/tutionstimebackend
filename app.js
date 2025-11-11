@@ -99,34 +99,6 @@ app.use((req, res) => {
 app.use(errorHandler);
 
 
-const cron = require("node-cron");
-const Booking = require("./models/Booking");
-
-
-cron.schedule("*/1 * * * *", async () => {
-  try {
-    const now = new Date();
-
- 
-    const expiredBookings = await Booking.find({
-      status: "confirmed",
-      endTime: { $lt: now },
-    });
-
-    if (expiredBookings.length === 0) return;
-
-    for (const booking of expiredBookings) {
-      booking.status = "completed";
-      booking.completedAt = now;
-      await booking.save();
-      console.log(`✅ Marked booking ${booking._id} as completed`);
-    }
-
-    console.log(`🔁 ${expiredBookings.length} bookings auto-completed at ${now.toLocaleString()}`);
-  } catch (err) {
-    console.error("❌ Error in auto-complete cron:", err.message);
-  }
-});
 
 
 module.exports = app;
