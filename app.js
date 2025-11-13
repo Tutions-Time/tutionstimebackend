@@ -4,6 +4,7 @@ const helmet = require("helmet");
 const errorHandler = require("./middleware/errorHandler");
 const connectDB = require("./config/database");
 const path = require("path");
+// const adminNotificationRoutes=require('./routes/adminNotificationRoutes')
 
 // Connect to MongoDB
 connectDB();
@@ -65,6 +66,8 @@ app.use('/api/tutors', require('./routes/tutorRoutes'));
 
 app.use('/api/subscriptions', require('./routes/subscriptionRoutes'));
 app.use('/api/meta', require('./routes/metaRoutes.js'));
+app.use('/api/admin/notifications', require('./routes/adminNotificationRoutes'));
+
 
 
 
