@@ -538,3 +538,43 @@ exports.addFeedback = async (req, res) => {
     });
   }
 };
+
+// controllers/bookingController.js (add this)
+exports.getBookingByIdForAdmin = async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Not authorized' });
+    }
+
+    const { id } = req.params;
+
+    const booking = await Booking.findById(id).lean();
+    if (!booking) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Booking not found' });
+    }
+
+    const [studentProfile, tutorProfile] = await Promise.all([
+      StudentProfile.findOne({ userId: booking.studentId }).select('name email').lean(),
+      TutorProfile.findOne({ userId: booking.tutorId }).select('name email').lean(),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        ...booking,
+        studentName: studentProfile?.name || 'Student',
+        studentEmail: studentProfile?.email,
+        tutorName: tutorProfile?.name || 'Tutor',
+        tutorEmail: tutorProfile?.email,
+      },
+    });
+  } catch (err) {
+    console.error('getBookingByIdForAdmin error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch booking',
+    });
+  }
+};

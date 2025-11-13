@@ -36,7 +36,9 @@ exports.searchTutors = async (req, res) => {
         .sort(sort)
         .skip(skip)
         .limit(limit)
-        .select('name photoUrl city pincode qualification specialization experience hourlyRate gender subjects addressLine1 lastLogin rating isFeatured')
+        .select(
+          'name photoUrl city pincode qualification specialization experience hourlyRate gender subjects addressLine1 lastLogin rating isFeatured availability'
+        )
         .lean();
 
       const total = await TutorProfile.countDocuments(filter);
