@@ -1,7 +1,7 @@
 const Booking = require('../models/Booking');
 const TutorProfile = require('../models/TutorProfile');
 const StudentProfile = require('../models/StudentProfile');
-const User = require('../models/User'); // ✅ FIX 1: Added missing import
+const User = require('../models/User'); // ✅ User model
 const notificationService = require('../services/notificationService');
 const emailTpl = require('../templates/emailTemplates');
 
@@ -15,52 +15,63 @@ function toStartOfDay(dateStr) {
 /**
  * POST /api/bookings/demo
  * Create a day-level demo booking (pending)
+ *
+ * IMPORTANT:
+ * - yahan tutorId = tutor ka User._id aayega (login user id)
  */
 exports.createDemoBooking = async (req, res) => {
-  // console.log("data", req.body);
   try {
     const { tutorId, subject, date, note } = req.body;
+
     if (!tutorId || !subject || !date) {
       return res
         .status(400)
-        .json({ success: false, message: "tutorId, subject, date are required" });
+        .json({ success: false, message: 'tutorId, subject, date are required' });
     }
 
-    // Tutor must exist & be available that day (using TutorProfile.availability)
-    const tutor = await TutorProfile.findOne({ _id: tutorId }).lean();
-    if (!tutor) {
+    // ✅ TutorProfile ko userId se dhund rahe hain (tutorId = User._id)
+    const tutorProfile = await TutorProfile.findOne({ userId: tutorId }).lean();
+    if (!tutorProfile) {
       return res
         .status(404)
-        .json({ success: false, message: "Tutor not found" });
+        .json({ success: false, message: 'Tutor not found' });
     }
 
     const preferredDate = toStartOfDay(date);
-    const avail = Array.isArray(tutor.availability) ? tutor.availability : [];
+
+    // Availability check
+    const avail = Array.isArray(tutorProfile.availability)
+      ? tutorProfile.availability
+      : [];
+
+    // Yahan assume kar rahe hain ke availability array me "YYYY-MM-DD" strings stored hain
     const isAvailable = avail.includes(date);
     if (!isAvailable) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Tutor not available on selected date" });
+      return res.status(400).json({
+        success: false,
+        message: 'Tutor not available on selected date',
+      });
     }
 
-    // ✅ FIX 3: Friendly duplicate booking error
+    // ✅ Friendly duplicate booking error
     let booking;
     try {
       booking = await Booking.create({
-        studentId: req.user.id,
-        tutorId,
+        studentId: req.user.id, // User._id (student)
+        tutorId,                // User._id (tutor) – IMPORTANT
         subject,
         preferredDate,
-        note: note || "",
-        type: "demo",
-        status: "pending",
-        meetingLink: "",
+        note: note || '',
+        type: 'demo',
+        status: 'pending',
+        meetingLink: '',
       });
     } catch (err) {
       if (err.code === 11000) {
+        // Requires a unique index on (studentId, tutorId, preferredDate, type)
         return res.status(400).json({
           success: false,
-          message: "You already booked a demo with this tutor for that date.",
+          message: 'You already booked a demo with this tutor for that date.',
         });
       }
       throw err;
@@ -69,80 +80,90 @@ exports.createDemoBooking = async (req, res) => {
     // Notify tutor (HTML version)
     try {
       const student = await StudentProfile.findOne({ userId: req.user.id }).lean();
+      const tutorUser = await User.findById(tutorId).lean(); // for email fallback
 
-      if (tutor.email) {
+      const tutorEmail = tutorProfile.email || tutorUser?.email;
+
+      if (tutorEmail) {
         const html = emailTpl.tutorDemoRequestHTML({
-          studentName: student?.name || "A student",
+          studentName: student?.name || 'A student',
           subject,
           date,
         });
 
         await notificationService.sendEmail(
-          tutor.email,
-          "New Demo Request",
-          "",
+          tutorEmail,
+          'New Demo Request',
+          '',
           html
         );
       }
 
-      // ✅ FIX 4: In-app notification to tutor
+      // In-app notification to tutor (tutorId = User._id)
       await notificationService.createInApp(
-        tutor.userId || tutorId,
-        "New Demo Request",
-        `${student?.name || "A student"} requested a demo for ${subject} on ${date}`,
+        tutorId,
+        'New Demo Request',
+        `${student?.name || 'A student'} requested a demo for ${subject} on ${date}`,
         { tutorId, subject, date }
       );
     } catch (e) {
-      console.warn("Notification (tutor) failed:", e.message);
+      console.warn('Notification (tutor) failed:', e.message);
     }
 
     return res.status(201).json({ success: true, data: booking });
   } catch (err) {
-    console.error("createDemoBooking error:", err);
+    console.error('createDemoBooking error:', err);
     return res
       .status(500)
-      .json({ success: false, message: "Failed to create demo booking" });
+      .json({ success: false, message: 'Failed to create demo booking' });
   }
 };
 
 /**
  * GET /api/bookings/student
  * Logged-in student's demo bookings
+ *
+ * Yahan studentId = User._id
  */
 exports.getStudentBookings = async (req, res) => {
   try {
     const bookings = await Booking.find({ studentId: req.user.id })
-      .populate("tutorId", "name email")
+      // NOTE: Booking.tutorId ka ref "User" hona chahiye agar yeh populate kar rahe ho
+      .populate('tutorId', 'name email')
       .sort({ createdAt: -1 })
       .lean();
 
     res.json({ success: true, data: bookings });
   } catch (err) {
-    console.error("getStudentBookings error:", err);
+    console.error('getStudentBookings error:', err);
     res
       .status(500)
-      .json({ success: false, message: "Failed to fetch bookings" });
+      .json({ success: false, message: 'Failed to fetch bookings' });
   }
 };
 
 /**
  * GET /api/bookings/tutor
  * Logged-in tutor's incoming demo requests
+ *
+ * Yahan tutorId = User._id
  */
 exports.getTutorBookings = async (req, res) => {
-  console.log("get booking")
+  console.log('get booking');
   try {
     const bookings = await Booking.find({ tutorId: req.user.id })
-      .populate("studentId", "name email")
+      // Booking.studentId ka ref "User" hona chahiye
+      .populate('studentId', 'name email')
       .sort({ createdAt: -1 })
       .lean();
-    console.log("bookings", bookings)
+
+    console.log('bookings', bookings);
     res.json({ success: true, data: bookings });
   } catch (err) {
-    console.error("getTutorBookings error:", err);
+    console.error('getTutorBookings error:', err);
     res
       .status(500)
-      .json({ success: false, message: "Failed to fetch tutor bookings" });
+      .json({ success: false, message: 'Failed to fetch tutor bookings' });
   }
 };
 
@@ -155,21 +176,29 @@ exports.updateDemoStatus = async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
 
-    if (!["confirmed", "cancelled"].includes(status)) {
-      return res.status(400).json({ success: false, message: "Invalid status" });
+    if (!['confirmed', 'cancelled'].includes(status)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid status' });
     }
 
     const booking = await Booking.findById(id);
-    if (!booking)
-      return res.status(404).json({ success: false, message: "Booking not found" });
+    if (!booking) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Booking not found' });
+    }
 
+    // ✅ Yahan bhi tutorId = User._id
     if (booking.tutorId.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: "Not authorized" });
+      return res
+        .status(403)
+        .json({ success: false, message: 'Not authorized' });
     }
 
     // STATUS: CONFIRMED
-    if (status === "confirmed") {
-      booking.status = "confirmed";
+    if (status === 'confirmed') {
+      booking.status = 'confirmed';
       if (!booking.meetingLink) {
         booking.meetingLink = `https://meet.jit.si/tuitiontime-${Date.now()}`;
       }
@@ -177,20 +206,24 @@ exports.updateDemoStatus = async (req, res) => {
 
       const tutorUser = await User.findById(booking.tutorId);
       const studentUser = await User.findById(booking.studentId);
-      const tutorProfile = await TutorProfile.findOne({ userId: booking.tutorId }).lean();
+      const tutorProfile = await TutorProfile.findOne({
+        userId: booking.tutorId,
+      }).lean();
+
+      const tutorName = tutorProfile?.name || 'Your Tutor';
 
       // Email to Student
       if (studentUser?.email) {
         const html = emailTpl.bookingConfirmedHTML({
-          tutorName: tutorProfile?.name || "Your Tutor",
+          tutorName,
           subject: booking.subject,
           date: new Date(booking.preferredDate).toDateString(),
           link: booking.meetingLink,
         });
         await notificationService.sendEmail(
           studentUser.email,
-          "Demo Confirmed - TuitionTime",
-          "",
+          'Demo Confirmed - TuitionTime',
+          '',
           html
         );
       }
@@ -198,75 +231,79 @@ exports.updateDemoStatus = async (req, res) => {
       // Email to Tutor
       if (tutorUser?.email) {
         const html = emailTpl.bookingConfirmedHTML({
-          tutorName: tutorProfile?.name,
+          tutorName,
           subject: booking.subject,
           date: new Date(booking.preferredDate).toDateString(),
           link: booking.meetingLink,
         });
         await notificationService.sendEmail(
           tutorUser.email,
-          "Demo Confirmed - TuitionTime",
-          "",
+          'Demo Confirmed - TuitionTime',
+          '',
           html
         );
       }
 
-      // ✅ Optional in-app notifications
+      // In-app notification to student
       await notificationService.createInApp(
         booking.studentId,
-        "Demo Confirmed",
-        `Your demo with ${tutorProfile?.name} is confirmed.`,
+        'Demo Confirmed',
+        `Your demo with ${tutorName} is confirmed.`,
         { meetingLink: booking.meetingLink }
       );
 
       return res.json({
         success: true,
         message:
-          "Demo confirmed successfully and emails sent to both student & tutor.",
+          'Demo confirmed successfully and emails sent to both student & tutor.',
         data: booking,
       });
     }
 
     // STATUS: CANCELLED
-    if (status === "cancelled") {
-      booking.status = "cancelled";
+    if (status === 'cancelled') {
+      booking.status = 'cancelled';
       await booking.save();
 
-      const tutorProfile = await TutorProfile.findOne({ userId: booking.tutorId }).lean();
+      const tutorProfile = await TutorProfile.findOne({
+        userId: booking.tutorId,
+      }).lean();
       const studentUser = await User.findById(booking.studentId);
+
+      const tutorName = tutorProfile?.name || 'Your Tutor';
 
       if (studentUser?.email) {
         const html = emailTpl.bookingCancelledHTML({
-          tutorName: tutorProfile?.name || "Your Tutor",
+          tutorName,
           subject: booking.subject,
         });
         await notificationService.sendEmail(
           studentUser.email,
-          "Demo Cancelled - TuitionTime",
-          "",
+          'Demo Cancelled - TuitionTime',
+          '',
           html
         );
       }
 
       await notificationService.createInApp(
         booking.studentId,
-        "Demo Cancelled",
-        `Your demo with ${tutorProfile?.name} was cancelled.`,
+        'Demo Cancelled',
+        `Your demo with ${tutorName} was cancelled.`,
         { tutorId: booking.tutorId }
       );
 
       return res.json({
         success: true,
         message:
-          "Demo cancelled successfully and notification sent to student.",
+          'Demo cancelled successfully and notification sent to student.',
         data: booking,
       });
     }
   } catch (err) {
-    console.error("❌ updateDemoStatus error:", err);
+    console.error('❌ updateDemoStatus error:', err);
     res.status(500).json({
       success: false,
-      message: "Failed to update booking status",
+      message: 'Failed to update booking status',
       error: err.message,
     });
   }
@@ -282,59 +319,71 @@ exports.addFeedback = async (req, res) => {
     const { rating, feedback } = req.body;
 
     const booking = await Booking.findById(id);
-    if (!booking)
-      return res.status(404).json({ success: false, message: "Booking not found" });
-    if (booking.studentId.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: "Not authorized" });
-    }
-    if (!rating || rating < 1 || rating > 5) {
+    if (!booking) {
       return res
-        .status(400)
-        .json({ success: false, message: "Rating must be 1–5" });
+        .status(404)
+        .json({ success: false, message: 'Booking not found' });
+    }
+
+    if (booking.studentId.toString() !== req.user.id) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Not authorized' });
+    }
+
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rating must be 1–5',
+      });
     }
 
     booking.rating = rating;
-    booking.feedback = feedback || "";
-    if (booking.status === "confirmed") booking.status = "completed";
+    booking.feedback = feedback || '';
+    if (booking.status === 'confirmed') booking.status = 'completed';
 
     await booking.save();
 
-    // ✅ FIX 2: Send feedback email to tutor
+    // Send feedback email & in-app notification to tutor
     try {
-      const student = await StudentProfile.findOne({ userId: req.user.id }).lean();
-      const tutorProfile = await TutorProfile.findOne({ userId: booking.tutorId }).lean();
+      const student = await StudentProfile.findOne({
+        userId: req.user.id,
+      }).lean();
+      const tutorProfile = await TutorProfile.findOne({
+        userId: booking.tutorId,
+      }).lean();
       const tutorUser = await User.findById(booking.tutorId);
 
       if (tutorUser?.email) {
         const html = emailTpl.tutorFeedbackReceivedHTML({
-          studentName: student?.name || "A student",
+          studentName: student?.name || 'A student',
           subject: booking.subject,
           rating,
           feedback,
         });
         await notificationService.sendEmail(
           tutorUser.email,
-          "New Feedback Received - TuitionTime",
-          "",
+          'New Feedback Received - TuitionTime',
+          '',
           html
         );
       }
 
       await notificationService.createInApp(
         booking.tutorId,
-        "New Feedback Received",
-        `${student?.name || "A student"} rated your demo ${rating}/5`,
+        'New Feedback Received',
+        `${student?.name || 'A student'} rated your demo ${rating}/5`,
         { bookingId: booking._id }
       );
     } catch (e) {
-      console.warn("Feedback email failed:", e.message);
+      console.warn('Feedback email failed:', e.message);
     }
 
     res.json({ success: true, data: booking });
   } catch (err) {
-    console.error("addFeedback error:", err);
+    console.error('addFeedback error:', err);
     res
       .status(500)
-      .json({ success: false, message: "Failed to add feedback" });
+      .json({ success: false, message: 'Failed to add feedback' });
   }
 };
