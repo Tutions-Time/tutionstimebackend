@@ -1,27 +1,22 @@
 const Booking = require('../models/Booking');
 const TutorProfile = require('../models/TutorProfile');
 const StudentProfile = require('../models/StudentProfile');
-const User = require('../models/User'); // ✅ User model
+const User = require('../models/User');
 const notificationService = require('../services/notificationService');
 const emailTpl = require('../templates/emailTemplates');
 const AdminNotification = require('../models/AdminNotification');
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
 
-// Helper: normalize YYYY-MM-DD to start-of-day Date in IST-friendly way
 function toStartOfDay(dateStr) {
   const d = new Date(dateStr);
-  // Force 00:00 local time for consistency
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
-// ✅ Helper: admin notification (DB + optional email)
 async function createAdminNotification(title, message, meta = {}) {
   try {
-    // Save for admin dashboard
     await AdminNotification.create({ title, message, meta });
 
-    // Optional email to admin
     if (ADMIN_EMAIL && notificationService?.sendEmail) {
       const html = `
         <h2>${title}</h2>
@@ -42,25 +37,18 @@ ${JSON.stringify(meta, null, 2)}
   }
 }
 
-/**
- * POST /api/bookings/demo
- * Create a day-level demo booking (pending)
- *
- * IMPORTANT:
- * - yahan tutorId = tutor ka User._id aayega (login user id)
- */
 exports.createDemoBooking = async (req, res) => {
   try {
-    const { tutorId, subject, date, note } = req.body;
+    const { tutorId, subject, date, time, note } = req.body;
+    console.log('createDemoBooking req.body:', req.body);
 
-    if (!tutorId || !subject || !date) {
+    if (!tutorId || !subject || !date || !time) {
       return res.status(400).json({
         success: false,
-        message: 'tutorId, subject, date are required',
+        message: 'tutorId, subject, date, time are required',
       });
     }
 
-    // ✅ TutorProfile ko userId se dhund rahe hain (tutorId = User._id)
     const tutorProfile = await TutorProfile.findOne({ userId: tutorId }).lean();
     if (!tutorProfile) {
       return res
@@ -70,7 +58,6 @@ exports.createDemoBooking = async (req, res) => {
 
     const preferredDate = toStartOfDay(date);
 
-    // Availability check — assume availability is ["YYYY-MM-DD", ...]
     const avail = Array.isArray(tutorProfile.availability)
       ? tutorProfile.availability
       : [];
@@ -82,43 +69,67 @@ exports.createDemoBooking = async (req, res) => {
       });
     }
 
-    // ✅ Friendly duplicate booking error
-    let booking;
-    try {
-      booking = await Booking.create({
-        studentId: req.user.id, // User._id (student)
-        tutorId, // User._id (tutor)
-        subject,
-        preferredDate,
-        note: note || '',
-        type: 'demo',
-        status: 'pending',
-        meetingLink: '',
+    const existingForSameStudent = await Booking.findOne({
+      studentId: req.user.id,
+      tutorId,
+      type: 'demo',
+      preferredDate,
+      preferredTime: time,
+      status: { $ne: 'cancelled' },
+    });
+
+    if (existingForSameStudent) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'You already booked a demo with this tutor for this time slot.',
       });
-    } catch (err) {
-      if (err.code === 11000) {
-        // Requires a unique index on (studentId, tutorId, preferredDate, type)
-        return res.status(400).json({
-          success: false,
-          message: 'You already booked a demo with this tutor for that date.',
-        });
-      }
-      throw err;
     }
 
-    // Notify tutor (HTML + in-app) + admin
+    const existingSlotForTutor = await Booking.findOne({
+      tutorId,
+      type: 'demo',
+      preferredDate,
+      preferredTime: time,
+      status: { $in: ['pending', 'confirmed'] },
+    });
+
+    if (
+      existingSlotForTutor &&
+      existingSlotForTutor.studentId.toString() !== req.user.id
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'This time slot is already booked for this tutor.',
+      });
+    }
+
+    const booking = await Booking.create({
+      studentId: req.user.id,
+      tutorId,
+      subject,
+      preferredDate,
+      preferredTime: time,
+      note: note || '',
+      type: 'demo',
+      status: 'pending',
+      meetingLink: '',
+    });
+
     try {
-      const student = await StudentProfile.findOne({ userId: req.user.id }).lean();
+      const student = await StudentProfile.findOne({
+        userId: req.user.id,
+      }).lean();
       const tutorUser = await User.findById(tutorId).lean();
 
       const tutorEmail = tutorProfile.email || tutorUser?.email;
 
-      // Email to tutor if available
       if (tutorEmail && notificationService?.sendEmail) {
         const html = emailTpl.tutorDemoRequestHTML({
           studentName: student?.name || 'A student',
           subject,
           date,
+          time,
         });
 
         await notificationService.sendEmail(
@@ -129,28 +140,27 @@ exports.createDemoBooking = async (req, res) => {
         );
       }
 
-      // In-app notification to tutor (tutorId = User._id)
       if (notificationService?.createInApp) {
         await notificationService.createInApp(
           tutorId,
           'New Demo Request',
-          `${student?.name || 'A student'} requested a demo for ${subject} on ${date}`,
-          { tutorId, subject, date, bookingId: booking._id }
+          `${student?.name || 'A student'} requested a demo for ${subject} on ${date} at ${time}`,
+          { tutorId, subject, date, time, bookingId: booking._id }
         );
       }
 
-      // ✅ Admin notification (dashboard + email)
       await createAdminNotification(
         'New Demo Booking Created',
         `${student?.name || 'A student'} requested a demo with ${
           tutorProfile?.name || 'Tutor'
-        } for ${subject} on ${date}`,
+        } for ${subject} on ${date} at ${time}`,
         {
           bookingId: booking._id,
           tutorId,
           studentId: req.user.id,
           subject,
           date,
+          time,
           type: booking.type,
           status: booking.status,
         }
@@ -169,16 +179,8 @@ exports.createDemoBooking = async (req, res) => {
   }
 };
 
-/**
- * GET /api/bookings/student
- * Logged-in student's demo bookings
- *
- * Yahan studentId = User._id
- * ➕ Extra: har booking ke saath tutorName add kar rahe hain (TutorProfile se)
- */
 exports.getStudentBookings = async (req, res) => {
   try {
-    // Raw bookings (tutorId = User._id)
     const bookings = await Booking.find({ studentId: req.user.id })
       .sort({ createdAt: -1 })
       .lean();
@@ -187,7 +189,6 @@ exports.getStudentBookings = async (req, res) => {
       return res.json({ success: true, data: [] });
     }
 
-    // Unique tutor userIds collect karo
     const tutorUserIds = [
       ...new Set(
         bookings
@@ -196,7 +197,6 @@ exports.getStudentBookings = async (req, res) => {
       ),
     ];
 
-    // TutorProfile se name lao
     const tutorProfiles = await TutorProfile.find({
       userId: { $in: tutorUserIds },
     })
@@ -207,7 +207,6 @@ exports.getStudentBookings = async (req, res) => {
       tutorProfiles.map((tp) => [String(tp.userId), tp.name])
     );
 
-    // Enrich bookings with tutorName
     const enriched = bookings.map((b) => {
       const tutorIdStr = b.tutorId ? String(b.tutorId) : null;
       const tutorName =
@@ -229,12 +228,6 @@ exports.getStudentBookings = async (req, res) => {
   }
 };
 
-/**
- * GET /api/bookings/tutor
- * Logged-in tutor's incoming demo requests
- *
- * Yahan tutorId = User._id
- */
 exports.getTutorBookings = async (req, res) => {
   try {
     const bookings = await Booking.find({ tutorId: req.user.id })
@@ -284,11 +277,6 @@ exports.getTutorBookings = async (req, res) => {
   }
 };
 
-
-/**
- * PATCH /api/bookings/:id/status
- * Tutor accepts/rejects (confirm/cancel) a demo booking
- */
 exports.updateDemoStatus = async (req, res) => {
   try {
     const { id } = req.params;
@@ -307,14 +295,12 @@ exports.updateDemoStatus = async (req, res) => {
         .json({ success: false, message: 'Booking not found' });
     }
 
-    // ✅ Only that tutor can update
     if (booking.tutorId.toString() !== req.user.id) {
       return res
         .status(403)
         .json({ success: false, message: 'Not authorized' });
     }
 
-    // STATUS: CONFIRMED
     if (status === 'confirmed') {
       booking.status = 'confirmed';
       if (!booking.meetingLink) {
@@ -329,13 +315,15 @@ exports.updateDemoStatus = async (req, res) => {
       }).lean();
 
       const tutorName = tutorProfile?.name || 'Your Tutor';
+      const displayDate = new Date(booking.preferredDate).toDateString();
+      const displayTime = booking.preferredTime || '';
 
-      // Email to Student (if email exists)
       if (studentUser?.email && notificationService?.sendEmail) {
         const html = emailTpl.bookingConfirmedHTML({
           tutorName,
           subject: booking.subject,
-          date: new Date(booking.preferredDate).toDateString(),
+          date: displayDate,
+          time: displayTime,
           link: booking.meetingLink,
         });
         await notificationService.sendEmail(
@@ -346,12 +334,12 @@ exports.updateDemoStatus = async (req, res) => {
         );
       }
 
-      // Email to Tutor
       if (tutorUser?.email && notificationService?.sendEmail) {
         const html = emailTpl.bookingConfirmedHTML({
           tutorName,
           subject: booking.subject,
-          date: new Date(booking.preferredDate).toDateString(),
+          date: displayDate,
+          time: displayTime,
           link: booking.meetingLink,
         });
         await notificationService.sendEmail(
@@ -362,25 +350,31 @@ exports.updateDemoStatus = async (req, res) => {
         );
       }
 
-      // In-app notification to student
       if (notificationService?.createInApp) {
         await notificationService.createInApp(
           booking.studentId,
           'Demo Confirmed',
-          `Your demo with ${tutorName} is confirmed.`,
-          { meetingLink: booking.meetingLink, bookingId: booking._id }
+          `Your demo with ${tutorName} is confirmed for ${displayDate}${
+            displayTime ? ` at ${displayTime}` : ''
+          }.`,
+          {
+            meetingLink: booking.meetingLink,
+            bookingId: booking._id,
+          }
         );
       }
 
-      // ✅ Admin notification
       await createAdminNotification(
         'Demo Confirmed',
-        `Demo confirmed for ${booking.subject} by ${tutorName}`,
+        `Demo confirmed for ${booking.subject} by ${tutorName} on ${displayDate}${
+          displayTime ? ` at ${displayTime}` : ''
+        }`,
         {
           bookingId: booking._id,
           tutorId: booking.tutorId,
           studentId: booking.studentId,
           meetingLink: booking.meetingLink,
+          preferredTime: booking.preferredTime,
           status: booking.status,
         }
       );
@@ -393,7 +387,6 @@ exports.updateDemoStatus = async (req, res) => {
       });
     }
 
-    // STATUS: CANCELLED
     if (status === 'cancelled') {
       booking.status = 'cancelled';
       await booking.save();
@@ -427,7 +420,6 @@ exports.updateDemoStatus = async (req, res) => {
         );
       }
 
-      // ✅ Admin notification
       await createAdminNotification(
         'Demo Cancelled',
         `Demo cancelled for ${booking.subject} by ${tutorName}`,
@@ -435,6 +427,7 @@ exports.updateDemoStatus = async (req, res) => {
           bookingId: booking._id,
           tutorId: booking.tutorId,
           studentId: booking.studentId,
+          preferredTime: booking.preferredTime,
           status: booking.status,
         }
       );
@@ -456,10 +449,6 @@ exports.updateDemoStatus = async (req, res) => {
   }
 };
 
-/**
- * PATCH /api/bookings/:id/feedback
- * Student adds rating/feedback after completion
- */
 exports.addFeedback = async (req, res) => {
   try {
     const { id } = req.params;
@@ -491,7 +480,6 @@ exports.addFeedback = async (req, res) => {
 
     await booking.save();
 
-    // Send feedback email & in-app notification to tutor
     try {
       const student = await StudentProfile.findOne({
         userId: req.user.id,
@@ -525,7 +513,6 @@ exports.addFeedback = async (req, res) => {
         );
       }
 
-      // ✅ Admin notification
       await createAdminNotification(
         'New Demo Feedback',
         `Feedback received: ${rating}/5 for ${booking.subject}`,
@@ -535,6 +522,7 @@ exports.addFeedback = async (req, res) => {
           studentId: booking.studentId,
           rating,
           feedback,
+          preferredTime: booking.preferredTime,
         }
       );
     } catch (e) {
