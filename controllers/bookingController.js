@@ -1,6 +1,9 @@
 const Booking = require('../models/Booking');
 const TutorProfile = require('../models/TutorProfile');
 const StudentProfile = require('../models/StudentProfile');
+const RegularClass = require("../models/RegularClass");
+const Session = require("../models/Session");
+const Payment = require("../models/Payment");
 const User = require('../models/User');
 const notificationService = require('../services/notificationService');
 const emailTpl = require('../templates/emailTemplates');
@@ -578,3 +581,354 @@ exports.getBookingByIdForAdmin = async (req, res) => {
     });
   }
 };
+
+// Helper: generate sessions for 4 weeks initially
+async function generateSessionsForRegularClass(regularClass) {
+  const sessions = [];
+  const { timeSlots, startDate, studentId, tutorId, _id } = regularClass;
+
+  if (!timeSlots || !timeSlots.length) return;
+
+  const start = new Date(startDate);
+  const weeksToGenerate = 4;
+
+  // map dayOfWeek to JS day index
+  const dayMap = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+
+  for (let w = 0; w < weeksToGenerate; w++) {
+    timeSlots.forEach((slot) => {
+      const [hourStr, minuteStr] = slot.time.split(":");
+      const slotDayIndex = dayMap[slot.dayOfWeek];
+      if (slotDayIndex === undefined) return;
+
+      const d = new Date(start);
+      // move to that week
+      d.setDate(d.getDate() + w * 7);
+
+      const diff = slotDayIndex - d.getDay();
+      d.setDate(d.getDate() + diff);
+
+      d.setHours(parseInt(hourStr, 10), parseInt(minuteStr, 10), 0, 0);
+
+      sessions.push({
+        regularClassId: _id,
+        studentId,
+        tutorId,
+        startDateTime: d,
+        status: "scheduled",
+      });
+    });
+  }
+
+  if (sessions.length) {
+    await Session.insertMany(sessions);
+  }
+}
+
+/**
+ * POST /api/bookings/:id/feedback
+ * Body: { teaching, communication, understanding, comment, likedTutor }
+ */
+exports.giveDemoFeedback = async (req, res) => {
+  try {
+    const bookingId = req.params.id;
+    const { teaching, communication, understanding, comment, likedTutor } =
+      req.body;
+    const userId = req.user.id;
+
+    if (
+      !teaching ||
+      !communication ||
+      !understanding ||
+      likedTutor === undefined
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'teaching, communication, understanding, likedTutor are required',
+      });
+    }
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Booking not found' });
+    }
+
+    // ✅ Auth: only the booked student can submit feedback
+    if (booking.studentId.toString() !== userId) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Not authorized for this booking' });
+    }
+
+    if (booking.type !== 'demo') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only demo bookings can get feedback',
+      });
+    }
+
+    if (!['confirmed', 'completed'].includes(booking.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Feedback allowed only after confirmed/completed demo',
+      });
+    }
+
+    if (booking.demoFeedback && booking.demoFeedback.createdAt) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Feedback already submitted' });
+    }
+
+    const overall = Math.round(
+      (teaching + communication + understanding) / 3
+    );
+
+    booking.demoFeedback = {
+      teaching,
+      communication,
+      understanding,
+      overall,
+      comment: comment || '',
+      likedTutor: !!likedTutor,
+      createdAt: new Date(),
+    };
+    booking.status = 'completed';
+    await booking.save();
+
+    // update tutor rating (TutorProfile is keyed by userId)
+    const tutorProfile = await TutorProfile.findOne({
+      userId: booking.tutorId,
+    });
+    if (tutorProfile) {
+      tutorProfile.ratingSum = (tutorProfile.ratingSum || 0) + overall;
+      tutorProfile.ratingCount = (tutorProfile.ratingCount || 0) + 1;
+      tutorProfile.rating =
+        tutorProfile.ratingSum / Math.max(tutorProfile.ratingCount, 1);
+      await tutorProfile.save();
+    }
+
+    // notify tutor by email
+    try {
+      const tutorUser = await User.findById(booking.tutorId);
+      const studentProfile = await StudentProfile.findOne({
+        userId: booking.studentId,
+      }).lean();
+
+      const studentName = studentProfile?.name || 'Student';
+      const tutorName = tutorProfile?.name || 'Tutor';
+
+      if (tutorUser && notificationService?.sendEmail) {
+        const subjectLine = 'New demo feedback received';
+        const html =
+          emailTpl.demoFeedbackToTutor?.({
+            tutorName,
+            studentName,
+            teaching,
+            communication,
+            understanding,
+            overall,
+            comment,
+          }) ||
+          `<p>You received new demo feedback from ${studentName}. Overall: ${overall}/5</p>`;
+        await notificationService.sendEmail(
+          tutorUser.email,
+          subjectLine,
+          '',
+          html
+        );
+      }
+    } catch (err) {
+      console.error('Error notifying tutor about feedback:', err);
+    }
+
+    // notify admin
+    await createAdminNotification(
+      'Demo feedback submitted',
+      `Feedback for demo booking ${booking._id}`,
+      {
+        bookingId: booking._id,
+        tutorId: booking.tutorId,
+        studentId: booking.studentId,
+        overall,
+        likedTutor,
+      }
+    );
+
+    return res.json({
+      success: true,
+      message: 'Feedback submitted',
+      data: booking,
+    });
+  } catch (err) {
+    console.error('giveDemoFeedback error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: err.message,
+    });
+  }
+};
+
+/**
+ * POST /api/bookings/:id/start-regular
+ * Body: { planType, sessionsPerWeek, startDate, timeSlots, amount }
+ * Creates RegularClass, generates first sessions, creates Payment (subscription)
+ */
+exports.startRegularFromDemo = async (req, res) => {
+  try {
+    const bookingId = req.params.id;
+    const { planType, sessionsPerWeek, startDate, timeSlots, amount } =
+      req.body;
+    const userId = req.user.id;
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Booking not found' });
+    }
+
+    // ✅ Auth: only the student of this booking can start regular classes
+    if (booking.studentId.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not allowed to start regular classes for this demo',
+      });
+    }
+
+    if (booking.type !== 'demo') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only demo bookings can be upgraded',
+      });
+    }
+
+    if (!booking.demoFeedback || booking.demoFeedback.likedTutor === false) {
+      return res.status(400).json({
+        success: false,
+        message: 'Regular classes allowed only after positive feedback',
+      });
+    }
+
+    if (!planType || !startDate || !amount) {
+      return res.status(400).json({
+        success: false,
+        message: 'planType, startDate, amount are required',
+      });
+    }
+
+    // 🔁 Map User IDs → Profile IDs
+    const studentProfile = await StudentProfile.findOne({
+      userId: booking.studentId,
+    });
+    const tutorProfile = await TutorProfile.findOne({
+      userId: booking.tutorId,
+    });
+
+    if (!studentProfile || !tutorProfile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student or tutor profile not found',
+      });
+    }
+
+    // Optional: prevent duplicate active regular classes with same tutor
+    const existingRc = await RegularClass.findOne({
+      studentId: studentProfile._id,
+      tutorId: tutorProfile._id,
+      status: 'active',
+    });
+
+    if (existingRc) {
+      return res.status(400).json({
+        success: false,
+        message: 'You already have active regular classes with this tutor',
+      });
+    }
+
+    const start = new Date(startDate);
+
+    const rc = await RegularClass.create({
+      studentId: studentProfile._id,
+      tutorId: tutorProfile._id,
+      subject: booking.subject,
+      planType,
+      sessionsPerWeek: sessionsPerWeek || 2,
+      timeSlots: timeSlots || [],
+      startDate: start,
+      amount,
+      currency: 'INR',
+      paymentStatus: 'pending',
+      status: 'active',
+      currentPeriodStart: start,
+      currentPeriodEnd: new Date(
+        new Date(start).setMonth(new Date(start).getMonth() + 1)
+      ),
+    });
+
+    booking.regularClassId = rc._id;
+    await booking.save();
+
+    // create initial sessions
+    await generateSessionsForRegularClass(rc);
+
+    // create Payment record (student -> admin; Razorpay link later)
+    const payment = await Payment.create({
+      regularClassId: rc._id,
+      studentId: studentProfile._id,
+      tutorId: tutorProfile._id,
+      type: 'subscription',
+      amount,
+      currency: 'INR',
+      periodStart: rc.currentPeriodStart,
+      periodEnd: rc.currentPeriodEnd,
+      status: 'created',
+      notes: 'Initial subscription created from demo',
+    });
+
+    // ADMIN knows
+    await createAdminNotification(
+      'Regular classes started',
+      `Demo booking ${booking._id} upgraded to regular classes`,
+      {
+        bookingId: booking._id,
+        regularClassId: rc._id,
+        studentUserId: booking.studentId,
+        tutorUserId: booking.tutorId,
+        studentProfileId: studentProfile._id,
+        tutorProfileId: tutorProfile._id,
+        planType,
+        amount,
+      }
+    );
+
+    return res.json({
+      success: true,
+      message: 'Regular classes created; proceed to payment',
+      data: {
+        regularClass: rc,
+        payment,
+      },
+    });
+  } catch (err) {
+    console.error('startRegularFromDemo error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: err.message,
+    });
+  }
+};
+

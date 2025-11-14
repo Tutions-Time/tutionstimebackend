@@ -17,6 +17,9 @@ const tutorProfileSchema = new mongoose.Schema(
     email: { type: String, trim: true, lowercase: true },
     gender: { type: String, enum: ["Male", "Female", "Other"] },
     rating: { type: Number, min: 0, max: 5, default: 0 },
+    // For average calculation
+    ratingSum: { type: Number, default: 0 },
+    ratingCount: { type: Number, default: 0 },
     isFeatured: { type: Boolean, default: false },
     lastLogin: { type: Date, default: Date.now },
 
