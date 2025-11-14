@@ -58,7 +58,7 @@ app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/bookings', require('./routes/bookingRoutes'));
 app.use('/api/enquiries', require('./routes/enquiryRoutes'));
-// app.use('/api/payments', require('./routes/paymentRoutes'));
+app.use('/api/payments', require('./routes/paymentRoutes'));
 app.use('/api/wallet', require('./routes/walletRoutes'));
 app.use('/api/tutors', require('./routes/tutorRoutes'));
 
@@ -67,6 +67,8 @@ app.use('/api/admin/notifications', require('./routes/adminNotificationRoutes'))
 app.use('/api/tutor-switch', require('./routes/tutorSwitch'));
 
 
+
+app.use("/api/sessions", require("./routes/sessionRoutes"));
 
 
 

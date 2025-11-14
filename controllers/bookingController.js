@@ -9,6 +9,7 @@ const notificationService = require('../services/notificationService');
 const emailTpl = require('../templates/emailTemplates');
 const AdminNotification = require('../models/AdminNotification');
 
+
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
 
 function toStartOfDay(dateStr) {
@@ -154,8 +155,7 @@ exports.createDemoBooking = async (req, res) => {
 
       await createAdminNotification(
         'New Demo Booking Created',
-        `${student?.name || 'A student'} requested a demo with ${
-          tutorProfile?.name || 'Tutor'
+        `${student?.name || 'A student'} requested a demo with ${tutorProfile?.name || 'Tutor'
         } for ${subject} on ${date} at ${time}`,
         {
           bookingId: booking._id,
@@ -357,8 +357,7 @@ exports.updateDemoStatus = async (req, res) => {
         await notificationService.createInApp(
           booking.studentId,
           'Demo Confirmed',
-          `Your demo with ${tutorName} is confirmed for ${displayDate}${
-            displayTime ? ` at ${displayTime}` : ''
+          `Your demo with ${tutorName} is confirmed for ${displayDate}${displayTime ? ` at ${displayTime}` : ''
           }.`,
           {
             meetingLink: booking.meetingLink,
@@ -369,8 +368,7 @@ exports.updateDemoStatus = async (req, res) => {
 
       await createAdminNotification(
         'Demo Confirmed',
-        `Demo confirmed for ${booking.subject} by ${tutorName} on ${displayDate}${
-          displayTime ? ` at ${displayTime}` : ''
+        `Demo confirmed for ${booking.subject} by ${tutorName} on ${displayDate}${displayTime ? ` at ${displayTime}` : ''
         }`,
         {
           bookingId: booking._id,
@@ -766,11 +764,24 @@ exports.giveDemoFeedback = async (req, res) => {
       }
     );
 
+    // ⭐⭐⭐ ADD HOURLY / MONTHLY RATE IN RESPONSE ⭐⭐⭐
+    const tutorProfileToReturn = await TutorProfile.findOne({
+      userId: booking.tutorId,
+    }).select("name hourlyRate monthlyRate photoUrl").lean();
+
     return res.json({
       success: true,
       message: 'Feedback submitted',
-      data: booking,
+      data: {
+        booking,
+        tutorName: tutorProfileToReturn?.name || "Tutor",
+        tutorRates: {
+          hourlyRate: tutorProfileToReturn?.hourlyRate || 0,
+          monthlyRate: tutorProfileToReturn?.monthlyRate || 0
+        }
+      },
     });
+
   } catch (err) {
     console.error('giveDemoFeedback error:', err);
     return res.status(500).json({
@@ -781,154 +792,162 @@ exports.giveDemoFeedback = async (req, res) => {
   }
 };
 
-/**
- * POST /api/bookings/:id/start-regular
- * Body: { planType, sessionsPerWeek, startDate, timeSlots, amount }
- * Creates RegularClass, generates first sessions, creates Payment (subscription)
- */
+
+
+
 exports.startRegularFromDemo = async (req, res) => {
   try {
     const bookingId = req.params.id;
-    const { planType, sessionsPerWeek, startDate, timeSlots, amount } =
-      req.body;
+    const {
+      planType,
+      sessionsPerWeek,
+      startDate,
+      timeSlots,
+      amount,
+      billingType,        // "weekly" | "monthly"
+      numberOfClasses     // count of classes for billing
+    } = req.body;
+
     const userId = req.user.id;
 
-    const booking = await Booking.findById(bookingId);
+    const booking = await Booking.findById(bookingId)
+      .populate("studentId")
+      .populate("tutorId");
+
     if (!booking) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'Booking not found' });
+      return res.status(404).json({ success: false, message: "Booking not found" });
     }
 
-    // ✅ Auth: only the student of this booking can start regular classes
-    if (booking.studentId.toString() !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not allowed to start regular classes for this demo',
-      });
-    }
-
-    if (booking.type !== 'demo') {
+    if (booking.type !== "demo") {
       return res.status(400).json({
         success: false,
-        message: 'Only demo bookings can be upgraded',
+        message: "Only demo bookings can be upgraded",
       });
     }
 
     if (!booking.demoFeedback || booking.demoFeedback.likedTutor === false) {
       return res.status(400).json({
         success: false,
-        message: 'Regular classes allowed only after positive feedback',
+        message: "Regular classes allowed only after positive feedback",
       });
     }
 
-    if (!planType || !startDate || !amount) {
+    const studentProfile = await StudentProfile.findOne({ userId });
+    if (!studentProfile || !booking.studentId.equals(studentProfile.userId)) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not allowed to start regular classes",
+      });
+    }
+
+    if (!planType || !startDate || !amount || !billingType || !numberOfClasses) {
       return res.status(400).json({
         success: false,
-        message: 'planType, startDate, amount are required',
+        message: "Required fields: planType, startDate, amount, billingType, numberOfClasses",
       });
     }
 
-    // 🔁 Map User IDs → Profile IDs
-    const studentProfile = await StudentProfile.findOne({
-      userId: booking.studentId,
-    });
-    const tutorProfile = await TutorProfile.findOne({
-      userId: booking.tutorId,
-    });
-
-    if (!studentProfile || !tutorProfile) {
-      return res.status(400).json({
-        success: false,
-        message: 'Student or tutor profile not found',
-      });
-    }
-
-    // Optional: prevent duplicate active regular classes with same tutor
-    const existingRc = await RegularClass.findOne({
-      studentId: studentProfile._id,
-      tutorId: tutorProfile._id,
-      status: 'active',
-    });
-
-    if (existingRc) {
-      return res.status(400).json({
-        success: false,
-        message: 'You already have active regular classes with this tutor',
-      });
-    }
-
-    const start = new Date(startDate);
-
+    // ---------------------------------------------
+    // 1️⃣ Create Regular Class
+    // ---------------------------------------------
     const rc = await RegularClass.create({
-      studentId: studentProfile._id,
-      tutorId: tutorProfile._id,
+      studentId: booking.studentId,
+      tutorId: booking.tutorId,
       subject: booking.subject,
       planType,
       sessionsPerWeek: sessionsPerWeek || 2,
       timeSlots: timeSlots || [],
-      startDate: start,
-      amount,
-      currency: 'INR',
-      paymentStatus: 'pending',
-      status: 'active',
-      currentPeriodStart: start,
-      currentPeriodEnd: new Date(
-        new Date(start).setMonth(new Date(start).getMonth() + 1)
-      ),
+      startDate: new Date(startDate),
+      amount,               // Base per-class OR per-month amount
+      currency: "INR",
+      paymentStatus: "pending",
+      status: "active",
+      currentPeriodStart: new Date(),
+      currentPeriodEnd: new Date(new Date().setMonth(new Date().getMonth() + 1)),
     });
 
     booking.regularClassId = rc._id;
     await booking.save();
 
-    // create initial sessions
-    await generateSessionsForRegularClass(rc);
+    // ---------------------------------------------
+    // 2️⃣ Create Payment record (before payment)
+    // ---------------------------------------------
+    const totalAmountINR = amount * Number(numberOfClasses);
+    const amountPaise = totalAmountINR * 100;
 
-    // create Payment record (student -> admin; Razorpay link later)
-    const payment = await Payment.create({
+    let payment = await Payment.create({
       regularClassId: rc._id,
-      studentId: studentProfile._id,
-      tutorId: tutorProfile._id,
-      type: 'subscription',
-      amount,
-      currency: 'INR',
-      periodStart: rc.currentPeriodStart,
-      periodEnd: rc.currentPeriodEnd,
-      status: 'created',
-      notes: 'Initial subscription created from demo',
+      studentId: booking.studentId,
+      tutorId: booking.tutorId,
+      type: "subscription",
+      amount: totalAmountINR,
+      currency: "INR",
+      gateway: "razorpay",
+      status: "created",
+      notes: `BillingType=${billingType}, Classes=${numberOfClasses}`
     });
 
-    // ADMIN knows
+    // ---------------------------------------------
+    // 3️⃣ Razorpay Order Creation
+    // ---------------------------------------------
+    const razorpay = require("../services/payments/razorpay");
+
+    const order = await razorpay.orders.create({
+      amount: amountPaise,
+      currency: "INR",
+      receipt: "rc_" + rc._id + "_" + Date.now(),
+      notes: {
+        regularClassId: rc._id.toString(),
+        bookingId: booking._id.toString(),
+        numberOfClasses,
+        billingType,
+      },
+    });
+
+    // save order id in payment
+    payment.gatewayOrderId = order.id;
+    await payment.save();
+
+    // ---------------------------------------------
+    // 4️⃣ Notify Admin
+    // ---------------------------------------------
     await createAdminNotification(
-      'Regular classes started',
-      `Demo booking ${booking._id} upgraded to regular classes`,
+      "Regular Classes Started (Pending Payment)",
+      `Student is about to pay for regular class ${rc._id}`,
       {
         bookingId: booking._id,
         regularClassId: rc._id,
-        studentUserId: booking.studentId,
-        tutorUserId: booking.tutorId,
-        studentProfileId: studentProfile._id,
-        tutorProfileId: tutorProfile._id,
-        planType,
-        amount,
+        paymentId: payment._id,
+        billingType,
+        numberOfClasses,
+        amount: totalAmountINR,
       }
     );
 
+    // ---------------------------------------------
+    // 5️⃣ Return payment details to frontend
+    // ---------------------------------------------
     return res.json({
       success: true,
-      message: 'Regular classes created; proceed to payment',
+      message: "Regular class created. Proceed to payment.",
       data: {
-        regularClass: rc,
-        payment,
+        regularClassId: rc._id,
+        paymentId: payment._id,
+        razorpayKey: process.env.RAZORPAY_KEY_ID,
+        orderId: order.id,
+        amount: amountPaise,
+        currency: "INR",
       },
     });
   } catch (err) {
-    console.error('startRegularFromDemo error:', err);
+    console.error("startRegularFromDemo error:", err);
     return res.status(500).json({
       success: false,
-      message: 'Server error',
+      message: "Server error",
       error: err.message,
     });
   }
 };
+
+
 

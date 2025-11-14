@@ -1,33 +1,158 @@
+const crypto = require("crypto");
+const razorpay = require("../services/payments/razorpay"); // <-- create this service
 const Payment = require("../models/Payment");
 const RegularClass = require("../models/RegularClass");
 const TutorProfile = require("../models/TutorProfile");
 const { createAdminNotification } = require("../services/adminNotification");
 
 /**
+ * STUDENT: Create Razorpay ORDER for a regular class
+ * Supports weekly / monthly / number-of-classes multiplier.
+ *
+ * POST /api/payments/create-subscription-order
+ * Body: { regularClassId, billingType, numberOfClasses }
+ *  - billingType: "weekly" | "monthly"
+ *  - numberOfClasses: integer (e.g. 4, 8, 12)
+ */
+exports.createSubscriptionOrder = async (req, res) => {
+  try {
+    const { regularClassId, billingType, numberOfClasses } = req.body;
+    const userId = req.user.id; // student userId
+
+    if (!regularClassId || !billingType || !numberOfClasses) {
+      return res.status(400).json({
+        success: false,
+        message: "regularClassId, billingType, numberOfClasses are required",
+      });
+    }
+
+    const rc = await RegularClass.findById(regularClassId);
+    if (!rc) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Regular class not found" });
+    }
+
+    // 🔐 Optional: ensure the logged-in student matches this regular class
+    // You can map User -> StudentProfile here if needed
+
+    // 💰 Compute total amount: per-class rate * numberOfClasses
+    // rc.amount is assumed "per class" or "base" price in INR
+    const totalAmountINR = rc.amount * Number(numberOfClasses);
+    const amountInPaise = Math.round(totalAmountINR * 100);
+
+    // 🧾 Create Razorpay order
+    const order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: "INR",
+      receipt: `rc_${regularClassId}_${Date.now()}`,
+      notes: {
+        regularClassId: regularClassId.toString(),
+        billingType,
+        numberOfClasses: String(numberOfClasses),
+      },
+    });
+
+    // 💾 Upsert Payment record for this regular class
+    // type stays "subscription" because it's a recurring-tuition payment
+    const paymentDoc = await Payment.findOneAndUpdate(
+      { regularClassId },
+      {
+        regularClassId,
+        // You may want to store StudentProfile/TutorProfile ids instead of user ids
+        type: "subscription",
+        amount: totalAmountINR,
+        currency: "INR",
+        gateway: "razorpay",
+        gatewayOrderId: order.id,
+        status: "created",
+        periodStart: rc.currentPeriodStart,
+        periodEnd: rc.currentPeriodEnd,
+        notes: `BillingType: ${billingType}, Classes: ${numberOfClasses}`,
+      },
+      { upsert: true, new: true }
+    );
+
+    await createAdminNotification(
+      "Regular class payment initiated",
+      `Order ${order.id} created for regularClass ${regularClassId}`,
+      {
+        regularClassId,
+        paymentId: paymentDoc._id,
+        billingType,
+        numberOfClasses,
+        amount: totalAmountINR,
+      }
+    );
+
+    return res.json({
+      success: true,
+      key: process.env.RAZORPAY_KEY_ID,
+      orderId: order.id,
+      amount: amountInPaise,
+      currency: "INR",
+    });
+  } catch (err) {
+    console.error("createSubscriptionOrder error:", err);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+/**
  * POST /api/payments/razorpay/webhook
  * Razorpay will call this when payment is captured
+ * NOTE: use express.raw({ type: "application/json" }) on this route
  */
 exports.razorpayWebhook = async (req, res) => {
   try {
-    const event = req.body;
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      console.error("❌ Missing RAZORPAY_WEBHOOK_SECRET env");
+      return res.status(500).json({ received: false });
+    }
 
-    // TODO: verify signature using Razorpay secret
+    // ✅ 1) Verify signature
+    const rawBody = req.body; // must be raw buffer or raw string
+    const signature = req.headers["x-razorpay-signature"];
+
+    const expected = crypto
+      .createHmac("sha256", webhookSecret)
+      .update(JSON.stringify(rawBody))
+      .digest("hex");
+
+    if (expected !== signature) {
+      console.warn("❌ Invalid Razorpay webhook signature");
+      return res.status(400).json({ received: false });
+    }
+
+    const event = rawBody;
 
     if (event.event === "payment.captured") {
       const paymentId = event.payload.payment.entity.id;
       const orderId = event.payload.payment.entity.order_id;
       const amount = event.payload.payment.entity.amount / 100; // rupees
 
-      const payment = await Payment.findOne({
-        gatewayPaymentId: paymentId,
+      // Try to locate our Payment record either via paymentId or orderId
+      let payment = await Payment.findOne({
+        $or: [{ gatewayPaymentId: paymentId }, { gatewayOrderId: orderId }],
       });
 
       if (!payment) {
-        // Optionally match using orderId if you store it
+        // You might want to log this as warning, but we must still acknowledge webhook
+        console.warn(
+          "⚠️ No Payment record found for webhook paymentId/orderId",
+          paymentId,
+          orderId
+        );
         return res.status(200).json({ received: true });
       }
 
       payment.status = "paid";
+      payment.gatewayPaymentId = paymentId;
+      // amount from Razorpay is authoritative
+      payment.amount = amount;
       await payment.save();
 
       const rc = await RegularClass.findById(payment.regularClassId);
@@ -39,9 +164,19 @@ exports.razorpayWebhook = async (req, res) => {
       await createAdminNotification(
         "Subscription payment received",
         `Payment ${payment._id} captured`,
-        { paymentId: payment._id, regularClassId: payment.regularClassId }
+        {
+          paymentId: payment._id,
+          regularClassId: payment.regularClassId,
+          gatewayPaymentId: paymentId,
+          gatewayOrderId: orderId,
+          amount,
+        }
       );
     }
+
+    // (Optional) you can also handle subscription.activated here if you later
+    // switch to Razorpay Subscriptions API
+
     res.status(200).json({ received: true });
   } catch (err) {
     console.error("razorpayWebhook error:", err);
