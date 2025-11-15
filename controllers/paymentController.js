@@ -113,13 +113,13 @@ exports.razorpayWebhook = async (req, res) => {
       return res.status(500).json({ received: false });
     }
 
-    // ✅ 1) Verify signature
-    const rawBody = req.body; // must be raw buffer or raw string
+    const rawBody = req.body;         // Buffer
+    const bodyString = rawBody.toString("utf8");
     const signature = req.headers["x-razorpay-signature"];
 
     const expected = crypto
       .createHmac("sha256", webhookSecret)
-      .update(JSON.stringify(rawBody))
+      .update(bodyString)
       .digest("hex");
 
     if (expected !== signature) {
@@ -127,20 +127,18 @@ exports.razorpayWebhook = async (req, res) => {
       return res.status(400).json({ received: false });
     }
 
-    const event = rawBody;
+    const event = JSON.parse(bodyString);
 
     if (event.event === "payment.captured") {
       const paymentId = event.payload.payment.entity.id;
       const orderId = event.payload.payment.entity.order_id;
-      const amount = event.payload.payment.entity.amount / 100; // rupees
+      const amount = event.payload.payment.entity.amount / 100;
 
-      // Try to locate our Payment record either via paymentId or orderId
       let payment = await Payment.findOne({
         $or: [{ gatewayPaymentId: paymentId }, { gatewayOrderId: orderId }],
       });
 
       if (!payment) {
-        // You might want to log this as warning, but we must still acknowledge webhook
         console.warn(
           "⚠️ No Payment record found for webhook paymentId/orderId",
           paymentId,
@@ -151,7 +149,6 @@ exports.razorpayWebhook = async (req, res) => {
 
       payment.status = "paid";
       payment.gatewayPaymentId = paymentId;
-      // amount from Razorpay is authoritative
       payment.amount = amount;
       await payment.save();
 
@@ -174,15 +171,13 @@ exports.razorpayWebhook = async (req, res) => {
       );
     }
 
-    // (Optional) you can also handle subscription.activated here if you later
-    // switch to Razorpay Subscriptions API
-
     res.status(200).json({ received: true });
   } catch (err) {
     console.error("razorpayWebhook error:", err);
     res.status(500).json({ received: false });
   }
 };
+
 
 /**
  * Admin: generate payout records once month is over

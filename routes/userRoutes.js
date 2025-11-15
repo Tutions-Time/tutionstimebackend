@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
-const { authenticate } = require('../middleware/auth');
+const studentSearchController = require('../controllers/studentSearchController.js')
+const { authenticate,checkRole } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 
 // Get user profile
@@ -37,6 +38,9 @@ router.post(
   ]),
   userController.uploadTutorKyc
 );
+
+router.get('/search',authenticate,  checkRole(['tutor']), studentSearchController.searchStudents);
+
 
 
 
