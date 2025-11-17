@@ -9,8 +9,12 @@ const notificationService = require('../services/notificationService');
 const emailTpl = require('../templates/emailTemplates');
 const AdminNotification = require('../models/AdminNotification');
 
-
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
+
+// Demo duration in minutes (business rule)
+const DEMO_DURATION_MINUTES = 15;
+// Optional buffer after end time before auto-completing
+const AUTO_COMPLETE_BUFFER_MIN = 5;
 
 function toStartOfDay(dateStr) {
   const d = new Date(dateStr);
@@ -28,7 +32,6 @@ function addMinutesToTime(timeStr, minutesToAdd) {
 
   return `${String(newHour).padStart(2, "0")}:${String(newMinute).padStart(2, "0")}`;
 }
-
 
 async function createAdminNotification(title, message, meta = {}) {
   try {
@@ -54,6 +57,11 @@ ${JSON.stringify(meta, null, 2)}
   }
 }
 
+/**
+ * Student-initiated demo booking
+ * POST /api/bookings/demo
+ * Body: { tutorId, subject, date, time, note? }
+ */
 exports.createDemoBooking = async (req, res) => {
   try {
     const { tutorId, subject, date, time, note } = req.body;
@@ -86,6 +94,7 @@ exports.createDemoBooking = async (req, res) => {
       });
     }
 
+    // Prevent double booking for same student/tutor/slot
     const existingForSameStudent = await Booking.findOne({
       studentId: req.user.id,
       tutorId,
@@ -103,6 +112,7 @@ exports.createDemoBooking = async (req, res) => {
       });
     }
 
+    // Prevent another student from taking same slot
     const existingSlotForTutor = await Booking.findOne({
       tutorId,
       type: 'demo',
@@ -121,12 +131,16 @@ exports.createDemoBooking = async (req, res) => {
       });
     }
 
+    // Demo duration is 15 minutes
+    const preferredEndTime = addMinutesToTime(time, DEMO_DURATION_MINUTES);
+
     const booking = await Booking.create({
       studentId: req.user.id,
       tutorId,
       subject,
       preferredDate,
       preferredTime: time,
+      preferredEndTime, // 15 min demo end time
       note: note || '',
       type: 'demo',
       status: 'pending',
@@ -292,6 +306,9 @@ exports.createDemoBookingByTutor = async (req, res) => {
       });
     }
 
+    // Demo duration is 15 minutes
+    const preferredEndTime = addMinutesToTime(time, DEMO_DURATION_MINUTES);
+
     // ✅ Create booking – IMPORTANT mapping
     const booking = await Booking.create({
       studentId,                 // receiver
@@ -299,11 +316,12 @@ exports.createDemoBookingByTutor = async (req, res) => {
       subject,
       preferredDate,
       preferredTime: time,
+      preferredEndTime,          // 15 min demo end time
       note: note || '',
       type: 'demo',
       status: 'pending',
       meetingLink: '',
-      requestedBy: 'tutor',      // 🔥 NEW
+      requestedBy: 'tutor',      // NEW
     });
 
     // Notifications to student + admin
@@ -371,7 +389,6 @@ exports.createDemoBookingByTutor = async (req, res) => {
   }
 };
 
-
 exports.getStudentBookings = async (req, res) => {
   try {
     // Read type from query: ?type=demo or ?type=regular
@@ -433,8 +450,6 @@ exports.getStudentBookings = async (req, res) => {
     });
   }
 };
-
-
 
 exports.getTutorBookings = async (req, res) => {
   try {
@@ -859,7 +874,6 @@ exports.updateDemoStatusByStudent = async (req, res) => {
   }
 };
 
-
 exports.addFeedback = async (req, res) => {
   try {
     const { id } = req.params;
@@ -950,7 +964,7 @@ exports.addFeedback = async (req, res) => {
   }
 };
 
-// controllers/bookingController.js (add this)
+// Admin-only: get booking with expanded info
 exports.getBookingByIdForAdmin = async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
@@ -990,7 +1004,7 @@ exports.getBookingByIdForAdmin = async (req, res) => {
   }
 };
 
-// Helper: generate sessions for 4 weeks initially
+// Helper: generate sessions for 4 weeks initially (for regular classes)
 async function generateSessionsForRegularClass(regularClass) {
   const sessions = [];
   const { timeSlots, startDate, studentId, tutorId, _id } = regularClass;
@@ -1042,7 +1056,7 @@ async function generateSessionsForRegularClass(regularClass) {
 }
 
 /**
- * POST /api/bookings/:id/feedback
+ * POST /api/bookings/:id/feedback (structured demo feedback)
  * Body: { teaching, communication, understanding, comment, likedTutor }
  */
 exports.giveDemoFeedback = async (req, res) => {
@@ -1331,7 +1345,6 @@ exports.startRegularFromDemo = async (req, res) => {
       totalAmountINR = baseRate * Number(numberOfClasses);
     } else {
       // Monthly plan: one-month subscription
-      // (later we can support multi-month, but keep simple now)
       totalAmountINR = baseRate;
     }
 
@@ -1553,7 +1566,7 @@ exports.createRegularBooking = async (req, res) => {
       subject: regularClass.subject,
       preferredDate,
       preferredTime: time,       // start time
-      preferredEndTime: endTime, // 👈 NEW: end time (1hr later)
+      preferredEndTime: endTime, // end time (1hr later)
       note: note || "",
       type: "regular",
       status: "scheduled",       // regular class is already fixed
@@ -1637,5 +1650,68 @@ exports.createRegularBooking = async (req, res) => {
       message: "Failed to create regular booking",
       error: err.message,
     });
+  }
+};
+
+/**
+ * 🔁 Auto-complete past demos:
+ * - type = 'demo'
+ * - status = 'confirmed'
+ * - now > preferredDate + preferredTime + DEMO_DURATION_MINUTES + buffer
+ *
+ * Call this from server.js using setInterval, e.g.:
+ *   const { autoCompletePastDemos } = require('./controllers/bookingController');
+ *   setInterval(autoCompletePastDemos, 5 * 60 * 1000);
+ */
+exports.autoCompletePastDemos = async function autoCompletePastDemos() {
+  try {
+    const now = new Date();
+
+    const confirmedDemos = await Booking.find({
+      type: 'demo',
+      status: 'confirmed',
+    });
+
+    if (!confirmedDemos.length) return;
+
+    for (const booking of confirmedDemos) {
+      if (!booking.preferredDate || !booking.preferredTime) continue;
+
+      // Build demo start DateTime
+      const [hourStr, minuteStr] = booking.preferredTime.split(':');
+      const startDateTime = new Date(booking.preferredDate);
+      startDateTime.setHours(
+        parseInt(hourStr, 10),
+        parseInt(minuteStr, 10),
+        0,
+        0
+      );
+
+      // Demo end = start + 15 min + buffer
+      const endDateTime = new Date(
+        startDateTime.getTime() +
+        (DEMO_DURATION_MINUTES + AUTO_COMPLETE_BUFFER_MIN) * 60 * 1000
+      );
+
+      // If current time is past endDateTime, auto-complete
+      if (now >= endDateTime) {
+        booking.status = 'completed';
+        await booking.save();
+
+        await createAdminNotification(
+          'Demo auto-completed',
+          `Demo ${booking._id} auto-completed after scheduled end time`,
+          {
+            bookingId: booking._id,
+            tutorId: booking.tutorId,
+            studentId: booking.studentId,
+            preferredDate: booking.preferredDate,
+            preferredTime: booking.preferredTime,
+          }
+        );
+      }
+    }
+  } catch (err) {
+    console.error('autoCompletePastDemos error:', err.message);
   }
 };

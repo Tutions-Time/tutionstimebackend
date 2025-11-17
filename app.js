@@ -66,11 +66,14 @@ app.use('/api/meta', require('./routes/metaRoutes.js'));
 app.use('/api/admin/notifications', require('./routes/adminNotificationRoutes'));
 app.use('/api/tutor-switch', require('./routes/tutorSwitch'));
 
-
+const { autoCompletePastDemos } = require('./controllers/bookingController');
 
 app.use("/api/sessions", require("./routes/sessionRoutes"));
 
 
+setInterval(() => {
+  autoCompletePastDemos();
+}, 5 * 60 * 1000);
 
 
 app.get("/", (req, res) =>
