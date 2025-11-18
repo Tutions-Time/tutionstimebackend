@@ -1259,14 +1259,14 @@ exports.startRegularFromDemo = async (req, res) => {
       });
     }
 
-// Allow subscription even without feedback.
-// Only check if demo is completed.
-if (booking.status !== "completed") {
-  return res.status(400).json({
-    success: false,
-    message: "Demo must be completed before subscribing",
-  });
-}
+    // Allow subscription even without feedback.
+    // Only check if demo is completed.
+    if (booking.status !== "completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Demo must be completed before subscribing",
+      });
+    }
 
 
     // ✅ Auth: only the student who owns this booking can upgrade
@@ -1490,46 +1490,76 @@ if (booking.status !== "completed") {
 // Tutor creates a REGULAR class instance for a student
 // POST /api/bookings/regular
 // Body: { regularClassId, date, time, note }
-exports.createRegularBooking = async (req, res) => {
+exports.startRegularFromDemo = async (req, res) => {
   try {
-    const { regularClassId, date, time, note } = req.body;
-    const tutorId = req.user.id; // logged-in tutor
+    const bookingId = req.params.id;
+    const { billingType, numberOfClasses } = req.body;
+    const userId = req.user.id;
 
-    if (!regularClassId || !date || !time) {
-      return res.status(400).json({
-        success: false,
-        message: "regularClassId, date and time are required",
-      });
-    }
-
-    // 1️⃣ Find the regular class (subscription)
-    const regularClass = await RegularClass.findById(regularClassId).lean();
-    if (!regularClass) {
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
       return res.status(404).json({
         success: false,
-        message: "Regular class not found",
+        message: "Booking not found",
       });
     }
 
-    // 2️⃣ Ensure this tutor owns that regular class
-    if (String(regularClass.tutorId) !== String(tutorId)) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not allowed to create bookings for this class",
-      });
-    }
-
-    // 3️⃣ Optional: ensure regular class is active
-    if (regularClass.status && regularClass.status !== "active") {
+    // 1️⃣ Only demo bookings can be upgraded
+    if (booking.type !== "demo") {
       return res.status(400).json({
         success: false,
-        message: "Regular class is not active",
+        message: "Only demo bookings can be upgraded",
       });
     }
 
-    // 4️⃣ Load tutor profile to read availability
+    // 2️⃣ Allow subscription without feedback
+    //    Only check demo is completed
+    if (booking.status !== "completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Demo must be completed before subscribing",
+      });
+    }
+
+    // 3️⃣ Auth check
+    if (booking.studentId.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not allowed to start regular classes for this booking",
+      });
+    }
+
+    // 4️⃣ Validate billingType
+    if (!billingType || !["hourly", "monthly"].includes(billingType)) {
+      return res.status(400).json({
+        success: false,
+        message: "billingType must be 'hourly' or 'monthly'",
+      });
+    }
+
+    // 5️⃣ For hourly → numberOfClasses required
+    if (billingType === "hourly" && !numberOfClasses) {
+      return res.status(400).json({
+        success: false,
+        message: "numberOfClasses is required when billingType is 'hourly'",
+      });
+    }
+
+    // 6️⃣ planType FIX — Mongoose enum compatible
+    //    Map directly from billingType → enum
+    let planType = billingType; // "hourly" or "monthly"
+
+    // 7️⃣ Validate planType matches your model enum
+    if (!["hourly", "weekly", "monthly", "custom"].includes(planType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid planType",
+      });
+    }
+
+    // Load tutor profile
     const tutorProfile = await TutorProfile.findOne({
-      userId: regularClass.tutorId,
+      userId: booking.tutorId,
     }).lean();
 
     if (!tutorProfile) {
@@ -1539,137 +1569,151 @@ exports.createRegularBooking = async (req, res) => {
       });
     }
 
-    const avail = Array.isArray(tutorProfile.availability)
+    const tutorAvailability = Array.isArray(tutorProfile.availability)
       ? tutorProfile.availability
       : [];
 
-    // Date MUST be from tutor availability (like createDemoBooking)
-    const isAvailable = avail.includes(date);
-    if (!isAvailable) {
-      return res.status(400).json({
-        success: false,
-        message: "Tutor not available on selected date",
-      });
-    }
+    // 🗓️ Find earliest upcoming date
+    const todayStr = new Date().toISOString().slice(0, 10);
 
-    const preferredDate = toStartOfDay(date);
+    const futureDates = tutorAvailability
+      .filter((d) => d >= todayStr)
+      .sort();
 
-    // 5️⃣ Calculate end time = start time + 60 minutes
-    const endTime = addMinutesToTime(time, 60); // 1 hour class
-
-    // 6️⃣ Prevent double booking same student/tutor/date/time/type=regular
-    const existing = await Booking.findOne({
-      studentId: regularClass.studentId,
-      tutorId: regularClass.tutorId,
-      type: "regular",
-      preferredDate,
-      preferredTime: time,
-      status: { $ne: "cancelled" },
-    });
-
-    if (existing) {
+    if (!futureDates.length) {
       return res.status(400).json({
         success: false,
         message:
-          "A regular class is already scheduled for this date and time for this student.",
+          "Tutor has no upcoming availability. Regular classes cannot be started right now.",
       });
     }
 
-    // 7️⃣ Create booking record of type "regular"
-    const meetingLink = `https://meet.jit.si/tuitiontime-regular-${Date.now()}`;
+    const startDateStr = futureDates[0];
+    const startDateObj = toStartOfDay(startDateStr);
 
-    const booking = await Booking.create({
-      studentId: regularClass.studentId,
-      tutorId: regularClass.tutorId,
-      subject: regularClass.subject,
-      preferredDate,
-      preferredTime: time,       // start time
-      preferredEndTime: endTime, // end time (1hr later)
-      note: note || "",
-      type: "regular",
-      status: "scheduled",       // regular class is already fixed
-      meetingLink,
-      regularClassId: regularClass._id,
-    });
+    // 💰 Compute base rate
+    let baseRate =
+      billingType === "hourly"
+        ? tutorProfile.hourlyRate
+        : tutorProfile.monthlyRate;
 
-    // 8️⃣ Notify student
-    try {
-      const studentUser = await User.findById(regularClass.studentId).lean();
-      const tutorNameProfile = await TutorProfile.findOne({
-        userId: regularClass.tutorId,
-      }).lean();
-
-      const tutorName = tutorNameProfile?.name || "Your Tutor";
-      const displayDate = new Date(preferredDate).toDateString();
-      const displayStartTime = time;
-      const displayEndTime = endTime;
-
-      if (studentUser?.email && notificationService?.sendEmail) {
-        const html =
-          emailTpl.regularClassScheduledHTML?.({
-            tutorName,
-            subject: regularClass.subject,
-            date: displayDate,
-            startTime: displayStartTime,
-            endTime: displayEndTime,
-            link: meetingLink,
-          }) ||
-          `<p>Your regular class with ${tutorName} is scheduled on ${displayDate} from ${displayStartTime} to ${displayEndTime}. Meeting link: ${meetingLink}</p>`;
-
-        await notificationService.sendEmail(
-          studentUser.email,
-          "Regular Class Scheduled - TuitionTime",
-          "",
-          html
-        );
-      }
-
-      if (notificationService?.createInApp) {
-        await notificationService.createInApp(
-          regularClass.studentId,
-          "Regular Class Scheduled",
-          `Your regular class with ${tutorName} is scheduled on ${displayDate} from ${displayStartTime} to ${displayEndTime}.`,
-          {
-            bookingId: booking._id,
-            regularClassId: regularClass._id,
-            meetingLink,
-          }
-        );
-      }
-
-      await createAdminNotification(
-        "Regular Class Booking Created",
-        `New regular class created for subject ${regularClass.subject}`,
-        {
-          bookingId: booking._id,
-          regularClassId: regularClass._id,
-          tutorId: regularClass.tutorId,
-          studentId: regularClass.studentId,
-          date,
-          startTime: time,
-          endTime,
-          type: "regular",
-          status: booking.status,
-        }
-      );
-    } catch (notifyErr) {
-      console.warn("Regular booking notification failed:", notifyErr.message);
+    if (!baseRate) {
+      return res.status(400).json({
+        success: false,
+        message: `Tutor ${billingType}Rate is not set.`,
+      });
     }
 
-    return res.status(201).json({
+    // Total amount
+    let totalAmountINR =
+      billingType === "hourly"
+        ? baseRate * Number(numberOfClasses)
+        : baseRate;
+
+    const amountPaise = Math.round(totalAmountINR * 100);
+
+    // Defaults — future scheduling
+    const sessionsPerWeek = 2;
+    const timeSlots = [];
+
+    // 1️⃣ Create Regular Class record
+    const rc = await RegularClass.create({
+      studentId: booking.studentId,
+      tutorId: booking.tutorId,
+      subject: booking.subject,
+      planType, // MONGOOSE SAFE ("hourly" or "monthly")
+      sessionsPerWeek,
+      timeSlots,
+      startDate: startDateObj,
+      amount: baseRate,
+      currency: "INR",
+      paymentStatus: "pending",
+      status: "active",
+      currentPeriodStart: startDateObj,
+      currentPeriodEnd: new Date(
+        new Date(startDateObj).setMonth(startDateObj.getMonth() + 1)
+      ),
+    });
+
+    // Link to booking
+    booking.regularClassId = rc._id;
+    await booking.save();
+
+    // 2️⃣ Create Payment record
+    const payment = await Payment.create({
+      regularClassId: rc._id,
+      studentId: booking.studentId,
+      tutorId: booking.tutorId,
+      type: "subscription",
+      amount: totalAmountINR,
+      currency: "INR",
+      gateway: "razorpay",
+      status: "created",
+      notes: `BillingType=${billingType}, Classes=${numberOfClasses || ""}, StartDate=${startDateStr}`,
+    });
+
+    // 3️⃣ Razorpay Order
+    const razorpay = require("../services/payments/razorpay");
+
+    const order = await razorpay.orders.create({
+      amount: amountPaise,
+      currency: "INR",
+      receipt: "rc_" + rc._id + "_" + Date.now(),
+      notes: {
+        regularClassId: rc._id.toString(),
+        bookingId: booking._id.toString(),
+        numberOfClasses: numberOfClasses ? String(numberOfClasses) : "",
+        billingType,
+        startDate: startDateStr,
+      },
+    });
+
+    payment.gatewayOrderId = order.id;
+    await payment.save();
+
+    // 4️⃣ Admin notification
+    await createAdminNotification(
+      "Regular Classes Started (Pending Payment)",
+      `Student is starting regular classes`,
+      {
+        bookingId: booking._id,
+        regularClassId: rc._id,
+        paymentId: payment._id,
+        billingType,
+        numberOfClasses,
+        baseRate,
+        totalAmountINR,
+        startDate: startDateStr,
+      }
+    );
+
+    // 5️⃣ Return to frontend for Razorpay checkout
+    return res.json({
       success: true,
-      message: "Regular class booking created successfully.",
-      data: booking,
+      message: "Regular class created. Proceed to payment.",
+      data: {
+        regularClassId: rc._id,
+        paymentId: payment._id,
+        razorpayKey: process.env.RAZORPAY_KEY_ID,
+        orderId: order.id,
+        amount: amountPaise,
+        currency: "INR",
+        startDate: startDateStr,
+        billingType,
+        baseRate,
+        totalAmountINR,
+      },
     });
   } catch (err) {
-    console.error("createRegularBooking error:", err);
+    console.error("startRegularFromDemo error:", err);
     return res.status(500).json({
       success: false,
-      message: "Failed to create regular booking",
+      message: "Server error",
       error: err.message,
     });
   }
 };
+
 
 /**
  * 🔁 Auto-complete past demos:
