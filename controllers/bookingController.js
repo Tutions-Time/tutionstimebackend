@@ -261,7 +261,7 @@ exports.createDemoBookingByTutor = async (req, res) => {
       });
     }
 
-    // ✅ Optionally check student availability if they set it
+
     const studentAvail = Array.isArray(studentProfile.availability)
       ? studentProfile.availability
       : [];
@@ -305,6 +305,7 @@ exports.createDemoBookingByTutor = async (req, res) => {
         message: 'This time slot is already booked for you.',
       });
     }
+    
 
     // Demo duration is 15 minutes
     const preferredEndTime = addMinutesToTime(time, DEMO_DURATION_MINUTES);

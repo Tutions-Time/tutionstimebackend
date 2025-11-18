@@ -1,7 +1,7 @@
 const User = require("../models/User");
 const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
-
+                                                         
 /* ------------------------------------------------------------
    GET USER PROFILE
 ------------------------------------------------------------ */
