@@ -305,7 +305,7 @@ exports.createDemoBookingByTutor = async (req, res) => {
         message: 'This time slot is already booked for you.',
       });
     }
-    
+
 
     // Demo duration is 15 minutes
     const preferredEndTime = addMinutesToTime(time, DEMO_DURATION_MINUTES);
@@ -1259,13 +1259,15 @@ exports.startRegularFromDemo = async (req, res) => {
       });
     }
 
-    // ✅ Must have positive feedback / likedTutor = true
-    if (!booking.demoFeedback || booking.demoFeedback.likedTutor === false) {
-      return res.status(400).json({
-        success: false,
-        message: "Regular classes allowed only after positive feedback",
-      });
-    }
+// Allow subscription even without feedback.
+// Only check if demo is completed.
+if (booking.status !== "completed") {
+  return res.status(400).json({
+    success: false,
+    message: "Demo must be completed before subscribing",
+  });
+}
+
 
     // ✅ Auth: only the student who owns this booking can upgrade
     if (booking.studentId.toString() !== userId) {
