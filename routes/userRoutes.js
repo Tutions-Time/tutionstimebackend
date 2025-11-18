@@ -1,26 +1,24 @@
 const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
-const studentSearchController = require('../controllers/studentSearchController.js')
-const { authenticate,checkRole } = require('../middleware/auth');
-const upload = require('../middleware/upload');
+const studentSearchController = require('../controllers/studentSearchController');
+const { authenticate, checkRole } = require('../middleware/auth');
+const uploadS3 = require('../middleware/uploadS3');
 
-// Get user profile
 router.get('/profile', authenticate, userController.getUserProfile);
-router.get('/', authenticate,  userController.getAllUsers);
+router.get('/', authenticate, userController.getAllUsers);
 
-
-// Update student profile with photo upload
-router.post('/student-profile',   
+router.post(
+  '/student-profile',
   authenticate,
-  upload.fields([{ name: 'photo', maxCount: 1 }]),
+  uploadS3.fields([{ name: 'photo', maxCount: 1 }]),
   userController.updateStudentProfile
 );
 
-// Update tutor profile with multiple file uploads
-router.post('/tutor-profile', 
+router.post(
+  '/tutor-profile',
   authenticate,
-  upload.fields([
+  uploadS3.fields([
     { name: 'photo', maxCount: 1 },
     { name: 'resume', maxCount: 1 },
     { name: 'demoVideo', maxCount: 1 }
@@ -31,17 +29,19 @@ router.post('/tutor-profile',
 router.post(
   '/tutor-kyc',
   authenticate,
-  upload.fields([
+  uploadS3.fields([
     { name: 'aadhaar', maxCount: 2 },
     { name: 'pan', maxCount: 1 },
-    { name: 'bankProof', maxCount: 1 },
+    { name: 'bankProof', maxCount: 1 }
   ]),
   userController.uploadTutorKyc
 );
 
-router.get('/search',authenticate,  checkRole(['tutor']), studentSearchController.searchStudents);
-
-
-
+router.get(
+  '/search',
+  authenticate,
+  checkRole(['tutor']),
+  studentSearchController.searchStudents
+);
 
 module.exports = router;

@@ -391,16 +391,13 @@ exports.createDemoBookingByTutor = async (req, res) => {
 
 exports.getStudentBookings = async (req, res) => {
   try {
-    // Read type from query: ?type=demo or ?type=regular
-    // If not provided, it will return ALL types.
     const { type } = req.query;
 
     const filter = {
       studentId: req.user.id,
     };
 
-    // Optional type filter (only allow known values)
-    if (type && ['demo', 'regular'].includes(type)) {
+    if (type && ["demo", "regular"].includes(type)) {
       filter.type = type;
     }
 
@@ -412,6 +409,7 @@ exports.getStudentBookings = async (req, res) => {
       return res.json({ success: true, data: [] });
     }
 
+    // Collect tutor userIds
     const tutorUserIds = [
       ...new Set(
         bookings
@@ -420,36 +418,53 @@ exports.getStudentBookings = async (req, res) => {
       ),
     ];
 
+    // Fetch tutor name + rates
     const tutorProfiles = await TutorProfile.find({
       userId: { $in: tutorUserIds },
     })
-      .select('userId name')
+      .select("userId name hourlyRate monthlyRate")
       .lean();
 
-    const tutorNameByUserId = new Map(
-      tutorProfiles.map((tp) => [String(tp.userId), tp.name])
+    // Map tutor data by userId
+    const tutorDataByUserId = new Map(
+      tutorProfiles.map((tp) => [
+        String(tp.userId),
+        {
+          name: tp.name,
+          hourlyRate: tp.hourlyRate ?? null,
+          monthlyRate: tp.monthlyRate ?? null,
+        },
+      ])
     );
 
+    // Attach tutor data to each booking
     const enriched = bookings.map((b) => {
       const tutorIdStr = b.tutorId ? String(b.tutorId) : null;
-      const tutorName =
-        (tutorIdStr && tutorNameByUserId.get(tutorIdStr)) || 'Your Tutor';
+      const tutorData =
+        (tutorIdStr && tutorDataByUserId.get(tutorIdStr)) || {
+          name: "Your Tutor",
+          hourlyRate: null,
+          monthlyRate: null,
+        };
 
       return {
         ...b,
-        tutorName,
+        tutorName: tutorData.name,
+        tutorHourlyRate: tutorData.hourlyRate,
+        tutorMonthlyRate: tutorData.monthlyRate,
       };
     });
 
     res.json({ success: true, data: enriched });
   } catch (err) {
-    console.error('getStudentBookings error:', err);
+    console.error("getStudentBookings error:", err);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch bookings',
+      message: "Failed to fetch bookings",
     });
   }
 };
+
 
 exports.getTutorBookings = async (req, res) => {
   try {
