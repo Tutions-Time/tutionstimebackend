@@ -1422,11 +1422,15 @@ exports.startRegularFromDemo = async (req, res) => {
     // 3️⃣ Razorpay Order Creation
     // ---------------------------------------------
     const razorpay = require("../services/payments/razorpay");
+    const shortId = rc._id.toString().slice(-6);
+    const shortTime = Date.now().toString().slice(-6);
+    const receipt = `rc_${shortId}_${shortTime}`;
+
 
     const order = await razorpay.orders.create({
       amount: amountPaise,
       currency: "INR",
-      receipt: "rc_" + rc._id + "_" + Date.now(),
+      receipt: receipt,
       notes: {
         regularClassId: rc._id.toString(),
         bookingId: booking._id.toString(),
