@@ -37,6 +37,12 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 app.options("*", cors(corsOptions));
+// Razorpay Webhook MUST use raw body
+app.post(
+  "/api/payments/razorpay/webhook",
+  express.raw({ type: "application/json" }),
+  require("./controllers/paymentController").razorpayWebhook
+);
 
 
 app.use(express.json());

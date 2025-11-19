@@ -1,5 +1,5 @@
 const crypto = require("crypto");
-const razorpay = require("../services/payments/razorpay"); // <-- create this service
+const razorpay = require("../services/payments/razorpay"); 
 const Payment = require("../models/Payment");
 const RegularClass = require("../models/RegularClass");
 const TutorProfile = require("../models/TutorProfile");
