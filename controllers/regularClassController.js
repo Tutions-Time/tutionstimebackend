@@ -57,10 +57,11 @@ exports.getTutorRegularStudents = async (req, res) => {
         studentName: s.name || "Student",
         photoUrl: s.photoUrl || null,
         subject: rc.subject,
-        planType: rc.planType,     // "hourly" | "monthly" | ...
+        planType: rc.planType,     
         startDate: rc.startDate,
         paymentStatus: rc.paymentStatus,
         status: rc.status,
+        scheduleStatus: rc.scheduleStatus ?? "not-scheduled",
       };
     });
 
@@ -205,6 +206,8 @@ exports.scheduleRegularClassSessions = async (req, res) => {
     });
 
     const createdSessions = await Session.insertMany(sessionsToInsert);
+    rc.scheduleStatus = "scheduled";
+    await rc.save();
 
     return res.json({
       success: true,

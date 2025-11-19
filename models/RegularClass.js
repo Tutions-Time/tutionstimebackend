@@ -34,6 +34,12 @@ const regularClassSchema = new mongoose.Schema(
       enum: ["hourly", "weekly", "monthly", "custom"],
       required: true,
     },
+    scheduleStatus: {
+      type: String,
+      enum: ["not-scheduled", "scheduled"],
+      default: "not-scheduled",
+    },
+
 
     sessionsPerWeek: { type: Number, min: 1, default: 2 },
     timeSlots: [timeSlotSchema], // weekly schedule
