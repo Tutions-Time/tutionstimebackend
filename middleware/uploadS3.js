@@ -16,7 +16,8 @@ const uploadS3 = multer({
       cb(null, name);
     }
   }),
-  limits: { fileSize: 50 * 1024 * 1024 }
+  limits: { fileSize: 50 * 1024 * 1024 },
 });
+
 
 module.exports = uploadS3;

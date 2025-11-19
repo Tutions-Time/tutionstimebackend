@@ -5,6 +5,8 @@ const errorHandler = require("./middleware/errorHandler");
 const connectDB = require("./config/database");
 const path = require("path");
 // const adminNotificationRoutes=require('./routes/adminNotificationRoutes')
+const paymentController = require("./controllers/paymentController");
+
 
 // Connect to MongoDB
 connectDB();
@@ -41,7 +43,7 @@ app.options("*", cors(corsOptions));
 app.post(
   "/api/payments/razorpay/webhook",
   express.raw({ type: "application/json" }),
-  require("./controllers/paymentController").razorpayWebhook
+  paymentController.razorpayWebhook
 );
 
 
@@ -71,6 +73,8 @@ app.use('/api/tutors', require('./routes/tutorRoutes'));
 app.use('/api/meta', require('./routes/metaRoutes.js'));
 app.use('/api/admin/notifications', require('./routes/adminNotificationRoutes'));
 app.use('/api/tutor-switch', require('./routes/tutorSwitch'));
+app.use("/api/regular", require("./routes/regularClassRoutes.js"));
+
 
 const { autoCompletePastDemos } = require('./controllers/bookingController');
 

@@ -11,14 +11,6 @@ router.post(
   checkRole(["student"]),
   paymentController.createSubscriptionOrder
 );
-
-// razorpay webhook (must use raw body)
-router.post(
-  "/razorpay/webhook",
-  express.raw({ type: "application/json" }),
-  paymentController.razorpayWebhook
-);
-
 // admin payouts
 router.get(
   "/admin/payouts/generate",

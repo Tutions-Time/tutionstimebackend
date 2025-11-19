@@ -113,13 +113,20 @@ exports.razorpayWebhook = async (req, res) => {
       return res.status(500).json({ received: false });
     }
 
-    const rawBody = req.body;         // Buffer
-    const bodyString = rawBody.toString("utf8");
     const signature = req.headers["x-razorpay-signature"];
+    if (!signature) {
+      console.warn("❌ Missing x-razorpay-signature header");
+      return res.status(400).json({ received: false });
+    }
+
+    // 🔒 Get the RAW body as Buffer
+    const rawBody = Buffer.isBuffer(req.body)
+      ? req.body
+      : Buffer.from(JSON.stringify(req.body));
 
     const expected = crypto
       .createHmac("sha256", webhookSecret)
-      .update(bodyString)
+      .update(rawBody)
       .digest("hex");
 
     if (expected !== signature) {
@@ -127,12 +134,14 @@ exports.razorpayWebhook = async (req, res) => {
       return res.status(400).json({ received: false });
     }
 
+    // ✅ Now safely parse event
+    const bodyString = rawBody.toString("utf8");
     const event = JSON.parse(bodyString);
 
     if (event.event === "payment.captured") {
       const paymentId = event.payload.payment.entity.id;
       const orderId = event.payload.payment.entity.order_id;
-      const amount = event.payload.payment.entity.amount / 100;
+      const amount = event.payload.payment.entity.amount / 100; // rupees
 
       let payment = await Payment.findOne({
         $or: [{ gatewayPaymentId: paymentId }, { gatewayOrderId: orderId }],
@@ -147,6 +156,7 @@ exports.razorpayWebhook = async (req, res) => {
         return res.status(200).json({ received: true });
       }
 
+      // ✅ Mark payment + regular class as paid
       payment.status = "paid";
       payment.gatewayPaymentId = paymentId;
       payment.amount = amount;
@@ -171,12 +181,13 @@ exports.razorpayWebhook = async (req, res) => {
       );
     }
 
-    res.status(200).json({ received: true });
+    return res.status(200).json({ received: true });
   } catch (err) {
     console.error("razorpayWebhook error:", err);
-    res.status(500).json({ received: false });
+    return res.status(500).json({ received: false });
   }
 };
+
 
 
 /**
