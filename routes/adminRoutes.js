@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
 const { authenticate, checkRole } = require('../middleware/auth');
+const { getBookingByIdForAdmin } = require('../controllers/bookingController');
+
 
 const adminTutorController = require('../controllers/adminTutorController.js');
 
@@ -31,5 +33,6 @@ router.put('/tutors/:id/kyc',  adminTutorController.updateKycStatus);
 
 // ✅ Update tutor account status (active / suspended)
 router.put('/tutors/:id/status',  adminTutorController.updateTutorStatus);
+router.get('/bookings/:id', getBookingByIdForAdmin);
 
 module.exports = router;

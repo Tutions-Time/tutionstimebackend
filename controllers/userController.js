@@ -1,12 +1,16 @@
 const User = require("../models/User");
 const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
-
+                                                         
+/* ------------------------------------------------------------
+   GET USER PROFILE
+------------------------------------------------------------ */
 const getUserProfile = async (req, res) => {
   try {
     const userId = req.user.id;
     const user = await User.findById(userId).select("-refreshToken -password");
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user)
+      return res.status(404).json({ success: false, message: "User not found" });
 
     let profile = null;
     let roleDetails = {};
@@ -48,13 +52,22 @@ const getUserProfile = async (req, res) => {
   }
 };
 
+/* ------------------------------------------------------------
+   UPDATE STUDENT PROFILE
+------------------------------------------------------------ */
 const updateStudentProfile = async (req, res) => {
   try {
     const userId = req.user.id;
+
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user)
+      return res.status(404).json({ success: false, message: "User not found" });
+
     if (user.role !== "student")
-      return res.status(403).json({ success: false, message: "Only students can update student profiles" });
+      return res.status(403).json({
+        success: false,
+        message: "Only students can update student profiles",
+      });
 
     const parseArray = (raw) => {
       try {
@@ -66,20 +79,35 @@ const updateStudentProfile = async (req, res) => {
       }
     };
 
+    // ⭐ S3 path
     let photoUrl = null;
-    if (req.files && req.files.photo)
-      photoUrl = "/" + req.files.photo[0].path.replace(/\\/g, "/");
+    if (req.files?.photo) {
+      photoUrl = req.files.photo[0].location; // <-- AWS S3 URL
+    }
 
     const b = req.body;
 
     if (!b.name || !b.email)
-      return res.status(400).json({ success: false, message: "Name and email are required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Name and email are required" });
+
     if (b.track === "school" && !b.classLevel)
-      return res.status(400).json({ success: false, message: "classLevel is required for school track" });
+      return res
+        .status(400)
+        .json({ success: false, message: "classLevel is required for school track" });
+
     if (b.track === "college" && (!b.program || !b.discipline || !b.yearSem))
-      return res.status(400).json({ success: false, message: "program, discipline and yearSem are required for college track" });
+      return res.status(400).json({
+        success: false,
+        message: "program, discipline and yearSem are required for college track",
+      });
+
     if (b.track === "competitive" && !b.exam)
-      return res.status(400).json({ success: false, message: "exam is required for competitive track" });
+      return res.status(400).json({
+        success: false,
+        message: "exam is required for competitive track",
+      });
 
     const profileData = {
       userId,
@@ -112,11 +140,10 @@ const updateStudentProfile = async (req, res) => {
       targetYearOther: b.targetYear === "Other" ? b.targetYearOther || "" : "",
       subjects: parseArray(b.subjects),
       subjectOther:
-        Array.isArray(parseArray(b.subjects)) && parseArray(b.subjects).includes("Other")
-          ? b.subjectOther || ""
-          : "",
+        parseArray(b.subjects).includes("Other") ? b.subjectOther || "" : "",
       tutorGenderPref: b.tutorGenderPref || "No Preference",
-      tutorGenderOther: b.tutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
+      tutorGenderOther:
+        b.tutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
       availability: parseArray(b.availability),
       goals: b.goals || "",
       ...(photoUrl && { photoUrl }),
@@ -125,7 +152,7 @@ const updateStudentProfile = async (req, res) => {
     const profile = await StudentProfile.findOneAndUpdate(
       { userId },
       { $set: profileData },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
+      { new: true, upsert: true }
     );
 
     if (!user.isProfileComplete) {
@@ -133,57 +160,88 @@ const updateStudentProfile = async (req, res) => {
       await user.save();
     }
 
-    res.status(200).json({ success: true, message: "Student profile updated successfully", data: profile });
+    res.status(200).json({
+      success: true,
+      message: "Student profile updated successfully",
+      data: profile,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error", error: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
   }
 };
 
+/* ------------------------------------------------------------
+   UPLOAD TUTOR KYC (Aadhaar + PAN + Bank Proof)
+------------------------------------------------------------ */
 const uploadTutorKyc = async (req, res) => {
   try {
     const userId = req.user.id;
     const tutor = await TutorProfile.findOne({ userId });
-    if (!tutor) return res.status(404).json({ success: false, message: "Tutor profile not found" });
+
+    if (!tutor)
+      return res.status(404).json({
+        success: false,
+        message: "Tutor profile not found",
+      });
 
     const aadhaarUrls = [];
-    if (req.files?.aadhaar)
-      req.files.aadhaar.forEach((file) =>
-        aadhaarUrls.push("/" + file.path.replace(/\\/g, "/"))
-      );
+
+    if (req.files?.aadhaar) {
+      req.files.aadhaar.forEach((file) => aadhaarUrls.push(file.location)); // <-- S3 URL
+    }
 
     const panUrl = req.files?.pan?.[0]
-      ? "/" + req.files.pan[0].path.replace(/\\/g, "/")
+      ? req.files.pan[0].location
       : tutor.panUrl;
 
     const bankProofUrl = req.files?.bankProof?.[0]
-      ? "/" + req.files.bankProof[0].path.replace(/\\/g, "/")
+      ? req.files.bankProof[0].location
       : tutor.bankProofUrl;
 
     tutor.aadhaarUrls = aadhaarUrls.length ? aadhaarUrls : tutor.aadhaarUrls;
     tutor.panUrl = panUrl;
     tutor.bankProofUrl = bankProofUrl;
     tutor.kycStatus = "submitted";
+
     await tutor.save();
 
-    res.status(200).json({ success: true, message: "KYC documents submitted successfully", data: tutor });
+    res.status(200).json({
+      success: true,
+      message: "KYC documents submitted successfully",
+      data: tutor,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error while uploading KYC", error: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Server error while uploading KYC",
+      error: error.message,
+    });
   }
 };
 
+/* ------------------------------------------------------------
+   UPDATE TUTOR PROFILE
+------------------------------------------------------------ */
 const updateTutorProfile = async (req, res) => {
   try {
     const userId = req.user.id;
+
     const user = await User.findById(userId);
     if (!user)
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
 
     if (user.role !== "tutor")
-      return res
-        .status(403)
-        .json({ success: false, message: "Only tutors can update tutor profiles" });
+      return res.status(403).json({
+        success: false,
+        message: "Only tutors can update tutor profiles",
+      });
 
-    // Extract body fields
     const {
       name,
       email,
@@ -210,35 +268,27 @@ const updateTutorProfile = async (req, res) => {
       pincode,
     } = req.body;
 
-    // Required fields check
     if (!name || !email || !gender || !qualification || !subjects || !hourlyRate || !bio) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Missing required fields" });
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields",
+      });
     }
 
-    // ✅ Normalize file paths (cross-platform safe)
-    const normalize = (file) => {
-      const p = file.path.replace(/\\/g, "/");
-      const idx = p.indexOf("uploads");
-      return idx !== -1 ? "/" + p.slice(idx) : "/" + p;
-    };
-
-    // Handle files (photo, resume, demoVideo)
+    // ⭐ AWS S3 returns file.location
     let photoUrl = null,
       demoVideoUrl = null,
       resumeUrl = null;
 
-    if (req.files) {
-      if (req.files.photo && req.files.photo[0])
-        photoUrl = normalize(req.files.photo[0]);
-      if (req.files.demoVideo && req.files.demoVideo[0])
-        demoVideoUrl = normalize(req.files.demoVideo[0]);
-      if (req.files.resume && req.files.resume[0])
-        resumeUrl = normalize(req.files.resume[0]);
-    }
+    if (req.files?.photo)
+      photoUrl = req.files.photo[0].location;
 
-    // ✅ Helper to safely parse arrays (coming as JSON strings)
+    if (req.files?.demoVideo)
+      demoVideoUrl = req.files.demoVideo[0].location;
+
+    if (req.files?.resume)
+      resumeUrl = req.files.resume[0].location;
+
     const parseArray = (val) => {
       try {
         if (!val) return [];
@@ -249,7 +299,6 @@ const updateTutorProfile = async (req, res) => {
       }
     };
 
-    // ✅ Construct update object
     const profileData = {
       userId,
       name,
@@ -280,28 +329,24 @@ const updateTutorProfile = async (req, res) => {
       ...(resumeUrl && { resumeUrl }),
     };
 
-    // ✅ Update or create tutor profile
     const profile = await TutorProfile.findOneAndUpdate(
       { userId },
       { $set: profileData },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
+      { new: true, upsert: true }
     );
 
-    // ✅ Mark profile complete if not already
     if (!user.isProfileComplete) {
       user.isProfileComplete = true;
       await user.save();
     }
 
-    // ✅ Response
-    return res.status(200).json({
+    res.status(200).json({
       success: true,
       message: "Tutor profile updated successfully",
       data: profile,
     });
   } catch (error) {
-    console.error("❌ Profile Update Error:", error);
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
       message: "Server error while updating tutor profile",
       error: error.message,
@@ -309,14 +354,19 @@ const updateTutorProfile = async (req, res) => {
   }
 };
 
-
-
+/* ------------------------------------------------------------
+   GET ALL USERS
+------------------------------------------------------------ */
 const getAllUsers = async (req, res) => {
   try {
     const users = await User.find().select("-password -refreshToken");
     res.status(200).json({ success: true, count: users.length, data: users });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error", error: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
   }
 };
 

@@ -1,175 +1,547 @@
 const Booking = require('../models/Booking');
 const TutorProfile = require('../models/TutorProfile');
 const StudentProfile = require('../models/StudentProfile');
-const User = require('../models/User'); // ✅ FIX 1: Added missing import
+const RegularClass = require("../models/RegularClass");
+const Session = require("../models/Session");
+const Payment = require("../models/Payment");
+const User = require('../models/User');
 const notificationService = require('../services/notificationService');
 const emailTpl = require('../templates/emailTemplates');
+const AdminNotification = require('../models/AdminNotification');
 
-// Helper: normalize YYYY-MM-DD to start-of-day Date in IST-friendly way
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
+
+// Demo duration in minutes (business rule)
+const DEMO_DURATION_MINUTES = 15;
+// Optional buffer after end time before auto-completing
+const AUTO_COMPLETE_BUFFER_MIN = 5;
+
 function toStartOfDay(dateStr) {
   const d = new Date(dateStr);
-  // Force 00:00 local time for consistency
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
+function addMinutesToTime(timeStr, minutesToAdd) {
+  // timeStr in "HH:MM" 24-hr format
+  const [hourStr, minuteStr] = timeStr.split(":");
+  let totalMinutes = parseInt(hourStr, 10) * 60 + parseInt(minuteStr, 10);
+  totalMinutes += minutesToAdd;
+
+  const newHour = Math.floor(totalMinutes / 60) % 24;
+  const newMinute = totalMinutes % 60;
+
+  return `${String(newHour).padStart(2, "0")}:${String(newMinute).padStart(2, "0")}`;
+}
+
+async function createAdminNotification(title, message, meta = {}) {
+  try {
+    await AdminNotification.create({ title, message, meta });
+
+    if (ADMIN_EMAIL && notificationService?.sendEmail) {
+      const html = `
+        <h2>${title}</h2>
+        <p>${message}</p>
+        <pre style="font-size:12px;background:#f4f4f5;padding:8px;border-radius:6px;">
+${JSON.stringify(meta, null, 2)}
+        </pre>
+      `;
+      await notificationService.sendEmail(
+        ADMIN_EMAIL,
+        `[Admin] ${title}`,
+        message,
+        html
+      );
+    }
+  } catch (err) {
+    console.warn('AdminNotification create failed:', err.message);
+  }
+}
+
 /**
+ * Student-initiated demo booking
  * POST /api/bookings/demo
- * Create a day-level demo booking (pending)
+ * Body: { tutorId, subject, date, time, note? }
  */
 exports.createDemoBooking = async (req, res) => {
-  // console.log("data", req.body);
   try {
-    const { tutorId, subject, date, note } = req.body;
-    if (!tutorId || !subject || !date) {
-      return res
-        .status(400)
-        .json({ success: false, message: "tutorId, subject, date are required" });
+    const { tutorId, subject, date, time, note } = req.body;
+    console.log('createDemoBooking req.body:', req.body);
+
+    if (!tutorId || !subject || !date || !time) {
+      return res.status(400).json({
+        success: false,
+        message: 'tutorId, subject, date, time are required',
+      });
     }
 
-    // Tutor must exist & be available that day (using TutorProfile.availability)
-    const tutor = await TutorProfile.findOne({ _id: tutorId }).lean();
-    if (!tutor) {
+    const tutorProfile = await TutorProfile.findOne({ userId: tutorId }).lean();
+    if (!tutorProfile) {
       return res
         .status(404)
-        .json({ success: false, message: "Tutor not found" });
+        .json({ success: false, message: 'Tutor not found' });
     }
 
     const preferredDate = toStartOfDay(date);
-    const avail = Array.isArray(tutor.availability) ? tutor.availability : [];
+
+    const avail = Array.isArray(tutorProfile.availability)
+      ? tutorProfile.availability
+      : [];
     const isAvailable = avail.includes(date);
     if (!isAvailable) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Tutor not available on selected date" });
-    }
-
-    // ✅ FIX 3: Friendly duplicate booking error
-    let booking;
-    try {
-      booking = await Booking.create({
-        studentId: req.user.id,
-        tutorId,
-        subject,
-        preferredDate,
-        note: note || "",
-        type: "demo",
-        status: "pending",
-        meetingLink: "",
+      return res.status(400).json({
+        success: false,
+        message: 'Tutor not available on selected date',
       });
-    } catch (err) {
-      if (err.code === 11000) {
-        return res.status(400).json({
-          success: false,
-          message: "You already booked a demo with this tutor for that date.",
-        });
-      }
-      throw err;
     }
 
-    // Notify tutor (HTML version)
-    try {
-      const student = await StudentProfile.findOne({ userId: req.user.id }).lean();
+    // Prevent double booking for same student/tutor/slot
+    const existingForSameStudent = await Booking.findOne({
+      studentId: req.user.id,
+      tutorId,
+      type: 'demo',
+      preferredDate,
+      preferredTime: time,
+      status: { $ne: 'cancelled' },
+    });
 
-      if (tutor.email) {
+    if (existingForSameStudent) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'You already booked a demo with this tutor for this time slot.',
+      });
+    }
+
+    // Prevent another student from taking same slot
+    const existingSlotForTutor = await Booking.findOne({
+      tutorId,
+      type: 'demo',
+      preferredDate,
+      preferredTime: time,
+      status: { $in: ['pending', 'confirmed'] },
+    });
+
+    if (
+      existingSlotForTutor &&
+      existingSlotForTutor.studentId.toString() !== req.user.id
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'This time slot is already booked for this tutor.',
+      });
+    }
+
+    // Demo duration is 15 minutes
+    const preferredEndTime = addMinutesToTime(time, DEMO_DURATION_MINUTES);
+
+    const booking = await Booking.create({
+      studentId: req.user.id,
+      tutorId,
+      subject,
+      preferredDate,
+      preferredTime: time,
+      preferredEndTime, // 15 min demo end time
+      note: note || '',
+      type: 'demo',
+      status: 'pending',
+      meetingLink: '',
+    });
+
+    try {
+      const student = await StudentProfile.findOne({
+        userId: req.user.id,
+      }).lean();
+      const tutorUser = await User.findById(tutorId).lean();
+
+      const tutorEmail = tutorProfile.email || tutorUser?.email;
+
+      if (tutorEmail && notificationService?.sendEmail) {
         const html = emailTpl.tutorDemoRequestHTML({
-          studentName: student?.name || "A student",
+          studentName: student?.name || 'A student',
           subject,
           date,
+          time,
         });
 
         await notificationService.sendEmail(
-          tutor.email,
-          "New Demo Request",
-          "",
+          tutorEmail,
+          'New Demo Request',
+          '',
           html
         );
       }
 
-      // ✅ FIX 4: In-app notification to tutor
-      await notificationService.createInApp(
-        tutor.userId || tutorId,
-        "New Demo Request",
-        `${student?.name || "A student"} requested a demo for ${subject} on ${date}`,
-        { tutorId, subject, date }
+      if (notificationService?.createInApp) {
+        await notificationService.createInApp(
+          tutorId,
+          'New Demo Request',
+          `${student?.name || 'A student'} requested a demo for ${subject} on ${date} at ${time}`,
+          { tutorId, subject, date, time, bookingId: booking._id }
+        );
+      }
+
+      await createAdminNotification(
+        'New Demo Booking Created',
+        `${student?.name || 'A student'} requested a demo with ${tutorProfile?.name || 'Tutor'
+        } for ${subject} on ${date} at ${time}`,
+        {
+          bookingId: booking._id,
+          tutorId,
+          studentId: req.user.id,
+          subject,
+          date,
+          time,
+          type: booking.type,
+          status: booking.status,
+        }
       );
     } catch (e) {
-      console.warn("Notification (tutor) failed:", e.message);
+      console.warn('Notification (tutor/admin) failed:', e.message);
     }
 
     return res.status(201).json({ success: true, data: booking });
   } catch (err) {
-    console.error("createDemoBooking error:", err);
-    return res
-      .status(500)
-      .json({ success: false, message: "Failed to create demo booking" });
+    console.error('createDemoBooking error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create demo booking',
+    });
   }
 };
 
 /**
- * GET /api/bookings/student
- * Logged-in student's demo bookings
+ * ✅ Tutor-initiated Demo Booking
+ * POST /api/bookings/tutor/demo
+ * Body: { studentId, subject, date, time, note }
+ * - studentId = User._id of the student
+ * - tutorId = req.user.id (logged in tutor)
  */
+exports.createDemoBookingByTutor = async (req, res) => {
+  try {
+    const tutorId = req.user.id; // logged-in tutor
+    const { studentId, subject, date, time, note } = req.body;
+    console.log('createDemoBookingByTutor req.body:', req.body);
+
+    if (!studentId || !subject || !date || !time) {
+      return res.status(400).json({
+        success: false,
+        message: 'studentId, subject, date, time are required',
+      });
+    }
+
+    // Tutor profile (who is sending request)
+    const tutorProfile = await TutorProfile.findOne({ userId: tutorId }).lean();
+    if (!tutorProfile) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Tutor profile not found' });
+    }
+
+    // Student profile (who receives request)
+    const studentProfile = await StudentProfile.findOne({
+      userId: studentId,
+    }).lean();
+    if (!studentProfile) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Student profile not found' });
+    }
+
+    const preferredDate = toStartOfDay(date);
+
+    // ✅ Check tutor availability (same logic as student->tutor flow)
+    const tutorAvail = Array.isArray(tutorProfile.availability)
+      ? tutorProfile.availability
+      : [];
+    const tutorAvailable = tutorAvail.includes(date);
+    if (!tutorAvailable) {
+      return res.status(400).json({
+        success: false,
+        message: 'You are not available on selected date',
+      });
+    }
+
+
+    const studentAvail = Array.isArray(studentProfile.availability)
+      ? studentProfile.availability
+      : [];
+    if (studentAvail.length && !studentAvail.includes(date)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student not available on selected date',
+      });
+    }
+
+    // Prevent double booking for same tutor+student+slot
+    const existingForSamePair = await Booking.findOne({
+      studentId,
+      tutorId,
+      type: 'demo',
+      preferredDate,
+      preferredTime: time,
+      status: { $ne: 'cancelled' },
+    });
+
+    if (existingForSamePair) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'You already have a demo request with this student for this time slot.',
+      });
+    }
+
+    // Prevent double booking of the slot for this tutor
+    const existingSlotForTutor = await Booking.findOne({
+      tutorId,
+      type: 'demo',
+      preferredDate,
+      preferredTime: time,
+      status: { $in: ['pending', 'confirmed'] },
+    });
+
+    if (existingSlotForTutor) {
+      return res.status(400).json({
+        success: false,
+        message: 'This time slot is already booked for you.',
+      });
+    }
+
+
+    // Demo duration is 15 minutes
+    const preferredEndTime = addMinutesToTime(time, DEMO_DURATION_MINUTES);
+
+    // ✅ Create booking – IMPORTANT mapping
+    const booking = await Booking.create({
+      studentId,                 // receiver
+      tutorId,                   // sender
+      subject,
+      preferredDate,
+      preferredTime: time,
+      preferredEndTime,          // 15 min demo end time
+      note: note || '',
+      type: 'demo',
+      status: 'pending',
+      meetingLink: '',
+      requestedBy: 'tutor',      // NEW
+    });
+
+    // Notifications to student + admin
+    try {
+      const studentUser = await User.findById(studentId).lean();
+      const tutorUser = await User.findById(tutorId).lean();
+
+      const tutorName = tutorProfile.name || tutorUser?.phone || 'A tutor';
+      const studentEmail = studentProfile.email || studentUser?.email;
+
+      if (studentEmail && notificationService?.sendEmail) {
+        const html =
+          emailTpl.studentDemoRequestHTML?.({
+            tutorName,
+            subject,
+            date,
+            time,
+          }) ||
+          `<p>${tutorName} has requested a demo for ${subject} on ${date} at ${time}.</p>`;
+
+        await notificationService.sendEmail(
+          studentEmail,
+          'New Demo Request from Tutor - TuitionTime',
+          '',
+          html
+        );
+      }
+
+      if (notificationService?.createInApp) {
+        await notificationService.createInApp(
+          studentId,
+          'New Demo Request',
+          `${tutorName} requested a demo for ${subject} on ${date} at ${time}`,
+          { tutorId, studentId, subject, date, time, bookingId: booking._id }
+        );
+      }
+
+      await createAdminNotification(
+        'New Tutor-Initiated Demo Booking',
+        `${tutorName} requested a demo with ${studentProfile.name || 'Student'
+        } for ${subject} on ${date} at ${time}`,
+        {
+          bookingId: booking._id,
+          tutorId,
+          studentId,
+          subject,
+          date,
+          time,
+          type: booking.type,
+          status: booking.status,
+          requestedBy: booking.requestedBy,
+        }
+      );
+    } catch (e) {
+      console.warn('Notification (student/admin) failed:', e.message);
+    }
+
+    return res.status(201).json({ success: true, data: booking });
+  } catch (err) {
+    console.error('createDemoBookingByTutor error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create demo booking by tutor',
+    });
+  }
+};
+
 exports.getStudentBookings = async (req, res) => {
   try {
-    const bookings = await Booking.find({ studentId: req.user.id })
-      .populate("tutorId", "name email")
+    const { type } = req.query;
+
+    const filter = {
+      studentId: req.user.id,
+    };
+
+    if (type && ["demo", "regular"].includes(type)) {
+      filter.type = type;
+    }
+
+    const bookings = await Booking.find(filter)
       .sort({ createdAt: -1 })
       .lean();
 
-    res.json({ success: true, data: bookings });
+    if (!bookings.length) {
+      return res.json({ success: true, data: [] });
+    }
+
+    // Collect tutor userIds
+    const tutorUserIds = [
+      ...new Set(
+        bookings
+          .map((b) => (b.tutorId ? String(b.tutorId) : null))
+          .filter(Boolean)
+      ),
+    ];
+
+    // Fetch tutor name + rates
+    const tutorProfiles = await TutorProfile.find({
+      userId: { $in: tutorUserIds },
+    })
+      .select("userId name hourlyRate monthlyRate")
+      .lean();
+
+    // Map tutor data by userId
+    const tutorDataByUserId = new Map(
+      tutorProfiles.map((tp) => [
+        String(tp.userId),
+        {
+          name: tp.name,
+          hourlyRate: tp.hourlyRate ?? null,
+          monthlyRate: tp.monthlyRate ?? null,
+        },
+      ])
+    );
+
+    // Attach tutor data to each booking
+    const enriched = bookings.map((b) => {
+      const tutorIdStr = b.tutorId ? String(b.tutorId) : null;
+      const tutorData =
+        (tutorIdStr && tutorDataByUserId.get(tutorIdStr)) || {
+          name: "Your Tutor",
+          hourlyRate: null,
+          monthlyRate: null,
+        };
+
+      return {
+        ...b,
+        tutorName: tutorData.name,
+        tutorHourlyRate: tutorData.hourlyRate,
+        tutorMonthlyRate: tutorData.monthlyRate,
+      };
+    });
+
+    res.json({ success: true, data: enriched });
   } catch (err) {
     console.error("getStudentBookings error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch bookings" });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch bookings",
+    });
   }
 };
 
-/**
- * GET /api/bookings/tutor
- * Logged-in tutor's incoming demo requests
- */
+
 exports.getTutorBookings = async (req, res) => {
-  console.log("get booking")
   try {
     const bookings = await Booking.find({ tutorId: req.user.id })
-      .populate("studentId", "name email")
       .sort({ createdAt: -1 })
       .lean();
-    console.log("bookings", bookings)
-    res.json({ success: true, data: bookings });
+
+    if (!bookings.length) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const studentUserIds = [
+      ...new Set(
+        bookings
+          .map((b) => (b.studentId ? String(b.studentId) : null))
+          .filter(Boolean)
+      ),
+    ];
+
+    const studentProfiles = await StudentProfile.find({
+      userId: { $in: studentUserIds },
+    })
+      .select('userId name')
+      .lean();
+
+    const studentNameByUserId = new Map(
+      studentProfiles.map((sp) => [String(sp.userId), sp.name])
+    );
+
+    const enriched = bookings.map((b) => {
+      const studentIdStr = b.studentId ? String(b.studentId) : null;
+      const studentName =
+        (studentIdStr && studentNameByUserId.get(studentIdStr)) || 'Student';
+
+      return {
+        ...b,
+        studentName,
+      };
+    });
+
+    res.json({ success: true, data: enriched });
   } catch (err) {
-    console.error("getTutorBookings error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch tutor bookings" });
+    console.error('getTutorBookings error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch tutor bookings',
+    });
   }
 };
 
-/**
- * PATCH /api/bookings/:id/status
- * Tutor accepts/rejects (confirm/cancel) a demo booking
- */
 exports.updateDemoStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
 
-    if (!["confirmed", "cancelled"].includes(status)) {
-      return res.status(400).json({ success: false, message: "Invalid status" });
+    if (!['confirmed', 'cancelled'].includes(status)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid status' });
     }
 
     const booking = await Booking.findById(id);
-    if (!booking)
-      return res.status(404).json({ success: false, message: "Booking not found" });
-
-    if (booking.tutorId.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: "Not authorized" });
+    if (!booking) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Booking not found' });
     }
 
-    // STATUS: CONFIRMED
-    if (status === "confirmed") {
-      booking.status = "confirmed";
+    if (booking.tutorId.toString() !== req.user.id) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Not authorized' });
+    }
+
+    if (status === 'confirmed') {
+      booking.status = 'confirmed';
       if (!booking.meetingLink) {
         booking.meetingLink = `https://meet.jit.si/tuitiontime-${Date.now()}`;
       }
@@ -177,164 +549,1138 @@ exports.updateDemoStatus = async (req, res) => {
 
       const tutorUser = await User.findById(booking.tutorId);
       const studentUser = await User.findById(booking.studentId);
-      const tutorProfile = await TutorProfile.findOne({ userId: booking.tutorId }).lean();
+      const tutorProfile = await TutorProfile.findOne({
+        userId: booking.tutorId,
+      }).lean();
 
-      // Email to Student
-      if (studentUser?.email) {
+      const tutorName = tutorProfile?.name || 'Your Tutor';
+      const displayDate = new Date(booking.preferredDate).toDateString();
+      const displayTime = booking.preferredTime || '';
+
+      if (studentUser?.email && notificationService?.sendEmail) {
         const html = emailTpl.bookingConfirmedHTML({
-          tutorName: tutorProfile?.name || "Your Tutor",
+          tutorName,
           subject: booking.subject,
-          date: new Date(booking.preferredDate).toDateString(),
+          date: displayDate,
+          time: displayTime,
           link: booking.meetingLink,
         });
         await notificationService.sendEmail(
           studentUser.email,
-          "Demo Confirmed - TuitionTime",
-          "",
+          'Demo Confirmed - TuitionTime',
+          '',
           html
         );
       }
 
-      // Email to Tutor
-      if (tutorUser?.email) {
+      if (tutorUser?.email && notificationService?.sendEmail) {
         const html = emailTpl.bookingConfirmedHTML({
-          tutorName: tutorProfile?.name,
+          tutorName,
           subject: booking.subject,
-          date: new Date(booking.preferredDate).toDateString(),
+          date: displayDate,
+          time: displayTime,
           link: booking.meetingLink,
         });
         await notificationService.sendEmail(
           tutorUser.email,
-          "Demo Confirmed - TuitionTime",
-          "",
+          'Demo Confirmed - TuitionTime',
+          '',
           html
         );
       }
 
-      // ✅ Optional in-app notifications
-      await notificationService.createInApp(
-        booking.studentId,
-        "Demo Confirmed",
-        `Your demo with ${tutorProfile?.name} is confirmed.`,
-        { meetingLink: booking.meetingLink }
+      if (notificationService?.createInApp) {
+        await notificationService.createInApp(
+          booking.studentId,
+          'Demo Confirmed',
+          `Your demo with ${tutorName} is confirmed for ${displayDate}${displayTime ? ` at ${displayTime}` : ''
+          }.`,
+          {
+            meetingLink: booking.meetingLink,
+            bookingId: booking._id,
+          }
+        );
+      }
+
+      await createAdminNotification(
+        'Demo Confirmed',
+        `Demo confirmed for ${booking.subject} by ${tutorName} on ${displayDate}${displayTime ? ` at ${displayTime}` : ''
+        }`,
+        {
+          bookingId: booking._id,
+          tutorId: booking.tutorId,
+          studentId: booking.studentId,
+          meetingLink: booking.meetingLink,
+          preferredTime: booking.preferredTime,
+          status: booking.status,
+        }
       );
 
       return res.json({
         success: true,
         message:
-          "Demo confirmed successfully and emails sent to both student & tutor.",
+          'Demo confirmed successfully and emails sent to both student & tutor.',
         data: booking,
       });
     }
 
-    // STATUS: CANCELLED
-    if (status === "cancelled") {
-      booking.status = "cancelled";
+    if (status === 'cancelled') {
+      booking.status = 'cancelled';
       await booking.save();
 
-      const tutorProfile = await TutorProfile.findOne({ userId: booking.tutorId }).lean();
+      const tutorProfile = await TutorProfile.findOne({
+        userId: booking.tutorId,
+      }).lean();
       const studentUser = await User.findById(booking.studentId);
 
-      if (studentUser?.email) {
+      const tutorName = tutorProfile?.name || 'Your Tutor';
+
+      if (studentUser?.email && notificationService?.sendEmail) {
         const html = emailTpl.bookingCancelledHTML({
-          tutorName: tutorProfile?.name || "Your Tutor",
+          tutorName,
           subject: booking.subject,
         });
         await notificationService.sendEmail(
           studentUser.email,
-          "Demo Cancelled - TuitionTime",
-          "",
+          'Demo Cancelled - TuitionTime',
+          '',
           html
         );
       }
 
-      await notificationService.createInApp(
-        booking.studentId,
-        "Demo Cancelled",
-        `Your demo with ${tutorProfile?.name} was cancelled.`,
-        { tutorId: booking.tutorId }
+      if (notificationService?.createInApp) {
+        await notificationService.createInApp(
+          booking.studentId,
+          'Demo Cancelled',
+          `Your demo with ${tutorName} was cancelled.`,
+          { tutorId: booking.tutorId, bookingId: booking._id }
+        );
+      }
+
+      await createAdminNotification(
+        'Demo Cancelled',
+        `Demo cancelled for ${booking.subject} by ${tutorName}`,
+        {
+          bookingId: booking._id,
+          tutorId: booking.tutorId,
+          studentId: booking.studentId,
+          preferredTime: booking.preferredTime,
+          status: booking.status,
+        }
       );
 
       return res.json({
         success: true,
         message:
-          "Demo cancelled successfully and notification sent to student.",
+          'Demo cancelled successfully and notification sent to student.',
         data: booking,
       });
     }
   } catch (err) {
-    console.error("❌ updateDemoStatus error:", err);
+    console.error('❌ updateDemoStatus error:', err);
     res.status(500).json({
       success: false,
-      message: "Failed to update booking status",
+      message: 'Failed to update booking status',
       error: err.message,
     });
   }
 };
 
 /**
- * PATCH /api/bookings/:id/feedback
- * Student adds rating/feedback after completion
+ * ✅ Student confirms/cancels a demo that was requested BY TUTOR
+ * PATCH /api/bookings/:id/student-status
+ * Body: { status: 'confirmed' | 'cancelled' }
  */
+exports.updateDemoStatusByStudent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!['confirmed', 'cancelled'].includes(status)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid status' });
+    }
+
+    const booking = await Booking.findById(id);
+    if (!booking) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Booking not found' });
+    }
+
+    // Must be tutor-initiated
+    if (booking.requestedBy !== 'tutor') {
+      return res.status(400).json({
+        success: false,
+        message: 'This booking is not tutor-initiated',
+      });
+    }
+
+    // Only the student of this booking can confirm
+    if (booking.studentId.toString() !== req.user.id) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Not authorized' });
+    }
+
+    if (status === 'confirmed') {
+      booking.status = 'confirmed';
+      if (!booking.meetingLink) {
+        booking.meetingLink = `https://meet.jit.si/tuitiontime-${Date.now()}`;
+      }
+      await booking.save();
+
+      const tutorUser = await User.findById(booking.tutorId);
+      const studentUser = await User.findById(booking.studentId);
+      const tutorProfile = await TutorProfile.findOne({
+        userId: booking.tutorId,
+      }).lean();
+      const studentProfile = await StudentProfile.findOne({
+        userId: booking.studentId,
+      }).lean();
+
+      const tutorName = tutorProfile?.name || 'Tutor';
+      const studentName = studentProfile?.name || 'Student';
+      const displayDate = new Date(booking.preferredDate).toDateString();
+      const displayTime = booking.preferredTime || '';
+
+      // Email student
+      if (studentUser?.email && notificationService?.sendEmail) {
+        const html =
+          emailTpl.bookingConfirmedHTML?.({
+            tutorName,
+            subject: booking.subject,
+            date: displayDate,
+            time: displayTime,
+            link: booking.meetingLink,
+          }) ||
+          `<p>Your demo with ${tutorName} is confirmed on ${displayDate} at ${displayTime}. Meeting: ${booking.meetingLink}</p>`;
+
+        await notificationService.sendEmail(
+          studentUser.email,
+          'Demo Confirmed - TuitionTime',
+          '',
+          html
+        );
+      }
+
+      // Email tutor
+      if (tutorUser?.email && notificationService?.sendEmail) {
+        const html =
+          emailTpl.bookingConfirmedHTML?.({
+            tutorName,
+            subject: booking.subject,
+            date: displayDate,
+            time: displayTime,
+            link: booking.meetingLink,
+          }) ||
+          `<p>Your demo with ${studentName} is confirmed on ${displayDate} at ${displayTime}. Meeting: ${booking.meetingLink}</p>`;
+
+        await notificationService.sendEmail(
+          tutorUser.email,
+          'Demo Confirmed - TuitionTime',
+          '',
+          html
+        );
+      }
+
+      if (notificationService?.createInApp) {
+        await notificationService.createInApp(
+          booking.tutorId,
+          'Demo Confirmed',
+          `${studentName} confirmed your demo for ${displayDate}${displayTime ? ` at ${displayTime}` : ''
+          }.`,
+          {
+            meetingLink: booking.meetingLink,
+            bookingId: booking._id,
+          }
+        );
+      }
+
+      await createAdminNotification(
+        'Tutor-Initiated Demo Confirmed',
+        `Demo confirmed for ${booking.subject} between ${tutorName} and ${studentName} on ${displayDate}${displayTime ? ` at ${displayTime}` : ''
+        }`,
+        {
+          bookingId: booking._id,
+          tutorId: booking.tutorId,
+          studentId: booking.studentId,
+          meetingLink: booking.meetingLink,
+          preferredTime: booking.preferredTime,
+          status: booking.status,
+          requestedBy: booking.requestedBy,
+        }
+      );
+
+      return res.json({
+        success: true,
+        message: 'Demo confirmed successfully.',
+        data: booking,
+      });
+    }
+
+    // cancelled
+    if (status === 'cancelled') {
+      booking.status = 'cancelled';
+      await booking.save();
+
+      const tutorProfile = await TutorProfile.findOne({
+        userId: booking.tutorId,
+      }).lean();
+      const tutorUser = await User.findById(booking.tutorId);
+      const studentProfile = await StudentProfile.findOne({
+        userId: booking.studentId,
+      }).lean();
+
+      const tutorName = tutorProfile?.name || 'Tutor';
+      const studentName = studentProfile?.name || 'Student';
+
+      if (tutorUser?.email && notificationService?.sendEmail) {
+        const html =
+          emailTpl.bookingCancelledHTML?.({
+            tutorName,
+            subject: booking.subject,
+          }) ||
+          `<p>${studentName} cancelled the demo for ${booking.subject}.</p>`;
+
+        await notificationService.sendEmail(
+          tutorUser.email,
+          'Demo Cancelled - TuitionTime',
+          '',
+          html
+        );
+      }
+
+      if (notificationService?.createInApp) {
+        await notificationService.createInApp(
+          booking.tutorId,
+          'Demo Cancelled',
+          `${studentName} cancelled your demo request.`,
+          { tutorId: booking.tutorId, bookingId: booking._id }
+        );
+      }
+
+      await createAdminNotification(
+        'Tutor-Initiated Demo Cancelled',
+        `Demo cancelled for ${booking.subject} by ${studentName}`,
+        {
+          bookingId: booking._id,
+          tutorId: booking.tutorId,
+          studentId: booking.studentId,
+          preferredTime: booking.preferredTime,
+          status: booking.status,
+          requestedBy: booking.requestedBy,
+        }
+      );
+
+      return res.json({
+        success: true,
+        message: 'Demo cancelled successfully.',
+        data: booking,
+      });
+    }
+  } catch (err) {
+    console.error('updateDemoStatusByStudent error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update booking status',
+      error: err.message,
+    });
+  }
+};
+
 exports.addFeedback = async (req, res) => {
   try {
     const { id } = req.params;
     const { rating, feedback } = req.body;
 
     const booking = await Booking.findById(id);
-    if (!booking)
-      return res.status(404).json({ success: false, message: "Booking not found" });
-    if (booking.studentId.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: "Not authorized" });
-    }
-    if (!rating || rating < 1 || rating > 5) {
+    if (!booking) {
       return res
-        .status(400)
-        .json({ success: false, message: "Rating must be 1–5" });
+        .status(404)
+        .json({ success: false, message: 'Booking not found' });
+    }
+
+    if (booking.studentId.toString() !== req.user.id) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Not authorized' });
+    }
+
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rating must be 1–5',
+      });
     }
 
     booking.rating = rating;
-    booking.feedback = feedback || "";
-    if (booking.status === "confirmed") booking.status = "completed";
+    booking.feedback = feedback || '';
+    if (booking.status === 'confirmed') booking.status = 'completed';
 
     await booking.save();
 
-    // ✅ FIX 2: Send feedback email to tutor
     try {
-      const student = await StudentProfile.findOne({ userId: req.user.id }).lean();
-      const tutorProfile = await TutorProfile.findOne({ userId: booking.tutorId }).lean();
+      const student = await StudentProfile.findOne({
+        userId: req.user.id,
+      }).lean();
+      const tutorProfile = await TutorProfile.findOne({
+        userId: booking.tutorId,
+      }).lean();
       const tutorUser = await User.findById(booking.tutorId);
 
-      if (tutorUser?.email) {
+      if (tutorUser?.email && notificationService?.sendEmail) {
         const html = emailTpl.tutorFeedbackReceivedHTML({
-          studentName: student?.name || "A student",
+          studentName: student?.name || 'A student',
           subject: booking.subject,
           rating,
           feedback,
         });
         await notificationService.sendEmail(
           tutorUser.email,
-          "New Feedback Received - TuitionTime",
-          "",
+          'New Feedback Received - TuitionTime',
+          '',
           html
         );
       }
 
-      await notificationService.createInApp(
-        booking.tutorId,
-        "New Feedback Received",
-        `${student?.name || "A student"} rated your demo ${rating}/5`,
-        { bookingId: booking._id }
+      if (notificationService?.createInApp) {
+        await notificationService.createInApp(
+          booking.tutorId,
+          'New Feedback Received',
+          `${student?.name || 'A student'} rated your demo ${rating}/5`,
+          { bookingId: booking._id }
+        );
+      }
+
+      await createAdminNotification(
+        'New Demo Feedback',
+        `Feedback received: ${rating}/5 for ${booking.subject}`,
+        {
+          bookingId: booking._id,
+          tutorId: booking.tutorId,
+          studentId: booking.studentId,
+          rating,
+          feedback,
+          preferredTime: booking.preferredTime,
+        }
       );
     } catch (e) {
-      console.warn("Feedback email failed:", e.message);
+      console.warn('Feedback email failed:', e.message);
     }
 
     res.json({ success: true, data: booking });
   } catch (err) {
-    console.error("addFeedback error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to add feedback" });
+    console.error('addFeedback error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to add feedback',
+    });
+  }
+};
+
+// Admin-only: get booking with expanded info
+exports.getBookingByIdForAdmin = async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Not authorized' });
+    }
+
+    const { id } = req.params;
+
+    const booking = await Booking.findById(id).lean();
+    if (!booking) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Booking not found' });
+    }
+
+    const [studentProfile, tutorProfile] = await Promise.all([
+      StudentProfile.findOne({ userId: booking.studentId }).select('name email').lean(),
+      TutorProfile.findOne({ userId: booking.tutorId }).select('name email').lean(),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        ...booking,
+        studentName: studentProfile?.name || 'Student',
+        studentEmail: studentProfile?.email,
+        tutorName: tutorProfile?.name || 'Tutor',
+        tutorEmail: tutorProfile?.email,
+      },
+    });
+  } catch (err) {
+    console.error('getBookingByIdForAdmin error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch booking',
+    });
+  }
+};
+
+// Helper: generate sessions for 4 weeks initially (for regular classes)
+async function generateSessionsForRegularClass(regularClass) {
+  const sessions = [];
+  const { timeSlots, startDate, studentId, tutorId, _id } = regularClass;
+
+  if (!timeSlots || !timeSlots.length) return;
+
+  const start = new Date(startDate);
+  const weeksToGenerate = 4;
+
+  // map dayOfWeek to JS day index
+  const dayMap = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+
+  for (let w = 0; w < weeksToGenerate; w++) {
+    timeSlots.forEach((slot) => {
+      const [hourStr, minuteStr] = slot.time.split(":");
+      const slotDayIndex = dayMap[slot.dayOfWeek];
+      if (slotDayIndex === undefined) return;
+
+      const d = new Date(start);
+      // move to that week
+      d.setDate(d.getDate() + w * 7);
+
+      const diff = slotDayIndex - d.getDay();
+      d.setDate(d.getDate() + diff);
+
+      d.setHours(parseInt(hourStr, 10), parseInt(minuteStr, 10), 0, 0);
+
+      sessions.push({
+        regularClassId: _id,
+        studentId,
+        tutorId,
+        startDateTime: d,
+        status: "scheduled",
+      });
+    });
+  }
+
+  if (sessions.length) {
+    await Session.insertMany(sessions);
+  }
+}
+
+/**
+ * POST /api/bookings/:id/feedback (structured demo feedback)
+ * Body: { teaching, communication, understanding, comment, likedTutor }
+ */
+exports.giveDemoFeedback = async (req, res) => {
+  try {
+    const bookingId = req.params.id;
+    const { teaching, communication, understanding, comment, likedTutor } =
+      req.body;
+    const userId = req.user.id;
+
+    if (
+      !teaching ||
+      !communication ||
+      !understanding ||
+      likedTutor === undefined
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'teaching, communication, understanding, likedTutor are required',
+      });
+    }
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Booking not found' });
+    }
+
+    // ✅ Auth: only the booked student can submit feedback
+    if (booking.studentId.toString() !== userId) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Not authorized for this booking' });
+    }
+
+    if (booking.type !== 'demo') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only demo bookings can get feedback',
+      });
+    }
+
+    if (!['confirmed', 'completed'].includes(booking.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Feedback allowed only after confirmed/completed demo',
+      });
+    }
+
+    if (booking.demoFeedback && booking.demoFeedback.createdAt) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Feedback already submitted' });
+    }
+
+    const overall = Math.round(
+      (teaching + communication + understanding) / 3
+    );
+
+    booking.demoFeedback = {
+      teaching,
+      communication,
+      understanding,
+      overall,
+      comment: comment || '',
+      likedTutor: !!likedTutor,
+      createdAt: new Date(),
+    };
+    booking.status = 'completed';
+    await booking.save();
+
+    // update tutor rating (TutorProfile is keyed by userId)
+    const tutorProfile = await TutorProfile.findOne({
+      userId: booking.tutorId,
+    });
+    if (tutorProfile) {
+      tutorProfile.ratingSum = (tutorProfile.ratingSum || 0) + overall;
+      tutorProfile.ratingCount = (tutorProfile.ratingCount || 0) + 1;
+      tutorProfile.rating =
+        tutorProfile.ratingSum / Math.max(tutorProfile.ratingCount, 1);
+      await tutorProfile.save();
+    }
+
+    // notify tutor by email
+    try {
+      const tutorUser = await User.findById(booking.tutorId);
+      const studentProfile = await StudentProfile.findOne({
+        userId: booking.studentId,
+      }).lean();
+
+      const studentName = studentProfile?.name || 'Student';
+      const tutorName = tutorProfile?.name || 'Tutor';
+
+      if (tutorUser && notificationService?.sendEmail) {
+        const subjectLine = 'New demo feedback received';
+        const html =
+          emailTpl.demoFeedbackToTutor?.({
+            tutorName,
+            studentName,
+            teaching,
+            communication,
+            understanding,
+            overall,
+            comment,
+          }) ||
+          `<p>You received new demo feedback from ${studentName}. Overall: ${overall}/5</p>`;
+        await notificationService.sendEmail(
+          tutorUser.email,
+          subjectLine,
+          '',
+          html
+        );
+      }
+    } catch (err) {
+      console.error('Error notifying tutor about feedback:', err);
+    }
+
+    // notify admin
+    await createAdminNotification(
+      'Demo feedback submitted',
+      `Feedback for demo booking ${booking._id}`,
+      {
+        bookingId: booking._id,
+        tutorId: booking.tutorId,
+        studentId: booking.studentId,
+        overall,
+        likedTutor,
+      }
+    );
+
+    // ⭐⭐⭐ ADD HOURLY / MONTHLY RATE IN RESPONSE ⭐⭐⭐
+    const tutorProfileToReturn = await TutorProfile.findOne({
+      userId: booking.tutorId,
+    }).select("name hourlyRate monthlyRate photoUrl").lean();
+
+    return res.json({
+      success: true,
+      message: 'Feedback submitted',
+      data: {
+        booking,
+        tutorName: tutorProfileToReturn?.name || "Tutor",
+        tutorRates: {
+          hourlyRate: tutorProfileToReturn?.hourlyRate || 0,
+          monthlyRate: tutorProfileToReturn?.monthlyRate || 0
+        }
+      },
+    });
+
+  } catch (err) {
+    console.error('giveDemoFeedback error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: err.message,
+    });
+  }
+};
+
+exports.startRegularFromDemo = async (req, res) => {
+  try {
+    const bookingId = req.params.id;
+    const {
+      planType,
+      billingType,     // "hourly" | "monthly"
+      numberOfClasses  // required only for hourly
+    } = req.body;
+
+    const userId = req.user.id;
+
+    const booking = await Booking.findById(bookingId);
+
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    // Only demo can be upgraded
+    if (booking.type !== "demo") {
+      return res.status(400).json({ success: false, message: "Only demo bookings can be upgraded" });
+    }
+
+    // Student must complete demo first
+    if (booking.status !== "completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Demo must be completed before subscribing",
+      });
+    }
+
+    // Auth
+    if (booking.studentId.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not allowed to start regular classes for this booking",
+      });
+    }
+
+    // Validate billing type
+    if (!billingType || !["hourly", "monthly"].includes(billingType)) {
+      return res.status(400).json({
+        success: false,
+        message: "billingType must be 'hourly' or 'monthly'",
+      });
+    }
+
+    // Hourly requires number of classes
+    if (billingType === "hourly" && !numberOfClasses) {
+      return res.status(400).json({
+        success: false,
+        message: "numberOfClasses is required for hourly billing",
+      });
+    }
+
+    // planType required
+    if (!planType) {
+      return res.status(400).json({
+        success: false,
+        message: "planType is required",
+      });
+    }
+
+    // Load tutor
+    const tutorProfile = await TutorProfile.findOne({
+      userId: booking.tutorId,
+    }).lean();
+
+    if (!tutorProfile) {
+      return res.status(404).json({
+        success: false,
+        message: "Tutor profile not found",
+      });
+    }
+
+    // Tutor availability
+    const tutorAvailability = Array.isArray(tutorProfile.availability)
+      ? tutorProfile.availability
+      : [];
+
+    const today = new Date();
+    const todayStr = today.toISOString().slice(0, 10);
+
+    const futureDates = tutorAvailability
+      .filter((d) => d >= todayStr)
+      .sort();
+
+    if (!futureDates.length) {
+      return res.status(400).json({
+        success: false,
+        message: "Tutor has no upcoming availability",
+      });
+    }
+
+    const startDateStr = futureDates[0];
+    const startDateObj = toStartOfDay(startDateStr);
+
+    // Compute amount
+    let baseRate = 0;
+    if (billingType === "hourly") {
+      baseRate = tutorProfile.hourlyRate || 0;
+      if (!baseRate) {
+        return res.status(400).json({
+          success: false,
+          message: "Tutor hourlyRate not set",
+        });
+      }
+    } else {
+      baseRate = tutorProfile.monthlyRate || 0;
+      if (!baseRate) {
+        return res.status(400).json({
+          success: false,
+          message: "Tutor monthlyRate not set",
+        });
+      }
+    }
+
+    let totalAmountINR =
+      billingType === "hourly"
+        ? baseRate * Number(numberOfClasses)
+        : baseRate;
+
+    const amountPaise = Math.round(totalAmountINR * 100);
+
+    const sessionsPerWeek = 2;
+    const timeSlots = [];
+
+    // Create regular class
+    const rc = await RegularClass.create({
+      studentId: booking.studentId,
+      tutorId: booking.tutorId,
+      subject: booking.subject,
+      planType,  
+      sessionsPerWeek,
+      timeSlots,
+      startDate: startDateObj,
+      amount: baseRate,
+      currency: "INR",
+      paymentStatus: "pending",
+      status: "active",
+      currentPeriodStart: startDateObj,
+      currentPeriodEnd: new Date(
+        new Date(startDateObj).setMonth(startDateObj.getMonth() + 1)
+      ),
+    });
+
+    booking.regularClassId = rc._id;
+    await booking.save();
+
+    // Create payment
+    const payment = await Payment.create({
+      regularClassId: rc._id,
+      studentId: booking.studentId,
+      tutorId: booking.tutorId,
+      type: "subscription",
+      amount: totalAmountINR,
+      currency: "INR",
+      gateway: "razorpay",
+      status: "created",
+      notes: `BillingType=${billingType}, Classes=${numberOfClasses || ""}, StartDate=${startDateStr}`,
+    });
+
+    // ----------------------------
+    // Razorpay Order Creation 🔥
+    // ----------------------------
+    const razorpay = require("../services/payments/razorpay");
+
+    // SAFE RECEIPT (always < 40 chars)
+    const receipt = `rc_${Math.random().toString(36).substring(2, 10)}`;
+
+    console.log("🔍 SAFE RECEIPT:", receipt, "LEN:", receipt.length);
+
+    // Shorten notes to avoid Razorpay 40-char limit
+    const notes = {
+      rc: rc._id.toString().slice(-8),
+      bk: booking._id.toString().slice(-8),
+      bt: billingType,
+      cls: billingType === "hourly" ? String(numberOfClasses) : "",
+      sd: startDateStr,
+    };
+
+    const order = await razorpay.orders.create({
+      amount: amountPaise,
+      currency: "INR",
+      receipt: receipt,
+      notes: notes,
+    });
+
+    payment.gatewayOrderId = order.id;
+    await payment.save();
+
+    // Admin notification
+    await createAdminNotification(
+      "Regular Classes Started (Pending Payment)",
+      `Student is about to pay for regular class ${rc._id}`,
+      {
+        bookingId: booking._id,
+        regularClassId: rc._id,
+        paymentId: payment._id,
+        billingType,
+        numberOfClasses,
+        baseRate,
+        amountToPay: totalAmountINR,
+        startDate: startDateStr,
+      }
+    );
+
+    // Final response
+    return res.json({
+      success: true,
+      message: "Regular class created. Proceed to payment.",
+      data: {
+        regularClassId: rc._id,
+        paymentId: payment._id,
+        razorpayKey: process.env.RAZORPAY_KEY_ID,
+        orderId: order.id,
+        amount: amountPaise,
+        currency: "INR",
+        startDate: startDateStr,
+        billingType,
+        baseRate,
+        totalAmountINR,
+      },
+    });
+  } catch (err) {
+    console.error("startRegularFromDemo error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
+
+
+// Tutor creates a REGULAR class instance for a student
+// POST /api/bookings/regular
+// Body: { regularClassId, date, time, note }
+exports.startRegularFromDemo = async (req, res) => {
+  try {
+    const bookingId = req.params.id;
+    const { billingType, numberOfClasses } = req.body;
+    const userId = req.user.id;
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    // Only demo can be upgraded
+    if (booking.type !== "demo") {
+      return res.status(400).json({ success: false, message: "Only demo bookings can be upgraded" });
+    }
+
+    // Demo must be completed
+    if (booking.status !== "completed") {
+      return res.status(400).json({ success: false, message: "Demo must be completed before subscribing" });
+    }
+
+    // Auth
+    if (booking.studentId.toString() !== userId) {
+      return res.status(403).json({ success: false, message: "Not allowed" });
+    }
+
+    // Billing type validation
+    if (!billingType || !["hourly", "monthly"].includes(billingType)) {
+      return res.status(400).json({ success: false, message: "Invalid billingType" });
+    }
+
+    if (billingType === "hourly" && !numberOfClasses) {
+      return res.status(400).json({
+        success: false,
+        message: "numberOfClasses is required for hourly billing",
+      });
+    }
+
+    // planType = billingType (because your enum only accepts these)
+    const planType = billingType;
+
+    const tutorProfile = await TutorProfile.findOne({ userId: booking.tutorId }).lean();
+    if (!tutorProfile) {
+      return res.status(404).json({ success: false, message: "Tutor profile not found" });
+    }
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const futureDates = (tutorProfile.availability || []).filter(d => d >= todayStr).sort();
+
+    if (!futureDates.length) {
+      return res.status(400).json({
+        success: false,
+        message: "Tutor has no upcoming availability",
+      });
+    }
+
+    const startDateStr = futureDates[0];
+    const startDateObj = toStartOfDay(startDateStr);
+
+    let baseRate = billingType === "hourly"
+      ? tutorProfile.hourlyRate
+      : tutorProfile.monthlyRate;
+
+    if (!baseRate) {
+      return res.status(400).json({
+        success: false,
+        message: `Tutor ${billingType} rate not set`,
+      });
+    }
+
+    const totalAmountINR =
+      billingType === "hourly"
+        ? baseRate * Number(numberOfClasses)
+        : baseRate;
+
+    const amountPaise = totalAmountINR * 100;
+
+    const rc = await RegularClass.create({
+      studentId: booking.studentId,
+      tutorId: booking.tutorId,
+      subject: booking.subject,
+      planType,
+      sessionsPerWeek: 2,
+      timeSlots: [],
+      startDate: startDateObj,
+      amount: baseRate,
+      currency: "INR",
+      paymentStatus: "pending",
+      status: "active",
+      currentPeriodStart: startDateObj,
+      currentPeriodEnd: new Date(new Date(startDateObj).setMonth(startDateObj.getMonth() + 1)),
+    });
+
+    booking.regularClassId = rc._id;
+    await booking.save();
+
+    const payment = await Payment.create({
+      regularClassId: rc._id,
+      studentId: booking.studentId,
+      tutorId: booking.tutorId,
+      type: "subscription",
+      amount: totalAmountINR,
+      currency: "INR",
+      gateway: "razorpay",
+      status: "created",
+      notes: `BillingType=${billingType}, Classes=${numberOfClasses || ""}, StartDate=${startDateStr}`,
+    });
+
+    // 🔥 FIXED RECEIPT (MUST BE < 40 CHARS)
+    const receipt = `rc_${Math.random().toString(36).substring(2, 10)}`;
+
+    const razorpay = require("../services/payments/razorpay");
+    
+    const order = await razorpay.orders.create({
+      amount: amountPaise,
+      currency: "INR",
+      receipt: receipt,   // <<-- FIXED
+      notes: {
+        rc: rc._id.toString().slice(-8),
+        bk: booking._id.toString().slice(-8),
+        bt: billingType,
+        cls: billingType === "hourly" ? numberOfClasses.toString() : "",
+        sd: startDateStr,
+      },
+    });
+
+    payment.gatewayOrderId = order.id;
+    await payment.save();
+
+    return res.json({
+      success: true,
+      message: "Regular class created. Proceed to payment.",
+      data: {
+        regularClassId: rc._id,
+        paymentId: payment._id,
+        razorpayKey: process.env.RAZORPAY_KEY_ID,
+        orderId: order.id,
+        amount: amountPaise,
+        currency: "INR",
+        startDate: startDateStr,
+        billingType,
+        baseRate,
+        totalAmountINR,
+      },
+    });
+  } catch (err) {
+    console.error("startRegularFromDemo error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+
+
+/**
+ * 🔁 Auto-complete past demos:
+ * - type = 'demo'
+ * - status = 'confirmed'
+ * - now > preferredDate + preferredTime + DEMO_DURATION_MINUTES + buffer
+ *
+ * Call this from server.js using setInterval, e.g.:
+ *   const { autoCompletePastDemos } = require('./controllers/bookingController');
+ *   setInterval(autoCompletePastDemos, 5 * 60 * 1000);
+ */
+exports.autoCompletePastDemos = async function autoCompletePastDemos() {
+  try {
+    const now = new Date();
+
+    const confirmedDemos = await Booking.find({
+      type: 'demo',
+      status: 'confirmed',
+    });
+
+    if (!confirmedDemos.length) return;
+
+    for (const booking of confirmedDemos) {
+      if (!booking.preferredDate || !booking.preferredTime) continue;
+
+      // Build demo start DateTime
+      const [hourStr, minuteStr] = booking.preferredTime.split(':');
+      const startDateTime = new Date(booking.preferredDate);
+      startDateTime.setHours(
+        parseInt(hourStr, 10),
+        parseInt(minuteStr, 10),
+        0,
+        0
+      );
+
+      // Demo end = start + 15 min + buffer
+      const endDateTime = new Date(
+        startDateTime.getTime() +
+        (DEMO_DURATION_MINUTES + AUTO_COMPLETE_BUFFER_MIN) * 60 * 1000
+      );
+
+      // If current time is past endDateTime, auto-complete
+      if (now >= endDateTime) {
+        booking.status = 'completed';
+        await booking.save();
+
+        await createAdminNotification(
+          'Demo auto-completed',
+          `Demo ${booking._id} auto-completed after scheduled end time`,
+          {
+            bookingId: booking._id,
+            tutorId: booking.tutorId,
+            studentId: booking.studentId,
+            preferredDate: booking.preferredDate,
+            preferredTime: booking.preferredTime,
+          }
+        );
+      }
+    }
+  } catch (err) {
+    console.error('autoCompletePastDemos error:', err.message);
   }
 };

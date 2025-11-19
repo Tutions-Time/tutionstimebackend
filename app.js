@@ -4,6 +4,9 @@ const helmet = require("helmet");
 const errorHandler = require("./middleware/errorHandler");
 const connectDB = require("./config/database");
 const path = require("path");
+// const adminNotificationRoutes=require('./routes/adminNotificationRoutes')
+const paymentController = require("./controllers/paymentController");
+
 
 // Connect to MongoDB
 connectDB();
@@ -36,6 +39,12 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 app.options("*", cors(corsOptions));
+// Razorpay Webhook MUST use raw body
+app.post(
+  "/api/payments/razorpay/webhook",
+  express.raw({ type: "application/json" }),
+  paymentController.razorpayWebhook
+);
 
 
 app.use(express.json());
@@ -55,18 +64,26 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
-app.use('/api/subjects', require('./routes/subjectRoutes'));
 app.use('/api/bookings', require('./routes/bookingRoutes'));
 app.use('/api/enquiries', require('./routes/enquiryRoutes'));
-app.use('/api/availability', require('./routes/availabilityRoutes'));
-// app.use('/api/payments', require('./routes/paymentRoutes'));
+app.use('/api/payments', require('./routes/paymentRoutes'));
 app.use('/api/wallet', require('./routes/walletRoutes'));
 app.use('/api/tutors', require('./routes/tutorRoutes'));
 
-app.use('/api/subscriptions', require('./routes/subscriptionRoutes'));
 app.use('/api/meta', require('./routes/metaRoutes.js'));
+app.use('/api/admin/notifications', require('./routes/adminNotificationRoutes'));
+app.use('/api/tutor-switch', require('./routes/tutorSwitch'));
+app.use("/api/regular", require("./routes/regularClassRoutes.js"));
 
 
+const { autoCompletePastDemos } = require('./controllers/bookingController');
+
+app.use("/api/sessions", require("./routes/sessionRoutes"));
+
+
+setInterval(() => {
+  autoCompletePastDemos();
+}, 5 * 60 * 1000);
 
 
 app.get("/", (req, res) =>

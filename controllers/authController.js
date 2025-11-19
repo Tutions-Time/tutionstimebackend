@@ -172,14 +172,6 @@ const verifyOTP = async (req, res) => {
       }
 
       try {
-        // Log the user data before creation
-        // console.log('Creating new user with data:', {
-        //   phone: phone.trim(),
-        //   role,
-        //   isProfileComplete: false,
-        //   status: 'active'
-        // });
-
         // Create new user
         user = await User.create({
           phone: phone.trim(),
