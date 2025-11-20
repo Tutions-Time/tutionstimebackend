@@ -4,6 +4,7 @@ const Payment = require("../models/Payment");
 const RegularClass = require("../models/RegularClass");
 const TutorProfile = require("../models/TutorProfile");
 const { createAdminNotification } = require("../services/adminNotification");
+const { default: mongoose } = require("mongoose");
 
 /**
  * STUDENT: Create Razorpay ORDER for a regular class
@@ -157,7 +158,7 @@ exports.razorpayWebhook = async (req, res) => {
 
         // 🔥 FIX — Update classCount for hourly
         if (rc.planType === "hourly") {
-          const purchased = Number(notes?.numberOfClasses || 0);
+          const purchased = Number((notes && (notes.numberOfClasses || notes.cls)) || 0);
           rc.classCount = purchased;
         }
 
@@ -184,6 +185,77 @@ exports.razorpayWebhook = async (req, res) => {
   }
 };
 
+
+/**
+ * POST /api/payments/verify
+ * Client-side verification of Razorpay payment signature.
+ * Body: { orderId, paymentId, signature, regularClassId, billingType, numberOfClasses }
+ * Marks Payment and RegularClass as paid upon successful verification.
+ */
+exports.verifyPayment = async (req, res) => {
+  try {
+    const { orderId, paymentId, signature, regularClassId, billingType, numberOfClasses } = req.body;
+
+    if (!orderId || !paymentId || !signature) {
+      return res.status(400).json({ success: false, message: "orderId, paymentId, signature are required" });
+    }
+
+    const secret = process.env.RAZORPAY_KEY_SECRET;
+    if (!secret) {
+      return res.status(500).json({ success: false, message: "Razorpay secret not configured" });
+    }
+
+    const expected = crypto
+      .createHmac("sha256", secret)
+      .update(`${orderId}|${paymentId}`)
+      .digest("hex");
+
+    if (expected !== signature) {
+      return res.status(400).json({ success: false, message: "Invalid signature" });
+    }
+
+    // Find payment by orderId
+    const payment = await Payment.findOne({ gatewayOrderId: orderId });
+    if (!payment) {
+      return res.status(404).json({ success: false, message: "Payment record not found" });
+    }
+
+    // Mark payment as paid
+    payment.status = "paid";
+    payment.gatewayPaymentId = paymentId;
+    await payment.save();
+
+    // Update RegularClass payment status
+    const rcId = regularClassId || payment.regularClassId;
+    if (rcId) {
+      const rc = await RegularClass.findById(rcId);
+      if (rc) {
+        rc.paymentStatus = "paid";
+        if (rc.planType === "hourly") {
+          const purchased = Number(numberOfClasses || 0);
+          if (purchased > 0) rc.classCount = purchased;
+        }
+        await rc.save();
+      }
+    }
+
+    await createAdminNotification(
+      "Subscription payment verified",
+      `Payment ${payment._id} verified via client callback`,
+      {
+        paymentId: payment._id,
+        regularClassId: payment.regularClassId,
+        gatewayPaymentId: paymentId,
+        gatewayOrderId: orderId,
+      }
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("verifyPayment error", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 
 
 

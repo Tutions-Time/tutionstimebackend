@@ -11,6 +11,14 @@ router.post(
   checkRole(["student"]),
   paymentController.createSubscriptionOrder
 );
+
+// student: verify payment signature after checkout
+router.post(
+  "/verify",
+  authenticate,
+  checkRole(["student"]),
+  paymentController.verifyPayment
+);
 // admin payouts
 router.get(
   "/admin/payouts/generate",
