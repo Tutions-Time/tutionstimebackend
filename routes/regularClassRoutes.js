@@ -21,4 +21,11 @@ router.post(
   regularClassController.scheduleRegularClassSessions
 );
 
+router.get(
+  "/student/regular-classes",
+  authenticate,
+  checkRole(["student"]),
+  regularClassController.getStudentRegularClasses
+);
+
 module.exports = router;

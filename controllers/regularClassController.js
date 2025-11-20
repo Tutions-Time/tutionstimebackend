@@ -235,3 +235,104 @@ exports.scheduleRegularClassSessions = async (req, res) => {
   }
 };
 
+exports.getStudentRegularClasses = async (req, res) => {
+  try {
+    const studentUserId = req.user.id; // this is User._id
+
+    // 1) Find all PAID + ACTIVE regular classes for this student
+    const regularClasses = await RegularClass.find({
+      studentId: studentUserId,      // you store studentId = User._id in RegularClass
+      paymentStatus: "paid",
+      status: "active",
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (!regularClasses.length) {
+      return res.json({ success: true, data: [] });
+    }
+
+    // 2) Load tutor profiles to show name + photo
+    const tutorUserIds = regularClasses.map((rc) => rc.tutorId.toString());
+
+    const tutors = await TutorProfile.find({
+      userId: { $in: tutorUserIds },
+    })
+      .select("userId name photoUrl")
+      .lean();
+
+    const tutorMap = new Map(tutors.map((t) => [String(t.userId), t]));
+
+    // 3) Load upcoming sessions for each regular class
+    const rcIds = regularClasses.map((rc) => rc._id);
+    const now = new Date();
+
+    const sessions = await Session.find({
+      regularClassId: { $in: rcIds },
+      status: "scheduled",
+      startDateTime: { $gte: now },
+    })
+      .sort({ startDateTime: 1 })
+      .lean();
+
+    const nextSessionMap = new Map();  // regularClassId -> next session
+    const sessionsCountMap = new Map(); // regularClassId -> total upcoming sessions
+
+    for (const s of sessions) {
+      const key = String(s.regularClassId);
+
+      // first one in sorted list is the "next" session
+      if (!nextSessionMap.has(key)) {
+        nextSessionMap.set(key, s);
+      }
+
+      sessionsCountMap.set(key, (sessionsCountMap.get(key) || 0) + 1);
+    }
+
+    // 4) Build response for frontend
+    const enriched = regularClasses.map((rc) => {
+      const key = String(rc._id);
+      const t = tutorMap.get(String(rc.tutorId)) || {};
+      const nextSession = nextSessionMap.get(key) || null;
+
+      return {
+        regularClassId: rc._id,
+        subject: rc.subject,
+        planType: rc.planType,                 // hourly / monthly
+        classCount: rc.classCount,             // for hourly plans
+        startDate: rc.startDate,
+        paymentStatus: rc.paymentStatus,
+        status: rc.status,                     // active / paused / ended
+        scheduleStatus: rc.scheduleStatus ?? "not-scheduled",
+
+        tutor: {
+          userId: rc.tutorId,
+          name: t.name || "Tutor",
+          photoUrl: t.photoUrl || null,
+        },
+
+        nextSession: nextSession
+          ? {
+              sessionId: nextSession._id,
+              startDateTime: nextSession.startDateTime,
+              meetingLink: nextSession.meetingLink || null,
+              status: nextSession.status,
+            }
+          : null,
+
+        upcomingSessionsCount: sessionsCountMap.get(key) || 0,
+      };
+    });
+
+    return res.json({
+      success: true,
+      data: enriched,
+    });
+  } catch (err) {
+    console.error("getStudentRegularClasses error:", err);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error" });
+  }
+};
+
