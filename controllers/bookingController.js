@@ -1586,8 +1586,6 @@ exports.startRegularFromDemo = async (req, res) => {
       subject: booking.subject,
       planType,
       classCount: billingType === "hourly" ? Number(numberOfClasses) : null, // 🔥 store class count
-      sessionsPerWeek: 2,
-      timeSlots: [],
       startDate: startDateObj,
       amount: baseRate,
       currency: "INR",
@@ -1599,8 +1597,9 @@ exports.startRegularFromDemo = async (req, res) => {
       ),
     });
 
-    // Link regular class → booking
+    // Link regular class → booking and mark as regular
     booking.regularClassId = rc._id;
+    booking.type = "regular";
     await booking.save();
 
     // -------------------------------

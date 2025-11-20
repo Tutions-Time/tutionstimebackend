@@ -46,7 +46,7 @@ const bookingSchema = new mongoose.Schema(
       enum: ['pending', 'confirmed', 'cancelled', 'completed'],
       default: 'pending',
     },
-    type: { type: String, enum: ['demo'], default: 'demo' },
+    type: { type: String, enum: ['demo', 'regular'], default: 'demo' },
 
     // Meeting (Jitsi on confirm)
     meetingLink: { type: String, default: '' },
