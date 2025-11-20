@@ -84,10 +84,11 @@ exports.getTutorRegularStudents = async (req, res) => {
  *    { time: "18:00", numberOfClasses?: 4 }
  */
 exports.scheduleRegularClassSessions = async (req, res) => {
+  console.log("scheduleRegularClassSessions called");
   try {
-    const tutorUserId = req.user.id; // logged in tutor (User._id)
+    const tutorUserId = req.user.id;
     const rcId = req.params.id;
-    const { time, numberOfClasses } = req.body;
+    const { time } = req.body; // ONLY time is needed now!
 
     if (!time) {
       return res.status(400).json({
@@ -96,21 +97,24 @@ exports.scheduleRegularClassSessions = async (req, res) => {
       });
     }
 
+    // Fetch Regular Class
     const rc = await RegularClass.findById(rcId);
     if (!rc) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Regular class not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Regular class not found",
+      });
     }
 
-    // 🔐 Tutor owns this class?
+    // Check Tutor Ownership
     if (rc.tutorId.toString() !== tutorUserId) {
-      return res
-        .status(403)
-        .json({ success: false, message: "Not authorized" });
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized",
+      });
     }
 
-    // 💰 Ensure payment completed
+    // Ensure payment is completed
     if (rc.paymentStatus !== "paid" || rc.status !== "active") {
       return res.status(400).json({
         success: false,
@@ -118,9 +122,13 @@ exports.scheduleRegularClassSessions = async (req, res) => {
       });
     }
 
-    // Tutor availability comes from TutorProfile.availability (array of YYYY-MM-DD)
+    // Load Tutor Availability
     const tutorProfile = await TutorProfile.findOne({ userId: tutorUserId }).lean();
-    if (!tutorProfile || !Array.isArray(tutorProfile.availability) || !tutorProfile.availability.length) {
+    if (
+      !tutorProfile ||
+      !Array.isArray(tutorProfile.availability) ||
+      tutorProfile.availability.length === 0
+    ) {
       return res.status(400).json({
         success: false,
         message: "Tutor availability is not set",
@@ -128,98 +136,102 @@ exports.scheduleRegularClassSessions = async (req, res) => {
     }
 
     const todayStr = new Date().toISOString().slice(0, 10);
-
-    // Filter only future (or today) availability dates
-    const allFutureDates = tutorProfile.availability
+    const futureDates = tutorProfile.availability
       .filter((d) => d >= todayStr)
       .sort();
 
-    if (!allFutureDates.length) {
+    if (!futureDates.length) {
       return res.status(400).json({
         success: false,
-        message: "No upcoming availability dates for tutor",
+        message: "Tutor has no upcoming availability",
       });
     }
 
     let selectedDates = [];
 
-    // ⚙ Logic based on planType
+    // ------------------------------
+    // 🔥 1️⃣ HOURLY PLAN (automatic)
+    // ------------------------------
     if (rc.planType === "hourly") {
-      // Q1: yes → hourly = number of classes
-      if (!numberOfClasses || Number(numberOfClasses) <= 0) {
+      const n = rc.classCount; // 💥 Use classCount stored earlier
+
+      if (!n || n <= 0) {
         return res.status(400).json({
           success: false,
-          message: "numberOfClasses is required for hourly plan",
+          message: "Invalid classCount stored in regular class",
         });
       }
 
-      const n = Number(numberOfClasses);
-      selectedDates = allFutureDates.slice(0, n);
+      selectedDates = futureDates.slice(0, n);
 
       if (selectedDates.length < n) {
         return res.status(400).json({
           success: false,
-          message:
-            "Tutor does not have enough availability dates for requested classes",
+          message: "Tutor does not have enough availability for these classes",
         });
       }
-    } else if (rc.planType === "monthly") {
-      // Q2: monthly = based on tutor availability for that month
-      const baseDate = rc.startDate || new Date();
-      const monthPrefix = baseDate.toISOString().slice(0, 7); // "YYYY-MM"
+    }
 
-      selectedDates = allFutureDates.filter((d) => d.startsWith(monthPrefix));
+    // ------------------------------
+    // 🔥 2️⃣ MONTHLY PLAN (automatic)
+    // ------------------------------
+    else if (rc.planType === "monthly") {
+      const monthPrefix = rc.startDate.toISOString().slice(0, 7); // "YYYY-MM"
+      selectedDates = futureDates.filter((d) => d.startsWith(monthPrefix));
 
       if (!selectedDates.length) {
         return res.status(400).json({
           success: false,
-          message:
-            "Tutor has no availability dates in this month for this class",
+          message: "No availability for this month",
         });
       }
-    } else {
-      // fallback for other planTypes
+    }
+
+    else {
       return res.status(400).json({
         success: false,
-        message:
-          "Scheduling supported only for 'hourly' and 'monthly' planType right now",
+        message: "PlanType must be hourly or monthly",
       });
     }
 
-    // 🧹 Remove old sessions (if rescheduling)
+    // ------------------------------
+    // 🧹 Clear old sessions
+    // ------------------------------
     await Session.deleteMany({ regularClassId: rcId });
 
-    // ✅ Create sessions from selected dates
+    // ------------------------------
+    // 🧪 Create Sessions Automatically
+    // ------------------------------
     const sessionsToInsert = selectedDates.map((dateStr, idx) => {
       const startDateTime = buildDateTime(dateStr, time);
-
-      const meetingLink = `https://meet.jit.si/tuitiontime-${rcId}-${idx}-${Date.now()}`;
 
       return {
         regularClassId: rc._id,
         studentId: rc.studentId,
         tutorId: rc.tutorId,
         startDateTime,
-        meetingLink,
+        meetingLink: `https://meet.jit.si/tuitiontime-${rcId}-${idx}-${Date.now()}`,
         status: "scheduled",
       };
     });
 
-    const createdSessions = await Session.insertMany(sessionsToInsert);
+    const created = await Session.insertMany(sessionsToInsert);
+
     rc.scheduleStatus = "scheduled";
     await rc.save();
 
     return res.json({
       success: true,
-      message: "Sessions scheduled successfully from tutor availability",
-      data: {
-        planType: rc.planType,
-        totalSessions: createdSessions.length,
-        sessions: createdSessions,
-      },
+      message: "Sessions auto-scheduled successfully",
+      data: created,
     });
+
   } catch (err) {
     console.error("scheduleRegularClassSessions error:", err);
-    res.status(500).json({ success: false, message: "Server error" });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
+

@@ -34,12 +34,18 @@ const regularClassSchema = new mongoose.Schema(
       enum: ["hourly", "weekly", "monthly", "custom"],
       required: true,
     },
+
     scheduleStatus: {
       type: String,
       enum: ["not-scheduled", "scheduled"],
       default: "not-scheduled",
     },
 
+    // 🔥 Number of classes purchased (for hourly billing)
+    classCount: {
+      type: Number,
+      default: null,
+    },
 
     sessionsPerWeek: { type: Number, min: 1, default: 2 },
     timeSlots: [timeSlotSchema], // weekly schedule
@@ -47,7 +53,7 @@ const regularClassSchema = new mongoose.Schema(
     startDate: { type: Date, required: true },
 
     // Billing
-    amount: { type: Number, required: true }, // monthly or package amount
+    amount: { type: Number, required: true }, // monthly or hourly rate
     currency: { type: String, default: "INR" },
 
     paymentStatus: {
@@ -62,10 +68,10 @@ const regularClassSchema = new mongoose.Schema(
       default: "active",
     },
 
-    // Razorpay subscription / order id
+    // Razorpay order/subscription id
     paymentRef: { type: String },
 
-    // For month wise payout
+    // For billing cycles (monthly)
     currentPeriodStart: { type: Date },
     currentPeriodEnd: { type: Date },
   },

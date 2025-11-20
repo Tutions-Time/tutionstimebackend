@@ -108,18 +108,12 @@ exports.createSubscriptionOrder = async (req, res) => {
 exports.razorpayWebhook = async (req, res) => {
   try {
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
-    if (!webhookSecret) {
-      console.error("❌ Missing RAZORPAY_WEBHOOK_SECRET env");
-      return res.status(500).json({ received: false });
-    }
-
     const signature = req.headers["x-razorpay-signature"];
-    if (!signature) {
-      console.warn("❌ Missing x-razorpay-signature header");
+
+    if (!signature || !webhookSecret) {
       return res.status(400).json({ received: false });
     }
 
-    // 🔒 Get the RAW body as Buffer
     const rawBody = Buffer.isBuffer(req.body)
       ? req.body
       : Buffer.from(JSON.stringify(req.body));
@@ -130,41 +124,43 @@ exports.razorpayWebhook = async (req, res) => {
       .digest("hex");
 
     if (expected !== signature) {
-      console.warn("❌ Invalid Razorpay webhook signature");
       return res.status(400).json({ received: false });
     }
 
-    // ✅ Now safely parse event
-    const bodyString = rawBody.toString("utf8");
-    const event = JSON.parse(bodyString);
+    const event = JSON.parse(rawBody.toString("utf8"));
 
     if (event.event === "payment.captured") {
       const paymentId = event.payload.payment.entity.id;
       const orderId = event.payload.payment.entity.order_id;
-      const amount = event.payload.payment.entity.amount / 100; // rupees
+      const amount = event.payload.payment.entity.amount / 100;
+      const notes = event.payload.payment.entity.notes;
 
       let payment = await Payment.findOne({
         $or: [{ gatewayPaymentId: paymentId }, { gatewayOrderId: orderId }],
       });
 
       if (!payment) {
-        console.warn(
-          "⚠️ No Payment record found for webhook paymentId/orderId",
-          paymentId,
-          orderId
-        );
         return res.status(200).json({ received: true });
       }
 
-      // ✅ Mark payment + regular class as paid
+      // MARK PAYMENT AS PAID
       payment.status = "paid";
       payment.gatewayPaymentId = paymentId;
       payment.amount = amount;
       await payment.save();
 
+      // UPDATE REGULAR CLASS
       const rc = await RegularClass.findById(payment.regularClassId);
+
       if (rc) {
         rc.paymentStatus = "paid";
+
+        // 🔥 FIX — Update classCount for hourly
+        if (rc.planType === "hourly") {
+          const purchased = Number(notes?.numberOfClasses || 0);
+          rc.classCount = purchased;
+        }
+
         await rc.save();
       }
 
@@ -183,10 +179,11 @@ exports.razorpayWebhook = async (req, res) => {
 
     return res.status(200).json({ received: true });
   } catch (err) {
-    console.error("razorpayWebhook error:", err);
+    console.error("Webhook ERR", err);
     return res.status(500).json({ received: false });
   }
 };
+
 
 
 

@@ -1232,29 +1232,266 @@ exports.giveDemoFeedback = async (req, res) => {
   }
 };
 
+// exports.startRegularFromDemo = async (req, res) => {
+//   try {
+//     const bookingId = req.params.id;
+//     const {
+//       planType,
+//       billingType,     // "hourly" | "monthly"
+//       numberOfClasses  // required only for hourly
+//     } = req.body;
+
+//     const userId = req.user.id;
+
+//     const booking = await Booking.findById(bookingId);
+
+//     if (!booking) {
+//       return res.status(404).json({ success: false, message: "Booking not found" });
+//     }
+
+//     // Only demo can be upgraded
+//     if (booking.type !== "demo") {
+//       return res.status(400).json({ success: false, message: "Only demo bookings can be upgraded" });
+//     }
+
+//     // Student must complete demo first
+//     if (booking.status !== "completed") {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Demo must be completed before subscribing",
+//       });
+//     }
+
+//     // Auth
+//     if (booking.studentId.toString() !== userId) {
+//       return res.status(403).json({
+//         success: false,
+//         message: "You are not allowed to start regular classes for this booking",
+//       });
+//     }
+
+//     // Validate billing type
+//     if (!billingType || !["hourly", "monthly"].includes(billingType)) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "billingType must be 'hourly' or 'monthly'",
+//       });
+//     }
+
+//     // Hourly requires number of classes
+//     if (billingType === "hourly" && !numberOfClasses) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "numberOfClasses is required for hourly billing",
+//       });
+//     }
+
+//     // planType required
+//     if (!planType) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "planType is required",
+//       });
+//     }
+
+//     // Load tutor
+//     const tutorProfile = await TutorProfile.findOne({
+//       userId: booking.tutorId,
+//     }).lean();
+
+//     if (!tutorProfile) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Tutor profile not found",
+//       });
+//     }
+
+//     // Tutor availability
+//     const tutorAvailability = Array.isArray(tutorProfile.availability)
+//       ? tutorProfile.availability
+//       : [];
+
+//     const today = new Date();
+//     const todayStr = today.toISOString().slice(0, 10);
+
+//     const futureDates = tutorAvailability
+//       .filter((d) => d >= todayStr)
+//       .sort();
+
+//     if (!futureDates.length) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Tutor has no upcoming availability",
+//       });
+//     }
+
+//     const startDateStr = futureDates[0];
+//     const startDateObj = toStartOfDay(startDateStr);
+
+//     // Compute amount
+//     let baseRate = 0;
+//     if (billingType === "hourly") {
+//       baseRate = tutorProfile.hourlyRate || 0;
+//       if (!baseRate) {
+//         return res.status(400).json({
+//           success: false,
+//           message: "Tutor hourlyRate not set",
+//         });
+//       }
+//     } else {
+//       baseRate = tutorProfile.monthlyRate || 0;
+//       if (!baseRate) {
+//         return res.status(400).json({
+//           success: false,
+//           message: "Tutor monthlyRate not set",
+//         });
+//       }
+//     }
+
+//     let totalAmountINR =
+//       billingType === "hourly"
+//         ? baseRate * Number(numberOfClasses)
+//         : baseRate;
+
+//     const amountPaise = Math.round(totalAmountINR * 100);
+
+//     const sessionsPerWeek = 2;
+//     const timeSlots = [];
+
+//     // Create regular class
+//     const rc = await RegularClass.create({
+//       studentId: booking.studentId,
+//       tutorId: booking.tutorId,
+//       subject: booking.subject,
+//       planType,  
+//       sessionsPerWeek,
+//       timeSlots,
+//       startDate: startDateObj,
+//       amount: baseRate,
+//       currency: "INR",
+//       paymentStatus: "pending",
+//       status: "active",
+//       currentPeriodStart: startDateObj,
+//       currentPeriodEnd: new Date(
+//         new Date(startDateObj).setMonth(startDateObj.getMonth() + 1)
+//       ),
+//     });
+
+//     booking.regularClassId = rc._id;
+//     await booking.save();
+
+//     // Create payment
+//     const payment = await Payment.create({
+//       regularClassId: rc._id,
+//       studentId: booking.studentId,
+//       tutorId: booking.tutorId,
+//       type: "subscription",
+//       amount: totalAmountINR,
+//       currency: "INR",
+//       gateway: "razorpay",
+//       status: "created",
+//       notes: `BillingType=${billingType}, Classes=${numberOfClasses || ""}, StartDate=${startDateStr}`,
+//     });
+
+//     // ----------------------------
+//     // Razorpay Order Creation 🔥
+//     // ----------------------------
+//     const razorpay = require("../services/payments/razorpay");
+
+//     // SAFE RECEIPT (always < 40 chars)
+//     const receipt = `rc_${Math.random().toString(36).substring(2, 10)}`;
+
+//     console.log("🔍 SAFE RECEIPT:", receipt, "LEN:", receipt.length);
+
+//     // Shorten notes to avoid Razorpay 40-char limit
+//     const notes = {
+//       rc: rc._id.toString().slice(-8),
+//       bk: booking._id.toString().slice(-8),
+//       bt: billingType,
+//       cls: billingType === "hourly" ? String(numberOfClasses) : "",
+//       sd: startDateStr,
+//     };
+
+//     const order = await razorpay.orders.create({
+//       amount: amountPaise,
+//       currency: "INR",
+//       receipt: receipt,
+//       notes: notes,
+//     });
+
+//     payment.gatewayOrderId = order.id;
+//     await payment.save();
+
+//     // Admin notification
+//     await createAdminNotification(
+//       "Regular Classes Started (Pending Payment)",
+//       `Student is about to pay for regular class ${rc._id}`,
+//       {
+//         bookingId: booking._id,
+//         regularClassId: rc._id,
+//         paymentId: payment._id,
+//         billingType,
+//         numberOfClasses,
+//         baseRate,
+//         amountToPay: totalAmountINR,
+//         startDate: startDateStr,
+//       }
+//     );
+
+//     // Final response
+//     return res.json({
+//       success: true,
+//       message: "Regular class created. Proceed to payment.",
+//       data: {
+//         regularClassId: rc._id,
+//         paymentId: payment._id,
+//         razorpayKey: process.env.RAZORPAY_KEY_ID,
+//         orderId: order.id,
+//         amount: amountPaise,
+//         currency: "INR",
+//         startDate: startDateStr,
+//         billingType,
+//         baseRate,
+//         totalAmountINR,
+//       },
+//     });
+//   } catch (err) {
+//     console.error("startRegularFromDemo error:", err);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Server error",
+//       error: err.message,
+//     });
+//   }
+// };
+
+
+// Tutor creates a REGULAR class instance for a student
+// POST /api/bookings/regular
+// Body: { regularClassId, date, time, note }
+
+
+
 exports.startRegularFromDemo = async (req, res) => {
   try {
     const bookingId = req.params.id;
-    const {
-      planType,
-      billingType,     // "hourly" | "monthly"
-      numberOfClasses  // required only for hourly
-    } = req.body;
-
+    const { billingType, numberOfClasses } = req.body;
     const userId = req.user.id;
 
+    // -------------------------------
+    // 1️⃣ Fetch Booking
+    // -------------------------------
     const booking = await Booking.findById(bookingId);
-
     if (!booking) {
       return res.status(404).json({ success: false, message: "Booking not found" });
     }
 
-    // Only demo can be upgraded
+    // Must be demo
     if (booking.type !== "demo") {
       return res.status(400).json({ success: false, message: "Only demo bookings can be upgraded" });
     }
 
-    // Student must complete demo first
+    // Demo must be completed
     if (booking.status !== "completed") {
       return res.status(400).json({
         success: false,
@@ -1262,15 +1499,17 @@ exports.startRegularFromDemo = async (req, res) => {
       });
     }
 
-    // Auth
-    if (booking.studentId.toString() !== userId) {
+    // Auth — Student only
+    if (String(booking.studentId) !== String(userId)) {
       return res.status(403).json({
         success: false,
         message: "You are not allowed to start regular classes for this booking",
       });
     }
 
-    // Validate billing type
+    // -------------------------------
+    // 2️⃣ Billing type validation
+    // -------------------------------
     if (!billingType || !["hourly", "monthly"].includes(billingType)) {
       return res.status(400).json({
         success: false,
@@ -1278,7 +1517,7 @@ exports.startRegularFromDemo = async (req, res) => {
       });
     }
 
-    // Hourly requires number of classes
+    // Hourly requires class count
     if (billingType === "hourly" && !numberOfClasses) {
       return res.status(400).json({
         success: false,
@@ -1286,35 +1525,23 @@ exports.startRegularFromDemo = async (req, res) => {
       });
     }
 
-    // planType required
-    if (!planType) {
-      return res.status(400).json({
-        success: false,
-        message: "planType is required",
-      });
-    }
+    // planType = billingType (your schema supports these values)
+    const planType = billingType;
 
-    // Load tutor
+    // -------------------------------
+    // 3️⃣ Tutor profile + availability
+    // -------------------------------
     const tutorProfile = await TutorProfile.findOne({
       userId: booking.tutorId,
     }).lean();
 
     if (!tutorProfile) {
-      return res.status(404).json({
-        success: false,
-        message: "Tutor profile not found",
-      });
+      return res.status(404).json({ success: false, message: "Tutor profile not found" });
     }
 
-    // Tutor availability
-    const tutorAvailability = Array.isArray(tutorProfile.availability)
-      ? tutorProfile.availability
-      : [];
+    const todayStr = new Date().toISOString().slice(0, 10);
 
-    const today = new Date();
-    const todayStr = today.toISOString().slice(0, 10);
-
-    const futureDates = tutorAvailability
+    const futureDates = (tutorProfile.availability || [])
       .filter((d) => d >= todayStr)
       .sort();
 
@@ -1328,209 +1555,13 @@ exports.startRegularFromDemo = async (req, res) => {
     const startDateStr = futureDates[0];
     const startDateObj = toStartOfDay(startDateStr);
 
-    // Compute amount
-    let baseRate = 0;
-    if (billingType === "hourly") {
-      baseRate = tutorProfile.hourlyRate || 0;
-      if (!baseRate) {
-        return res.status(400).json({
-          success: false,
-          message: "Tutor hourlyRate not set",
-        });
-      }
-    } else {
-      baseRate = tutorProfile.monthlyRate || 0;
-      if (!baseRate) {
-        return res.status(400).json({
-          success: false,
-          message: "Tutor monthlyRate not set",
-        });
-      }
-    }
-
-    let totalAmountINR =
+    // -------------------------------
+    // 4️⃣ Compute Amount
+    // -------------------------------
+    let baseRate =
       billingType === "hourly"
-        ? baseRate * Number(numberOfClasses)
-        : baseRate;
-
-    const amountPaise = Math.round(totalAmountINR * 100);
-
-    const sessionsPerWeek = 2;
-    const timeSlots = [];
-
-    // Create regular class
-    const rc = await RegularClass.create({
-      studentId: booking.studentId,
-      tutorId: booking.tutorId,
-      subject: booking.subject,
-      planType,  
-      sessionsPerWeek,
-      timeSlots,
-      startDate: startDateObj,
-      amount: baseRate,
-      currency: "INR",
-      paymentStatus: "pending",
-      status: "active",
-      currentPeriodStart: startDateObj,
-      currentPeriodEnd: new Date(
-        new Date(startDateObj).setMonth(startDateObj.getMonth() + 1)
-      ),
-    });
-
-    booking.regularClassId = rc._id;
-    await booking.save();
-
-    // Create payment
-    const payment = await Payment.create({
-      regularClassId: rc._id,
-      studentId: booking.studentId,
-      tutorId: booking.tutorId,
-      type: "subscription",
-      amount: totalAmountINR,
-      currency: "INR",
-      gateway: "razorpay",
-      status: "created",
-      notes: `BillingType=${billingType}, Classes=${numberOfClasses || ""}, StartDate=${startDateStr}`,
-    });
-
-    // ----------------------------
-    // Razorpay Order Creation 🔥
-    // ----------------------------
-    const razorpay = require("../services/payments/razorpay");
-
-    // SAFE RECEIPT (always < 40 chars)
-    const receipt = `rc_${Math.random().toString(36).substring(2, 10)}`;
-
-    console.log("🔍 SAFE RECEIPT:", receipt, "LEN:", receipt.length);
-
-    // Shorten notes to avoid Razorpay 40-char limit
-    const notes = {
-      rc: rc._id.toString().slice(-8),
-      bk: booking._id.toString().slice(-8),
-      bt: billingType,
-      cls: billingType === "hourly" ? String(numberOfClasses) : "",
-      sd: startDateStr,
-    };
-
-    const order = await razorpay.orders.create({
-      amount: amountPaise,
-      currency: "INR",
-      receipt: receipt,
-      notes: notes,
-    });
-
-    payment.gatewayOrderId = order.id;
-    await payment.save();
-
-    // Admin notification
-    await createAdminNotification(
-      "Regular Classes Started (Pending Payment)",
-      `Student is about to pay for regular class ${rc._id}`,
-      {
-        bookingId: booking._id,
-        regularClassId: rc._id,
-        paymentId: payment._id,
-        billingType,
-        numberOfClasses,
-        baseRate,
-        amountToPay: totalAmountINR,
-        startDate: startDateStr,
-      }
-    );
-
-    // Final response
-    return res.json({
-      success: true,
-      message: "Regular class created. Proceed to payment.",
-      data: {
-        regularClassId: rc._id,
-        paymentId: payment._id,
-        razorpayKey: process.env.RAZORPAY_KEY_ID,
-        orderId: order.id,
-        amount: amountPaise,
-        currency: "INR",
-        startDate: startDateStr,
-        billingType,
-        baseRate,
-        totalAmountINR,
-      },
-    });
-  } catch (err) {
-    console.error("startRegularFromDemo error:", err);
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-      error: err.message,
-    });
-  }
-};
-
-
-// Tutor creates a REGULAR class instance for a student
-// POST /api/bookings/regular
-// Body: { regularClassId, date, time, note }
-exports.startRegularFromDemo = async (req, res) => {
-  try {
-    const bookingId = req.params.id;
-    const { billingType, numberOfClasses } = req.body;
-    const userId = req.user.id;
-
-    const booking = await Booking.findById(bookingId);
-    if (!booking) {
-      return res.status(404).json({ success: false, message: "Booking not found" });
-    }
-
-    // Only demo can be upgraded
-    if (booking.type !== "demo") {
-      return res.status(400).json({ success: false, message: "Only demo bookings can be upgraded" });
-    }
-
-    // Demo must be completed
-    if (booking.status !== "completed") {
-      return res.status(400).json({ success: false, message: "Demo must be completed before subscribing" });
-    }
-
-    // Auth
-    if (booking.studentId.toString() !== userId) {
-      return res.status(403).json({ success: false, message: "Not allowed" });
-    }
-
-    // Billing type validation
-    if (!billingType || !["hourly", "monthly"].includes(billingType)) {
-      return res.status(400).json({ success: false, message: "Invalid billingType" });
-    }
-
-    if (billingType === "hourly" && !numberOfClasses) {
-      return res.status(400).json({
-        success: false,
-        message: "numberOfClasses is required for hourly billing",
-      });
-    }
-
-    // planType = billingType (because your enum only accepts these)
-    const planType = billingType;
-
-    const tutorProfile = await TutorProfile.findOne({ userId: booking.tutorId }).lean();
-    if (!tutorProfile) {
-      return res.status(404).json({ success: false, message: "Tutor profile not found" });
-    }
-
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const futureDates = (tutorProfile.availability || []).filter(d => d >= todayStr).sort();
-
-    if (!futureDates.length) {
-      return res.status(400).json({
-        success: false,
-        message: "Tutor has no upcoming availability",
-      });
-    }
-
-    const startDateStr = futureDates[0];
-    const startDateObj = toStartOfDay(startDateStr);
-
-    let baseRate = billingType === "hourly"
-      ? tutorProfile.hourlyRate
-      : tutorProfile.monthlyRate;
+        ? tutorProfile.hourlyRate
+        : tutorProfile.monthlyRate;
 
     if (!baseRate) {
       return res.status(400).json({
@@ -1544,13 +1575,17 @@ exports.startRegularFromDemo = async (req, res) => {
         ? baseRate * Number(numberOfClasses)
         : baseRate;
 
-    const amountPaise = totalAmountINR * 100;
+    const amountPaise = Math.round(totalAmountINR * 100);
 
+    // -------------------------------
+    // 5️⃣ Create Regular Class
+    // -------------------------------
     const rc = await RegularClass.create({
       studentId: booking.studentId,
       tutorId: booking.tutorId,
       subject: booking.subject,
       planType,
+      classCount: billingType === "hourly" ? Number(numberOfClasses) : null, // 🔥 store class count
       sessionsPerWeek: 2,
       timeSlots: [],
       startDate: startDateObj,
@@ -1559,12 +1594,18 @@ exports.startRegularFromDemo = async (req, res) => {
       paymentStatus: "pending",
       status: "active",
       currentPeriodStart: startDateObj,
-      currentPeriodEnd: new Date(new Date(startDateObj).setMonth(startDateObj.getMonth() + 1)),
+      currentPeriodEnd: new Date(
+        new Date(startDateObj).setMonth(startDateObj.getMonth() + 1)
+      ),
     });
 
+    // Link regular class → booking
     booking.regularClassId = rc._id;
     await booking.save();
 
+    // -------------------------------
+    // 6️⃣ Create Payment record
+    // -------------------------------
     const payment = await Payment.create({
       regularClassId: rc._id,
       studentId: booking.studentId,
@@ -1577,15 +1618,17 @@ exports.startRegularFromDemo = async (req, res) => {
       notes: `BillingType=${billingType}, Classes=${numberOfClasses || ""}, StartDate=${startDateStr}`,
     });
 
-    // 🔥 FIXED RECEIPT (MUST BE < 40 CHARS)
+    // -------------------------------
+    // 7️⃣ Razorpay Order Creation
+    // -------------------------------
+    const razorpay = require("../services/payments/razorpay");
+
     const receipt = `rc_${Math.random().toString(36).substring(2, 10)}`;
 
-    const razorpay = require("../services/payments/razorpay");
-    
     const order = await razorpay.orders.create({
       amount: amountPaise,
       currency: "INR",
-      receipt: receipt,   // <<-- FIXED
+      receipt,
       notes: {
         rc: rc._id.toString().slice(-8),
         bk: booking._id.toString().slice(-8),
@@ -1598,6 +1641,27 @@ exports.startRegularFromDemo = async (req, res) => {
     payment.gatewayOrderId = order.id;
     await payment.save();
 
+    // -------------------------------
+    // 8️⃣ Admin Notification
+    // -------------------------------
+    await createAdminNotification(
+      "Regular Classes Started (Pending Payment)",
+      `Student is subscribing to regular classes for booking ${booking._id}`,
+      {
+        bookingId: booking._id,
+        regularClassId: rc._id,
+        paymentId: payment._id,
+        billingType,
+        numberOfClasses,
+        baseRate,
+        totalAmountINR,
+        startDate: startDateStr,
+      }
+    );
+
+    // -------------------------------
+    // 9️⃣ Response
+    // -------------------------------
     return res.json({
       success: true,
       message: "Regular class created. Proceed to payment.",
@@ -1614,9 +1678,14 @@ exports.startRegularFromDemo = async (req, res) => {
         totalAmountINR,
       },
     });
+
   } catch (err) {
     console.error("startRegularFromDemo error:", err);
-    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message,
+    });
   }
 };
 
