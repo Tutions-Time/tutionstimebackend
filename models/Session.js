@@ -30,12 +30,25 @@ const sessionSchema = new mongoose.Schema(
       default: "scheduled",
     },
 
+    // simple present/absent flag
     attendance: {
       type: String,
       enum: ["present", "absent", "not-marked"],
       default: "not-marked",
     },
 
+    // NEW: more detailed attendance timestamps
+    studentJoinTime: { type: Date },
+    studentLeaveTime: { type: Date },
+    tutorJoinTime: { type: Date },
+    tutorLeaveTime: { type: Date },
+
+    // NEW: URLs for learning resources
+    recordingUrl: { type: String },
+    notesUrl: { type: String },
+    assignmentUrl: { type: String },
+
+    // existing
     tutorNotes: { type: String },
   },
   { timestamps: true }

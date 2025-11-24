@@ -1,11 +1,11 @@
+// controllers/regularClassController.js
+
 const RegularClass = require("../models/RegularClass");
 const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
 const Session = require("../models/Session");
 
-/**
- * Helper: build Date from "YYYY-MM-DD" + "HH:MM"
- */
+
 function buildDateTime(dateStr, timeStr) {
   const [year, month, day] = dateStr.split("-").map(Number);
   const [H, M] = timeStr.split(":").map(Number);
@@ -15,16 +15,13 @@ function buildDateTime(dateStr, timeStr) {
   return d;
 }
 
-/**
- * 1️⃣ Tutor: Get all students with PAID + ACTIVE regular classes
- * GET /api/regular/tutor/students
- */
+
 exports.getTutorRegularStudents = async (req, res) => {
   try {
     const tutorUserId = req.user.id; // this is User._id
 
     const regularClasses = await RegularClass.find({
-      tutorId: tutorUserId,       // you store tutorId = User._id in RegularClass
+      tutorId: tutorUserId, // you store tutorId = User._id in RegularClass
       paymentStatus: "paid",
       status: "active",
     })
@@ -57,7 +54,7 @@ exports.getTutorRegularStudents = async (req, res) => {
         studentName: s.name || "Student",
         photoUrl: s.photoUrl || null,
         subject: rc.subject,
-        planType: rc.planType,     
+        planType: rc.planType,
         startDate: rc.startDate,
         paymentStatus: rc.paymentStatus,
         status: rc.status,
@@ -72,17 +69,7 @@ exports.getTutorRegularStudents = async (req, res) => {
   }
 };
 
-/**
- * 2️⃣ Tutor: Schedule sessions based on:
- *    - tutor availability dates
- *    - regularClass.planType ("hourly" or "monthly")
- *    - hourly: numberOfClasses from body
- *    - monthly: all available dates of that month
- *
- * POST /api/regular/tutor/regular-class/:id/schedule
- * Body:
- *    { time: "18:00", numberOfClasses?: 4 }
- */
+
 exports.scheduleRegularClassSessions = async (req, res) => {
   console.log("scheduleRegularClassSessions called");
   try {
@@ -114,7 +101,7 @@ exports.scheduleRegularClassSessions = async (req, res) => {
       });
     }
 
-    // Ensure payment is completed
+    // Ensure payment is completed and class active
     if (rc.paymentStatus !== "paid" || rc.status !== "active") {
       return res.status(400).json({
         success: false,
@@ -153,7 +140,7 @@ exports.scheduleRegularClassSessions = async (req, res) => {
     // 🔥 1️⃣ HOURLY PLAN (automatic)
     // ------------------------------
     if (rc.planType === "hourly") {
-      const n = rc.classCount; // 💥 Use classCount stored earlier
+      const n = rc.classCount; // Use classCount stored earlier
 
       if (!n || n <= 0) {
         return res.status(400).json({
@@ -185,9 +172,7 @@ exports.scheduleRegularClassSessions = async (req, res) => {
           message: "No availability for this month",
         });
       }
-    }
-
-    else {
+    } else {
       return res.status(400).json({
         success: false,
         message: "PlanType must be hourly or monthly",
@@ -195,7 +180,7 @@ exports.scheduleRegularClassSessions = async (req, res) => {
     }
 
     // ------------------------------
-    // 🧹 Clear old sessions
+    // 🧹 Clear old sessions (if rescheduling)
     // ------------------------------
     await Session.deleteMany({ regularClassId: rcId });
 
@@ -225,7 +210,6 @@ exports.scheduleRegularClassSessions = async (req, res) => {
       message: "Sessions auto-scheduled successfully",
       data: created,
     });
-
   } catch (err) {
     console.error("scheduleRegularClassSessions error:", err);
     return res.status(500).json({
@@ -235,13 +219,14 @@ exports.scheduleRegularClassSessions = async (req, res) => {
   }
 };
 
+
 exports.getStudentRegularClasses = async (req, res) => {
   try {
     const studentUserId = req.user.id; // this is User._id
 
     // 1) Find all PAID + ACTIVE regular classes for this student
     const regularClasses = await RegularClass.find({
-      studentId: studentUserId,      // you store studentId = User._id in RegularClass
+      studentId: studentUserId, // you store studentId = User._id in RegularClass
       paymentStatus: "paid",
       status: "active",
     })
@@ -263,37 +248,68 @@ exports.getStudentRegularClasses = async (req, res) => {
 
     const tutorMap = new Map(tutors.map((t) => [String(t.userId), t]));
 
-    // 3) Load upcoming sessions for each regular class
+    // 3) Load sessions for each regular class
     const rcIds = regularClasses.map((rc) => rc._id);
     const now = new Date();
 
     const sessions = await Session.find({
       regularClassId: { $in: rcIds },
       status: "scheduled",
-      startDateTime: { $gte: now },
     })
       .sort({ startDateTime: 1 })
       .lean();
 
-    const nextSessionMap = new Map();  // regularClassId -> next session
+    const nextSessionMap = new Map();  // regularClassId -> next upcoming session
     const sessionsCountMap = new Map(); // regularClassId -> total upcoming sessions
 
     for (const s of sessions) {
       const key = String(s.regularClassId);
+      const sStart = new Date(s.startDateTime);
 
-      // first one in sorted list is the "next" session
-      if (!nextSessionMap.has(key)) {
-        nextSessionMap.set(key, s);
+      // Count only future sessions for upcomingSessionsCount
+      if (sStart >= now) {
+        sessionsCountMap.set(
+          key,
+          (sessionsCountMap.get(key) || 0) + 1
+        );
+
+        // first future session in sorted list is the "next" session
+        if (!nextSessionMap.has(key)) {
+          nextSessionMap.set(key, s);
+        }
       }
-
-      sessionsCountMap.set(key, (sessionsCountMap.get(key) || 0) + 1);
     }
+
+    // Join window config
+    const CLASS_DURATION_MIN = 60; // assume 1-hour class
+    const JOIN_BEFORE_MIN = 5;     // student can join 5 min before start
+    const EXPIRE_AFTER_MIN = 5;    // link valid 5 min after end
 
     // 4) Build response for frontend
     const enriched = regularClasses.map((rc) => {
       const key = String(rc._id);
       const t = tutorMap.get(String(rc.tutorId)) || {};
       const nextSession = nextSessionMap.get(key) || null;
+
+      let canJoin = false;
+      let scheduledTime = null; // simple "HH:MM"
+
+      if (nextSession) {
+        const startDate = new Date(nextSession.startDateTime);
+        const startMs = startDate.getTime();
+        const endMs = startMs + CLASS_DURATION_MIN * 60 * 1000;
+        const nowMs = now.getTime();
+
+        const joinOpenAt = startMs - JOIN_BEFORE_MIN * 60 * 1000;
+        const joinCloseAt = endMs + EXPIRE_AFTER_MIN * 60 * 1000;
+
+        if (nowMs >= joinOpenAt && nowMs <= joinCloseAt) {
+          canJoin = true; // link is "live" for present class
+        }
+
+        // schedule time as "HH:MM"
+        scheduledTime = startDate.toISOString().slice(11, 16);
+      }
 
       return {
         regularClassId: rc._id,
@@ -314,9 +330,11 @@ exports.getStudentRegularClasses = async (req, res) => {
         nextSession: nextSession
           ? {
               sessionId: nextSession._id,
-              startDateTime: nextSession.startDateTime,
+              startDateTime: nextSession.startDateTime, // full datetime
+              scheduledTime,                            
               meetingLink: nextSession.meetingLink || null,
               status: nextSession.status,
+              canJoin,                                  
             }
           : null,
 

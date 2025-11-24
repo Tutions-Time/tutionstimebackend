@@ -1,319 +1,260 @@
 // controllers/sessionController.js
-const mongoose = require("mongoose");
+
 const Session = require("../models/Session");
 const RegularClass = require("../models/RegularClass");
-const TutorProfile = require("../models/TutorProfile");
-const StudentProfile = require("../models/StudentProfile");
 
 /**
- * Helper: build Date from "YYYY-MM-DD" + "HH:mm"
+ * Helper: find session and check tutor ownership
  */
-function buildDateTime(dateStr, timeStr) {
-  const [hourStr, minStr] = (timeStr || "00:00").split(":");
-  const d = new Date(dateStr);
-  d.setHours(parseInt(hourStr, 10) || 0, parseInt(minStr, 10) || 0, 0, 0);
-  return d;
-}
-
-/**
- * Helper: ensure tutor owns this RegularClass
- */
-async function loadRegularClassForTutor(regularClassId, tutorUserId) {
-  const tutorProfile = await TutorProfile.findOne({ userId: tutorUserId });
-  if (!tutorProfile) {
-    throw new Error("Tutor profile not found");
-  }
-
-  const rc = await RegularClass.findById(regularClassId);
-  if (!rc) {
-    const err = new Error("Regular class not found");
+async function findSessionForTutor(sessionId, tutorUserId) {
+  const session = await Session.findById(sessionId).populate("regularClassId");
+  if (!session) {
+    const err = new Error("Session not found");
     err.statusCode = 404;
     throw err;
   }
 
-  if (!rc.tutorId.equals(tutorProfile._id)) {
-    const err = new Error("You are not the tutor of this class");
+  // RegularClass stores tutorId = User._id
+  if (String(session.regularClassId.tutorId) !== String(tutorUserId)) {
+    const err = new Error("Not authorized to modify this session");
     err.statusCode = 403;
     throw err;
   }
-
-  return { rc, tutorProfile };
-}
-
-/**
- * Helper: check date against tutor availability (exact date strings)
- * TutorProfile.availability = ["2025-12-01", "2025-12-03", ...]
- */
-function assertDateInAvailability(tutorProfile, dateStr) {
-  const availability = Array.isArray(tutorProfile.availability)
-    ? tutorProfile.availability
-    : [];
-
-  if (!availability.includes(dateStr)) {
-    const err = new Error(
-      `You can only schedule on your available dates. ${dateStr} is not in your availability.`
-    );
-    err.statusCode = 400;
-    throw err;
-  }
-}
-
-/**
- * Internal helper: actually create a Session document
- */
-async function createOneSession({ rc, tutorProfile, date, startTime, endTime }) {
-  // Validate with tutor availability
-  assertDateInAvailability(tutorProfile, date);
-
-  const studentId = rc.studentId; // StudentProfile _id
-  const tutorId = rc.tutorId; // TutorProfile _id
-
-  const startDateTime = buildDateTime(date, startTime);
-  const endDateTime = endTime ? buildDateTime(date, endTime) : null;
-
-  // Pre-generate _id so we can embed it in meeting link
-  const _id = new mongoose.Types.ObjectId();
-  const meetingLink = `https://meet.jit.si/tuitiontime-${_id.toString()}`;
-
-  const session = await Session.create({
-    _id,
-    regularClassId: rc._id,
-    studentId,
-    tutorId,
-    startDateTime,
-    meetingLink,
-    status: "scheduled",
-    attendance: "not-marked",
-    tutorNotes: "",
-    ...(endDateTime ? { endDateTime } : {}),
-  });
 
   return session;
 }
 
 /**
- * POST /api/sessions/create
- * Tutor creates a single session for a RegularClass
- * Body: { regularClassId, date, startTime, endTime }
+ * Tutor: upload class recording for a session
+ * POST /api/sessions/:id/upload-recording
+ * Field: recording (file)
  */
-exports.createSession = async (req, res) => {
+exports.uploadRecording = async (req, res) => {
   try {
-    const { regularClassId, date, startTime, endTime } = req.body;
     const tutorUserId = req.user.id;
+    const sessionId = req.params.id;
 
-    if (!regularClassId || !date || !startTime) {
+    if (!req.file || !req.file.location) {
       return res.status(400).json({
         success: false,
-        message: "regularClassId, date, startTime are required",
+        message: "Recording file is required",
       });
     }
 
-    const { rc, tutorProfile } = await loadRegularClassForTutor(
-      regularClassId,
-      tutorUserId
-    );
+    const session = await findSessionForTutor(sessionId, tutorUserId);
 
-    // (Optional) only allow sessions if payment is done
-    if (rc.paymentStatus !== "paid") {
-      return res.status(400).json({
-        success: false,
-        message: "You can create live classes only after payment is completed",
-      });
-    }
-
-    const session = await createOneSession({
-      rc,
-      tutorProfile,
-      date,
-      startTime,
-      endTime,
-    });
+    session.recordingUrl = req.file.location;
+    await session.save();
 
     return res.json({
       success: true,
+      message: "Recording uploaded successfully",
+      data: {
+        sessionId: session._id,
+        recordingUrl: session.recordingUrl,
+      },
+    });
+  } catch (err) {
+    console.error("uploadRecording error:", err);
+    return res
+      .status(err.statusCode || 500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+/**
+ * Tutor: upload notes for a session
+ * POST /api/sessions/:id/upload-notes
+ * Field: notes (file)
+ */
+exports.uploadNotes = async (req, res) => {
+  try {
+    const tutorUserId = req.user.id;
+    const sessionId = req.params.id;
+
+    if (!req.file || !req.file.location) {
+      return res.status(400).json({
+        success: false,
+        message: "Notes file is required",
+      });
+    }
+
+    const session = await findSessionForTutor(sessionId, tutorUserId);
+
+    session.notesUrl = req.file.location;
+    await session.save();
+
+    return res.json({
+      success: true,
+      message: "Notes uploaded successfully",
+      data: {
+        sessionId: session._id,
+        notesUrl: session.notesUrl,
+      },
+    });
+  } catch (err) {
+    console.error("uploadNotes error:", err);
+    return res
+      .status(err.statusCode || 500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+/**
+ * Tutor: upload assignment for a session
+ * POST /api/sessions/:id/upload-assignment
+ * Field: assignment (file)
+ */
+exports.uploadAssignment = async (req, res) => {
+  try {
+    const tutorUserId = req.user.id;
+    const sessionId = req.params.id;
+
+    if (!req.file || !req.file.location) {
+      return res.status(400).json({
+        success: false,
+        message: "Assignment file is required",
+      });
+    }
+
+    const session = await findSessionForTutor(sessionId, tutorUserId);
+
+    session.assignmentUrl = req.file.location;
+    await session.save();
+
+    return res.json({
+      success: true,
+      message: "Assignment uploaded successfully",
+      data: {
+        sessionId: session._id,
+        assignmentUrl: session.assignmentUrl,
+      },
+    });
+  } catch (err) {
+    console.error("uploadAssignment error:", err);
+    return res
+      .status(err.statusCode || 500)
+      .json({ success: false, message: err.message || "Server error" });
+  }
+};
+
+/**
+ * Attendance tracking
+ * POST /api/sessions/:id/attendance
+ * Body: { action: "join" | "leave" }
+ * Role-based: student or tutor
+ */
+exports.markAttendanceEvent = async (req, res) => {
+  try {
+    const sessionId = req.params.id;
+    const userId = req.user.id;
+    const role = req.user.role; // assuming auth middleware sets this
+    const { action } = req.body;
+
+    if (!["join", "leave"].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: "action must be 'join' or 'leave'",
+      });
+    }
+
+    const session = await Session.findById(sessionId).populate("regularClassId");
+    if (!session) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Session not found" });
+    }
+
+    const now = new Date();
+
+    // For safety, verify that this user belongs to the session
+    if (role === "student") {
+      if (String(session.regularClassId.studentId) !== String(userId)) {
+        return res
+          .status(403)
+          .json({ success: false, message: "Not your session" });
+      }
+
+      if (action === "join") {
+        session.studentJoinTime = now;
+      } else {
+        session.studentLeaveTime = now;
+      }
+    } else if (role === "tutor") {
+      if (String(session.regularClassId.tutorId) !== String(userId)) {
+        return res
+          .status(403)
+          .json({ success: false, message: "Not your session" });
+      }
+
+      if (action === "join") {
+        session.tutorJoinTime = now;
+      } else {
+        session.tutorLeaveTime = now;
+      }
+    } else {
+      return res
+        .status(400)
+        .json({ success: false, message: "Unsupported role for attendance" });
+    }
+
+    // Simple present/absent rule:
+    // if both studentJoinTime and tutorJoinTime exist => present
+    if (session.studentJoinTime && session.tutorJoinTime) {
+      session.attendance = "present";
+    }
+
+    await session.save();
+
+    return res.json({
+      success: true,
+      message: "Attendance event recorded",
+      data: {
+        sessionId: session._id,
+        attendance: session.attendance,
+        studentJoinTime: session.studentJoinTime,
+        studentLeaveTime: session.studentLeaveTime,
+        tutorJoinTime: session.tutorJoinTime,
+        tutorLeaveTime: session.tutorLeaveTime,
+      },
+    });
+  } catch (err) {
+    console.error("markAttendanceEvent error:", err);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * Tutor: mark session as completed
+ * POST /api/sessions/:id/complete
+ */
+exports.markSessionCompleted = async (req, res) => {
+  try {
+    const tutorUserId = req.user.id;
+    const sessionId = req.params.id;
+
+    const session = await findSessionForTutor(sessionId, tutorUserId);
+
+    session.status = "completed";
+
+    // if still not marked, but student joined, treat as present
+    if (session.attendance === "not-marked" && session.studentJoinTime) {
+      session.attendance = "present";
+    }
+
+    await session.save();
+
+    return res.json({
+      success: true,
+      message: "Session marked as completed",
       data: session,
     });
   } catch (err) {
-    console.error("createSession error:", err);
-    return res.status(err.statusCode || 500).json({
-      success: false,
-      message: err.message || "Failed to create session",
-    });
+    console.error("markSessionCompleted error:", err);
+    return res
+      .status(err.statusCode || 500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
-
-/**
- * POST /api/sessions/bulk-create
- * Tutor creates multiple sessions at once
- * Body: { regularClassId, sessions: [{ date, startTime, endTime }, ...] }
- */
-exports.bulkCreateSessions = async (req, res) => {
-  try {
-    const { regularClassId, sessions } = req.body;
-    const tutorUserId = req.user.id;
-
-    if (!regularClassId || !Array.isArray(sessions) || !sessions.length) {
-      return res.status(400).json({
-        success: false,
-        message: "regularClassId and non-empty sessions[] are required",
-      });
-    }
-
-    const { rc, tutorProfile } = await loadRegularClassForTutor(
-      regularClassId,
-      tutorUserId
-    );
-
-    if (rc.paymentStatus !== "paid") {
-      return res.status(400).json({
-        success: false,
-        message: "You can create live classes only after payment is completed",
-      });
-    }
-
-    const created = [];
-    for (const s of sessions) {
-      if (!s.date || !s.startTime) {
-        continue; // skip invalid rows
-      }
-      const session = await createOneSession({
-        rc,
-        tutorProfile,
-        date: s.date,
-        startTime: s.startTime,
-        endTime: s.endTime,
-      });
-      created.push(session);
-    }
-
-    return res.json({
-      success: true,
-      count: created.length,
-      data: created,
-    });
-  } catch (err) {
-    console.error("bulkCreateSessions error:", err);
-    return res.status(err.statusCode || 500).json({
-      success: false,
-      message: err.message || "Failed to create sessions",
-    });
-  }
-};
-
-/**
- * GET /api/sessions/student
- * Student sees all regular sessions for paid RegularClasses
- */
-exports.getStudentSessions = async (req, res) => {
-  try {
-    const userId = req.user.id;
-
-    const studentProfile = await StudentProfile.findOne({ userId });
-    if (!studentProfile) {
-      return res.status(400).json({
-        success: false,
-        message: "Student profile not found",
-      });
-    }
-
-    // Only show sessions for RegularClasses where payment is done
-    const paidRegularClasses = await RegularClass.find({
-      studentId: studentProfile._id,
-      paymentStatus: "paid",
-      status: "active",
-    }).select("_id");
-
-    if (!paidRegularClasses.length) {
-      return res.json({ success: true, data: [] });
-    }
-
-    const rcIds = paidRegularClasses.map((rc) => rc._id);
-
-    const sessions = await Session.find({
-      regularClassId: { $in: rcIds },
-    })
-      .sort({ startDateTime: 1 })
-      .lean();
-
-    return res.json({
-      success: true,
-      data: sessions,
-    });
-  } catch (err) {
-    console.error("getStudentSessions error:", err);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch sessions",
-    });
-  }
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// const Session = require("../models/Session");
-// const { createAdminNotification } = require("../services/adminNotification");
-
-// /**
-//  * PATCH /api/sessions/:id/attendance
-//  * Body: { attendance: "present" | "absent", notes? }
-//  * Only tutor of that class can mark
-//  */
-// exports.markAttendance = async (req, res) => {
-//   try {
-//     const sessionId = req.params.id;
-//     const { attendance, notes } = req.body;
-//     const userId = req.user.id;
-
-//     if (!["present", "absent"].includes(attendance)) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "attendance must be 'present' or 'absent'",
-//       });
-//     }
-
-//     const session = await Session.findById(sessionId);
-//     if (!session) {
-//       return res
-//         .status(404)
-//         .json({ success: false, message: "Session not found" });
-//     }
-
-//     // TODO: map userId -> tutorProfileId
-//     // For now just allow; in your project actually check tutorId ownership
-//     session.attendance = attendance;
-//     session.status = "completed";
-//     session.tutorNotes = notes || "";
-//     await session.save();
-
-//     await createAdminNotification(
-//       "Class attendance marked",
-//       `Session ${session._id} marked as ${attendance}`,
-//       { sessionId: session._id, regularClassId: session.regularClassId }
-//     );
-
-//     return res.json({
-//       success: true,
-//       message: "Attendance updated",
-//       data: session,
-//     });
-//   } catch (err) {
-//     console.error("markAttendance error:", err);
-//     return res
-//       .status(500)
-//       .json({ success: false, message: "Server error", error: err.message });
-//   }
-// };
-
-
-

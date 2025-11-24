@@ -1,40 +1,50 @@
 // routes/sessionRoutes.js
 const express = require("express");
 const router = express.Router();
-const sessionController = require("../controllers/sessionController");
-const { authenticate, checkRole } = require("../middleware/auth");
 
-// All session routes require login
+const { authenticate, checkRole } = require("../middleware/auth");
+const uploadS3 = require("../middleware/uploadS3");
+const sessionController = require("../controllers/sessionController");
+
+// All routes require auth
 router.use(authenticate);
 
-/**
- * Tutor creates a single session
- * POST /api/sessions/create
- */
+// Tutor: upload recording
 router.post(
-  "/create",
+  "/:id/upload-recording",
   checkRole(["tutor"]),
-  sessionController.createSession
+  uploadS3.single("recording"),
+  sessionController.uploadRecording
 );
 
-/**
- * Tutor bulk creates multiple sessions
- * POST /api/sessions/bulk-create
- */
+// Tutor: upload notes
 router.post(
-  "/bulk-create",
+  "/:id/upload-notes",
   checkRole(["tutor"]),
-  sessionController.bulkCreateSessions
+  uploadS3.single("notes"),
+  sessionController.uploadNotes
 );
 
-/**
- * Student sees all their regular sessions (only after payment)
- * GET /api/sessions/student
- */
-router.get(
-  "/student",
-  checkRole(["student"]),
-  sessionController.getStudentSessions
+// Tutor: upload assignment
+router.post(
+  "/:id/upload-assignment",
+  checkRole(["tutor"]),
+  uploadS3.single("assignment"),
+  sessionController.uploadAssignment
+);
+
+// Student & Tutor: attendance join/leave
+router.post(
+  "/:id/attendance",
+  checkRole(["student", "tutor"]),
+  sessionController.markAttendanceEvent
+);
+
+// Tutor: mark session as completed
+router.post(
+  "/:id/complete",
+  checkRole(["tutor"]),
+  sessionController.markSessionCompleted
 );
 
 module.exports = router;
