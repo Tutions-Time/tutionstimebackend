@@ -4,12 +4,19 @@ const router = express.Router();
 const { authenticate, checkRole } = require("../middleware/auth");
 const paymentController = require("../controllers/paymentController");
 
-// student: create subscription-style order
 router.post(
   "/create-subscription-order",
   authenticate,
   checkRole(["student"]),
   paymentController.createSubscriptionOrder
+);
+
+
+router.post(
+  "/verify",
+  authenticate,
+  checkRole(["student"]),
+  paymentController.verifyPayment
 );
 // admin payouts
 router.get(
@@ -25,5 +32,7 @@ router.patch(
   checkRole(["admin"]),
   paymentController.settlePayout
 );
+
+// Duplicate route removed to avoid confusion
 
 module.exports = router;

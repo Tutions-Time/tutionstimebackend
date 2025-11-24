@@ -252,6 +252,29 @@ exports.generateTutorPayouts = async (req, res) => {
 };
 
 /**
+ * Admin: list tutor payout records
+ * GET /api/payments/admin/payouts
+ */
+exports.listTutorPayouts = async (req, res) => {
+  try {
+    const { status, tutorId, regularClassId } = req.query;
+    const filter = { type: "payout" };
+
+    if (status) filter.status = status;
+    if (tutorId) filter.tutorId = tutorId;
+    if (regularClassId) filter.regularClassId = regularClassId;
+
+    const payouts = await Payment.find(filter).sort({ createdAt: -1 });
+    res.json({ success: true, data: payouts });
+  } catch (err) {
+    console.error("listTutorPayouts error:", err);
+    res
+      .status(500)
+      .json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+/**
  * Admin: mark payout as settled after sending to tutor
  * PATCH /api/admin/payouts/:id/settle
  */
