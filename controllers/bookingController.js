@@ -1571,11 +1571,6 @@ exports.startRegularFromDemo = async (req, res) => {
         await Payment.updateOne({ _id: paymentId }, { gatewayOrderId: order.id });
       }
 
-      // Convert original booking to regular for UI filtering
-      booking.type = "regular";
-      booking.status = "confirmed";
-      await booking.save();
-
       return res.json({
         success: true,
         message: "Regular class already exists. Proceed to payment.",
@@ -1698,8 +1693,6 @@ exports.startRegularFromDemo = async (req, res) => {
 
     // Link regular class → booking (keep original demo type for history)
     booking.regularClassId = rc._id;
-    booking.type = "regular"; // convert demo → regular
-    booking.status = "confirmed"; // mark as confirmed (pending payment)
     await booking.save();
 
     // -------------------------------
