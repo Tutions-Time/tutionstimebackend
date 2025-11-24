@@ -2,6 +2,10 @@ const walletService = require('../services/payments/walletService');
 
 exports.getMyWallet = async (req, res) => {
   try {
+    if (req.user?.role === 'admin') {
+      const adminWallet = await walletService.getAdminWallet();
+      return res.status(200).json({ success: true, data: adminWallet });
+    }
     const wallet = await walletService.getWallet(req.user.id);
     res.status(200).json({ success: true, data: wallet });
   } catch (err) {

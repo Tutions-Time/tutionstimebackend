@@ -62,6 +62,13 @@ const regularClassSchema = new mongoose.Schema(
       default: "pending",
     },
 
+    // Tutor payout status for the current billing period
+    tutorPaymentStatus: {
+      type: String,
+      enum: ["locked", "released"],
+      default: "locked",
+    },
+
     status: {
       type: String,
       enum: ["active", "paused", "ended"],

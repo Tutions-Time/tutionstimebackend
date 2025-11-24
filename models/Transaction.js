@@ -29,9 +29,11 @@ const transactionSchema = new mongoose.Schema({
       type: mongoose.Schema.Types.ObjectId
     }
   },
+  regularClassId: { type: mongoose.Schema.Types.ObjectId, ref: 'RegularClass' },
+  paymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' },
   status: {
     type: String,
-    enum: ['pending', 'completed', 'failed'],
+    enum: ['pending', 'completed', 'failed', 'locked'],
     default: 'pending'
   }
 }, {

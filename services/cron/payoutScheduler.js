@@ -1,0 +1,71 @@
+const cron = require("node-cron");
+const Payment = require("../../models/Payment");
+const RegularClass = require("../../models/RegularClass");
+const walletService = require("../payments/walletService");
+const { createAdminNotification } = require("../adminNotification");
+
+
+async function runPayoutRelease() {
+  const now = new Date();
+  const subs = await Payment.find({
+    type: "subscription",
+    status: "paid",
+    releaseAt: { $lte: now },
+    $or: [{ payoutGenerated: { $exists: false } }, { payoutGenerated: false }],
+  }).lean();
+
+  if (!subs.length) return;
+
+  for (const sub of subs) {
+    try {
+      const amount = sub.amount;
+      const commissionPercent = 25;
+      const commissionAmount = (amount * commissionPercent) / 100;
+      const tutorNetAmount = amount - commissionAmount;
+
+      const payout = await Payment.create({
+        regularClassId: sub.regularClassId,
+        studentId: sub.studentId,
+        tutorId: sub.tutorId,
+        type: "payout",
+        amount: sub.amount,
+        currency: sub.currency,
+        commissionPercent,
+        commissionAmount,
+        tutorNetAmount,
+        periodStart: sub.periodStart,
+        periodEnd: sub.periodEnd,
+        status: "settled",
+        notes: "Auto payout released after lock period",
+      });
+
+      await walletService.adminDecreaseHold(tutorNetAmount);
+      await walletService.adminDebit(tutorNetAmount, "Tutor payout released", { type: "payout", id: payout._id });
+      await walletService.releasePendingToAvailable(sub.tutorId, "tutor", tutorNetAmount, "Payout released", { type: "payout", id: payout._id });
+
+      await Payment.updateOne({ _id: sub._id }, { payoutGenerated: true, payoutId: payout._id });
+
+      await RegularClass.updateOne({ _id: sub.regularClassId }, { tutorPaymentStatus: "released" });
+
+      await createAdminNotification(
+        "Tutor payout auto-released",
+        `Payout ${payout._id} settled for class ${sub.regularClassId}`,
+        { payoutId: payout._id, regularClassId: sub.regularClassId, tutorId: sub.tutorId, amount: tutorNetAmount }
+      );
+    } catch (err) {
+      console.error("Auto payout error:", err.message);
+    }
+  }
+}
+
+exports.start = function startPayoutScheduler() {
+  cron.schedule("0 3 * * *", async () => {
+    try {
+      await runPayoutRelease();
+    } catch (err) {
+      console.error("Payout scheduler run failed:", err.message);
+    }
+  });
+};
+
+exports.runOnce = runPayoutRelease;

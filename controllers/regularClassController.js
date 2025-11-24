@@ -57,6 +57,7 @@ exports.getTutorRegularStudents = async (req, res) => {
         planType: rc.planType,
         startDate: rc.startDate,
         paymentStatus: rc.paymentStatus,
+        tutorPaymentStatus: rc.tutorPaymentStatus || "locked",
         status: rc.status,
         scheduleStatus: rc.scheduleStatus ?? "not-scheduled",
       };
@@ -318,6 +319,7 @@ exports.getStudentRegularClasses = async (req, res) => {
         classCount: rc.classCount,             // for hourly plans
         startDate: rc.startDate,
         paymentStatus: rc.paymentStatus,
+        tutorPaymentStatus: rc.tutorPaymentStatus || "locked",
         status: rc.status,                     // active / paused / ended
         scheduleStatus: rc.scheduleStatus ?? "not-scheduled",
 

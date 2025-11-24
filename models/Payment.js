@@ -48,6 +48,11 @@ const paymentSchema = new mongoose.Schema(
       default: "created",
     },
 
+    // Payout tracking for subscriptions
+    payoutGenerated: { type: Boolean, default: false },
+    payoutId: { type: mongoose.Schema.Types.ObjectId, ref: "Payment" },
+    releaseAt: { type: Date },
+
     notes: { type: String },
   },
   { timestamps: true }

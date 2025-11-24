@@ -21,6 +21,12 @@ router.post(
 );
 // admin payouts
 router.get(
+  "/admin/payouts",
+  authenticate,
+  checkRole(["admin"]),
+  paymentController.listTutorPayouts
+);
+router.get(
   "/admin/payouts/generate",
   authenticate,
   checkRole(["admin"]),
@@ -32,6 +38,13 @@ router.patch(
   authenticate,
   checkRole(["admin"]),
   paymentController.settlePayout
+);
+
+router.get(
+  "/admin/payouts",
+  authenticate,
+  checkRole(["admin"]),
+  paymentController.listTutorPayouts
 );
 
 module.exports = router;

@@ -4,6 +4,7 @@ const Payment = require("../models/Payment");
 const RegularClass = require("../models/RegularClass");
 const TutorProfile = require("../models/TutorProfile");
 const { createAdminNotification } = require("../services/adminNotification");
+const walletService = require("../services/payments/walletService");
 const { default: mongoose } = require("mongoose");
 
 /**
@@ -155,6 +156,7 @@ exports.razorpayWebhook = async (req, res) => {
 
       if (rc) {
         rc.paymentStatus = "paid";
+        rc.tutorPaymentStatus = "locked";
 
         // 🔥 FIX — Update classCount for hourly
         if (rc.planType === "hourly") {
@@ -163,6 +165,40 @@ exports.razorpayWebhook = async (req, res) => {
         }
 
         await rc.save();
+      }
+
+      // Wallet updates: Admin hold and Tutor pending credit
+      try {
+        const commissionPercent = 25;
+        const commissionAmount = (amount * commissionPercent) / 100;
+        const tutorNetAmount = amount - commissionAmount;
+
+        // Admin receives full amount and holds tutor's share
+        await walletService.adminCredit(amount, "Subscription payment captured", { type: "booking", id: payment.regularClassId });
+        await walletService.adminIncreaseHold(tutorNetAmount);
+
+        // Tutor sees locked credit immediately
+        await walletService.creditPending(rc.tutorId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
+
+        // Student wallet history (virtual debit)
+        await walletService.addTransaction({
+          userId: rc.studentId,
+          type: "debit",
+          amount,
+          description: "Payment for regular class",
+          reference: { type: "booking", id: payment.regularClassId },
+          status: "completed",
+          regularClassId: payment.regularClassId,
+          paymentId: payment._id,
+        });
+
+        // Schedule release after 30 days of period end (or startDate)
+        const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
+        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+        payment.releaseAt = releaseAt;
+        await payment.save();
+      } catch (walletErr) {
+        console.error("Wallet update error:", walletErr.message);
       }
 
       await createAdminNotification(
@@ -231,12 +267,50 @@ exports.verifyPayment = async (req, res) => {
       const rc = await RegularClass.findById(rcId);
       if (rc) {
         rc.paymentStatus = "paid";
+        rc.tutorPaymentStatus = "locked";
         if (rc.planType === "hourly") {
           const purchased = Number(numberOfClasses || 0);
           if (purchased > 0) rc.classCount = purchased;
         }
         await rc.save();
       }
+
+    // Wallet + release schedule
+    try {
+      const amount = payment.amount || 0;
+      const commissionPercent = 25;
+      const commissionAmount = (amount * commissionPercent) / 100;
+      const tutorNetAmount = amount - commissionAmount;
+
+      // Admin receives full amount and holds tutor's share
+      await walletService.adminCredit(amount, "Subscription payment verified", { type: "booking", id: payment.regularClassId });
+      await walletService.adminIncreaseHold(tutorNetAmount);
+
+      // Tutor sees locked credit
+      const rc = await RegularClass.findById(rcId);
+      if (rc) {
+        await walletService.creditPending(rc.tutorId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
+
+        // Student wallet history
+        await walletService.addTransaction({
+          userId: rc.studentId,
+          type: "debit",
+          amount,
+          description: "Payment for regular class",
+          reference: { type: "booking", id: payment.regularClassId },
+          status: "completed",
+          regularClassId: payment.regularClassId,
+          paymentId: payment._id,
+        });
+
+        const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
+        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+        payment.releaseAt = releaseAt;
+        await payment.save();
+      }
+    } catch (walletErr) {
+      console.error("Wallet update error:", walletErr.message);
+    }
     }
 
     await createAdminNotification(
@@ -349,5 +423,31 @@ exports.settlePayout = async (req, res) => {
     res
       .status(500)
       .json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+/**
+ * Admin: list tutor payouts
+ * GET /api/payments/admin/payouts?status=created|settled&from=YYYY-MM-DD&to=YYYY-MM-DD
+ */
+exports.listTutorPayouts = async (req, res) => {
+  try {
+    const { status, from, to } = req.query;
+    const filter = { type: "payout" };
+    if (status) filter.status = status;
+    if (from || to) {
+      filter.createdAt = {};
+      if (from) filter.createdAt.$gte = new Date(from);
+      if (to) filter.createdAt.$lte = new Date(to);
+    }
+
+    const payouts = await Payment.find(filter)
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({ success: true, data: payouts });
+  } catch (err) {
+    console.error("listTutorPayouts error:", err);
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
