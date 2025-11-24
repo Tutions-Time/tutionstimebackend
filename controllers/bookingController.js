@@ -542,6 +542,14 @@ exports.updateDemoStatus = async (req, res) => {
         .json({ success: false, message: "Not authorized" });
     }
 
+    // Only allow tutors to act on student-initiated requests
+    if (booking.requestedBy !== "student") {
+      return res.status(400).json({
+        success: false,
+        message: "This booking requires student confirmation",
+      });
+    }
+
     if (status === "confirmed") {
       booking.status = "confirmed";
       if (!booking.meetingLink) {
@@ -1517,10 +1525,67 @@ exports.startRegularFromDemo = async (req, res) => {
 
     // Prevent duplicate regular class creation for same demo
     if (booking.regularClassId) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Regular classes have already been started for this demo booking",
+      const rc = await RegularClass.findById(booking.regularClassId);
+      if (!rc) {
+        return res.status(400).json({ success: false, message: "Regular class reference missing" });
+      }
+
+      const existingPayment = await Payment.findOne({ regularClassId: rc._id, type: "subscription" }).sort({ createdAt: -1 });
+
+      const totalAmountINR = rc.planType === "hourly" ? (rc.amount || 0) * (rc.classCount || 0) : (rc.amount || 0);
+      const amountPaise = Math.round(totalAmountINR * 100);
+
+      let orderId = existingPayment?.gatewayOrderId || null;
+      let paymentId = existingPayment?._id || null;
+
+      if (!existingPayment) {
+        const payment = await Payment.create({
+          regularClassId: rc._id,
+          studentId: booking.studentId,
+          tutorId: booking.tutorId,
+          type: "subscription",
+          amount: totalAmountINR,
+          currency: "INR",
+          gateway: "razorpay",
+          status: "created",
+          notes: `Existing RC resume`,
+        });
+        paymentId = payment._id;
+      }
+
+      if (!orderId) {
+        const razorpay = require("../services/payments/razorpay");
+        const receipt = `rc_${rc._id.toString().slice(-8)}_${Date.now()}`;
+        const order = await razorpay.orders.create({
+          amount: amountPaise,
+          currency: "INR",
+          receipt,
+          notes: {
+            rc: rc._id.toString().slice(-8),
+            bk: booking._id.toString().slice(-8),
+            bt: rc.planType,
+            cls: rc.planType === "hourly" ? String(rc.classCount || 0) : "",
+          },
+        });
+        orderId = order.id;
+        await Payment.updateOne({ _id: paymentId }, { gatewayOrderId: order.id });
+      }
+
+      return res.json({
+        success: true,
+        message: "Regular class already exists. Proceed to payment.",
+        data: {
+          regularClassId: rc._id,
+          paymentId,
+          razorpayKey: process.env.RAZORPAY_KEY_ID,
+          orderId,
+          amount: amountPaise,
+          currency: "INR",
+          startDate: rc.startDate,
+          billingType: rc.planType,
+          baseRate: rc.amount,
+          totalAmountINR,
+        },
       });
     }
 
