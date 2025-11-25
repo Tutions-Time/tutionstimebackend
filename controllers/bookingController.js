@@ -1674,13 +1674,9 @@ exports.startRegularFromDemo = async (req, res) => {
     // -------------------------------
     // 5️⃣ Create Regular Class
     // -------------------------------
-    // Resolve profile IDs for student and tutor
-    const studentProfileDoc = await StudentProfile.findOne({ userId: booking.studentId }).select('_id');
-    const tutorProfileDoc = await TutorProfile.findOne({ userId: booking.tutorId }).select('_id');
-
     const rc = await RegularClass.create({
-      studentId: studentProfileDoc?._id || booking.studentId,
-      tutorId: tutorProfileDoc?._id || booking.tutorId,
+      studentId: booking.studentId,
+      tutorId: booking.tutorId,
       subject: booking.subject,
       planType,
       classCount: billingType === "hourly" ? Number(numberOfClasses) : null, // 🔥 store class count
@@ -1704,8 +1700,8 @@ exports.startRegularFromDemo = async (req, res) => {
     // -------------------------------
     const payment = await Payment.create({
       regularClassId: rc._id,
-      studentId: studentProfileDoc?._id || booking.studentId,
-      tutorId: tutorProfileDoc?._id || booking.tutorId,
+      studentId: booking.studentId,
+      tutorId: booking.tutorId,
       type: "subscription",
       amount: totalAmountINR,
       currency: "INR",

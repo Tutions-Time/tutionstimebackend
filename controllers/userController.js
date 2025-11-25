@@ -22,7 +22,7 @@ const getUserProfile = async (req, res) => {
       if (tutor) {
         roleDetails = {
           kycStatus: tutor.kycStatus || "pending",
-          hasKyc: !!(tutor.aadhaarUrls?.length || tutor.panUrl || tutor.bankProofUrl),
+          hasKyc: !!(tutor.aadhaarUrls?.length || tutor.panUrl),
           isVerified: tutor.status === "approved",
         };
         profile = tutor;
@@ -175,7 +175,7 @@ const updateStudentProfile = async (req, res) => {
 };
 
 /* ------------------------------------------------------------
-   UPLOAD TUTOR KYC (Aadhaar + PAN + Bank Proof)
+   UPLOAD TUTOR KYC (Aadhaar + PAN)
 ------------------------------------------------------------ */
 const uploadTutorKyc = async (req, res) => {
   try {
@@ -198,13 +198,8 @@ const uploadTutorKyc = async (req, res) => {
       ? req.files.pan[0].location
       : tutor.panUrl;
 
-    const bankProofUrl = req.files?.bankProof?.[0]
-      ? req.files.bankProof[0].location
-      : tutor.bankProofUrl;
-
     tutor.aadhaarUrls = aadhaarUrls.length ? aadhaarUrls : tutor.aadhaarUrls;
     tutor.panUrl = panUrl;
-    tutor.bankProofUrl = bankProofUrl;
     tutor.kycStatus = "submitted";
 
     await tutor.save();

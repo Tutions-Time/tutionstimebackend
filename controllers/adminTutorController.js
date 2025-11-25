@@ -18,11 +18,9 @@ exports.getAllTutors = async (req, res) => {
         name: profile?.name || 'Unknown Tutor',
         email: profile?.email || '',
         phone: tutor.phone || '',
-        kyc: profile?.isVerified
-          ? 'approved'
-          : profile
-          ? 'pending'
-          : 'pending',
+        kyc: profile?.kycStatus || 'pending',
+        aadhaarUrls: profile?.aadhaarUrls || [],
+        panUrl: profile?.panUrl || null,
         rating: profile?.averageRating || 0,
         classes30d: profile?.classes30d || 0,
         earnings30d: profile?.earnings30d || 0,
@@ -51,9 +49,13 @@ exports.updateKycStatus = async (req, res) => {
     const { id } = req.params;
     const { kyc } = req.body; // 'approved' | 'rejected' | 'pending'
 
+    const update = {
+      isVerified: kyc === 'approved',
+      kycStatus: kyc,
+    };
     const tutorProfile = await TutorProfile.findOneAndUpdate(
       { userId: id },
-      { isVerified: kyc === 'approved' },
+      update,
       { new: true }
     );
 

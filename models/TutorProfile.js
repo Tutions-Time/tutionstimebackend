@@ -79,7 +79,6 @@ const tutorProfileSchema = new mongoose.Schema(
     // KYC and Verification
     aadhaarUrls: [String],
     panUrl: { type: String },
-    bankProofUrl: { type: String },
     kycStatus: {
       type: String,
       enum: ["pending", "submitted", "approved", "rejected"],

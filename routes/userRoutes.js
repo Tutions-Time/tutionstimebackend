@@ -31,8 +31,7 @@ router.post(
   authenticate,
   uploadS3.fields([
     { name: 'aadhaar', maxCount: 2 },
-    { name: 'pan', maxCount: 1 },
-    { name: 'bankProof', maxCount: 1 }
+    { name: 'pan', maxCount: 1 }
   ]),
   userController.uploadTutorKyc
 );
