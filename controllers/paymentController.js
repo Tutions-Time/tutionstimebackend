@@ -3,6 +3,7 @@ const razorpay = require("../services/payments/razorpay");
 const Payment = require("../models/Payment");
 const RegularClass = require("../models/RegularClass");
 const TutorProfile = require("../models/TutorProfile");
+const StudentProfile = require("../models/StudentProfile");
 const { createAdminNotification } = require("../services/adminNotification");
 const walletService = require("../services/payments/walletService");
 const { default: mongoose } = require("mongoose");
@@ -177,12 +178,14 @@ exports.razorpayWebhook = async (req, res) => {
         await walletService.adminCredit(amount, "Subscription payment captured", { type: "booking", id: payment.regularClassId });
         await walletService.adminIncreaseHold(tutorNetAmount);
 
-        // Tutor sees locked credit immediately
-        await walletService.creditPending(rc.tutorId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
+        // Tutor sees locked credit immediately (resolve userId from tutor profile)
+        const tutorProf = await TutorProfile.findById(rc.tutorId).select('userId');
+        const studentProf = await StudentProfile.findById(rc.studentId).select('userId');
+        await walletService.creditPending(tutorProf?.userId || rc.tutorId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
 
-        // Student wallet history (virtual debit)
+        // Student wallet history (virtual debit) using userId
         await walletService.addTransaction({
-          userId: rc.studentId,
+          userId: studentProf?.userId || rc.studentId,
           type: "debit",
           amount,
           description: "Payment for regular class",
@@ -289,11 +292,13 @@ exports.verifyPayment = async (req, res) => {
       // Tutor sees locked credit
       const rc = await RegularClass.findById(rcId);
       if (rc) {
-        await walletService.creditPending(rc.tutorId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
+        const tutorProf = await TutorProfile.findById(rc.tutorId).select('userId');
+        const studentProf = await StudentProfile.findById(rc.studentId).select('userId');
+        await walletService.creditPending(tutorProf?.userId || rc.tutorId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
 
         // Student wallet history
         await walletService.addTransaction({
-          userId: rc.studentId,
+          userId: studentProf?.userId || rc.studentId,
           type: "debit",
           amount,
           description: "Payment for regular class",
@@ -448,6 +453,75 @@ exports.listTutorPayouts = async (req, res) => {
     res.json({ success: true, data: payouts });
   } catch (err) {
     console.error("listTutorPayouts error:", err);
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+/**
+ * Admin: list subscription payments (student → admin)
+ * GET /api/payments/admin/history?status=paid&from=YYYY-MM-DD&to=YYYY-MM-DD
+ */
+exports.listSubscriptionPayments = async (req, res) => {
+  try {
+    const { status, from, to } = req.query;
+    const filter = { type: "subscription" };
+    if (status) filter.status = status;
+    if (from || to) {
+      filter.createdAt = {};
+      if (from) filter.createdAt.$gte = new Date(from);
+      if (to) filter.createdAt.$lte = new Date(to);
+    }
+
+    const payments = await Payment.find(filter)
+      .sort({ createdAt: -1 })
+      .populate({ path: "regularClassId", select: "studentId tutorId subject planType classCount" })
+      .lean();
+
+    const data = [];
+    for (const p of payments) {
+      let studentName = "Student";
+      let tutorName = "Tutor";
+
+      const rc = p.regularClassId || null;
+      let studentProfile = null;
+      let tutorProfile = null;
+
+      if (rc?.studentId) {
+        studentProfile = await StudentProfile.findById(rc.studentId).select("name userId");
+        if (!studentProfile) {
+          studentProfile = await StudentProfile.findOne({ userId: rc.studentId }).select("name userId");
+        }
+        if (studentProfile?.name) studentName = studentProfile.name;
+      }
+
+      if (rc?.tutorId) {
+        tutorProfile = await TutorProfile.findById(rc.tutorId).select("name userId");
+        if (!tutorProfile) {
+          tutorProfile = await TutorProfile.findOne({ userId: rc.tutorId }).select("name userId");
+        }
+        if (tutorProfile?.name) tutorName = tutorProfile.name;
+      }
+
+      data.push({
+        _id: p._id,
+        amount: p.amount,
+        currency: p.currency,
+        status: p.status,
+        gateway: p.gateway,
+        gatewayOrderId: p.gatewayOrderId,
+        gatewayPaymentId: p.gatewayPaymentId,
+        createdAt: p.createdAt,
+        studentName,
+        tutorName,
+        subject: rc?.subject || "",
+        planType: rc?.planType || "",
+        classCount: rc?.classCount || null,
+      });
+    }
+
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error("listSubscriptionPayments error:", err);
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };

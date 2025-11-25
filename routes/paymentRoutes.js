@@ -19,6 +19,14 @@ router.post(
   checkRole(["student"]),
   paymentController.verifyPayment
 );
+
+// admin: subscription payment history
+router.get(
+  "/admin/history",
+  authenticate,
+  checkRole(["admin"]),
+  paymentController.listSubscriptionPayments
+);
 // admin payouts
 router.get(
   "/admin/payouts",
