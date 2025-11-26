@@ -106,7 +106,7 @@ exports.createSubscriptionOrder = async (req, res) => {
 exports.createNoteOrder = async (req, res) => {
   try {
     const { noteId } = req.body;
-    const userId = req.user.id;
+    const studentId = req.user.profileId || req.user.id;
 
     if (!noteId) {
       return res.status(400).json({ success: false, message: "noteId is required" });
@@ -117,22 +117,48 @@ exports.createNoteOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: "Note not found" });
     }
 
+    if (Number(note.price) <= 0) {
+      const paymentDoc = await Payment.create({
+        type: "note",
+        noteId: note._id,
+        studentId,
+        tutorId: note.tutorId,
+        amount: 0,
+        currency: "INR",
+        gateway: "free",
+        status: "paid",
+      });
+
+      await createAdminNotification(
+        "Free note claimed",
+        `Free note ${note._id} claimed by student ${studentId}`,
+        { noteId: note._id, paymentId: paymentDoc._id }
+      );
+
+      return res.json({ success: true, free: true });
+    }
+
     const amountInPaise = Math.round(Number(note.price) * 100);
 
+    if (!process.env.RAZORPAY_KEY_ID) {
+      return res.status(500).json({ success: false, message: "Razorpay key not configured" });
+    }
+
+    const safeReceipt = `nt_${Math.random().toString(36).substring(2, 10)}`;
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: "INR",
-      receipt: `note_${noteId}_${Date.now()}`,
+      receipt: safeReceipt,
       notes: {
-        noteId: noteId.toString(),
-        tutorId: note.tutorId.toString(),
+        n: noteId.toString().slice(-8),
+        t: note.tutorId.toString().slice(-8),
       },
     });
 
     const paymentDoc = await Payment.create({
       type: "note",
       noteId: note._id,
-      studentId: userId,
+      studentId,
       tutorId: note.tutorId,
       amount: Number(note.price),
       currency: "INR",
@@ -144,6 +170,7 @@ exports.createNoteOrder = async (req, res) => {
     return res.json({
       success: true,
       key: process.env.RAZORPAY_KEY_ID,
+      razorpayKey: process.env.RAZORPAY_KEY_ID,
       orderId: order.id,
       amount: amountInPaise,
       currency: "INR",
