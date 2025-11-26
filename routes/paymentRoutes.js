@@ -35,6 +35,20 @@ router.get(
   paymentController.listTutorPayouts
 );
 
+router.get(
+  "/admin/note-history",
+  authenticate,
+  checkRole(["admin"]),
+  paymentController.listNotePayments
+);
+
+router.get(
+  "/tutor/note-revenue",
+  authenticate,
+  checkRole(["tutor"]),
+  paymentController.getTutorNoteRevenue
+);
+
 // admin payment history
 router.get(
   "/admin/history",

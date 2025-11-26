@@ -371,6 +371,35 @@ exports.verifyPayment = async (req, res) => {
       if (!note) {
         return res.status(404).json({ success: false, message: "Note not found" });
       }
+
+      try {
+        const amount = payment.amount || Number(note.price) || 0;
+        const commissionPercent = 25;
+        const commissionAmount = (amount * commissionPercent) / 100;
+        const tutorNetAmount = amount - commissionAmount;
+
+        await walletService.adminCredit(amount, "Note purchase verified", { type: "note", id: nId });
+        await walletService.adminIncreaseHold(tutorNetAmount);
+
+        await walletService.creditPending(payment.tutorId, "tutor", tutorNetAmount, "Payment received for note (locked)", { type: "note", id: nId });
+
+        await walletService.addTransaction({
+          userId: payment.studentId,
+          type: "debit",
+          amount,
+          description: "Payment for note",
+          reference: { type: "note", id: nId },
+          status: "completed",
+          paymentId: payment._id,
+        });
+
+        const baseDate = new Date();
+        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+        payment.releaseAt = releaseAt;
+        await payment.save();
+      } catch (walletErr) {
+        console.error("Wallet update error:", walletErr.message);
+      }
     }
     }
 
@@ -453,6 +482,36 @@ exports.generateTutorPayouts = async (req, res) => {
     res
       .status(500)
       .json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.listNotePayments = async (req, res) => {
+  try {
+    const { status, from, to } = req.query;
+    const filter = { type: "note" };
+    if (status) filter.status = status;
+    if (from || to) {
+      filter.createdAt = {};
+      if (from) filter.createdAt.$gte = new Date(from);
+      if (to) filter.createdAt.$lte = new Date(to);
+    }
+
+    const items = await Payment.find(filter).sort({ createdAt: -1 }).lean();
+    res.json({ success: true, data: items });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.getTutorNoteRevenue = async (req, res) => {
+  try {
+    const tutorId = req.user.id;
+    const paidNotes = await Payment.find({ type: "note", status: "paid", tutorId: tutorId }).lean();
+    const total = paidNotes.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const count = paidNotes.length;
+    res.json({ success: true, data: { total, count } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
 
