@@ -3,6 +3,7 @@ const razorpay = require("../services/payments/razorpay");
 const Payment = require("../models/Payment");
 const RegularClass = require("../models/RegularClass");
 const TutorProfile = require("../models/TutorProfile");
+const Note = require("../models/Note");
 const { createAdminNotification } = require("../services/adminNotification");
 const walletService = require("../services/payments/walletService");
 const { default: mongoose } = require("mongoose");
@@ -99,6 +100,58 @@ exports.createSubscriptionOrder = async (req, res) => {
     return res
       .status(500)
       .json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.createNoteOrder = async (req, res) => {
+  try {
+    const { noteId } = req.body;
+    const userId = req.user.id;
+
+    if (!noteId) {
+      return res.status(400).json({ success: false, message: "noteId is required" });
+    }
+
+    const note = await Note.findById(noteId);
+    if (!note) {
+      return res.status(404).json({ success: false, message: "Note not found" });
+    }
+
+    const amountInPaise = Math.round(Number(note.price) * 100);
+
+    const order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: "INR",
+      receipt: `note_${noteId}_${Date.now()}`,
+      notes: {
+        noteId: noteId.toString(),
+        tutorId: note.tutorId.toString(),
+      },
+    });
+
+    const paymentDoc = await Payment.create({
+      type: "note",
+      noteId: note._id,
+      studentId: userId,
+      tutorId: note.tutorId,
+      amount: Number(note.price),
+      currency: "INR",
+      gateway: "razorpay",
+      gatewayOrderId: order.id,
+      status: "created",
+    });
+
+    return res.json({
+      success: true,
+      key: process.env.RAZORPAY_KEY_ID,
+      orderId: order.id,
+      amount: amountInPaise,
+      currency: "INR",
+      paymentId: paymentDoc._id,
+    });
+  } catch (err) {
+    console.error("createNoteOrder error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
 
@@ -230,7 +283,7 @@ exports.razorpayWebhook = async (req, res) => {
  */
 exports.verifyPayment = async (req, res) => {
   try {
-    const { orderId, paymentId, signature, regularClassId, billingType, numberOfClasses } = req.body;
+    const { orderId, paymentId, signature, regularClassId, billingType, numberOfClasses, noteId } = req.body;
 
     if (!orderId || !paymentId || !signature) {
       return res.status(400).json({ success: false, message: "orderId, paymentId, signature are required" });
@@ -311,14 +364,23 @@ exports.verifyPayment = async (req, res) => {
     } catch (walletErr) {
       console.error("Wallet update error:", walletErr.message);
     }
+
+    if (noteId || payment.type === "note") {
+      const nId = noteId || payment.noteId;
+      const note = await Note.findById(nId);
+      if (!note) {
+        return res.status(404).json({ success: false, message: "Note not found" });
+      }
+    }
     }
 
     await createAdminNotification(
-      "Subscription payment verified",
+      payment.type === "note" ? "Note purchase verified" : "Subscription payment verified",
       `Payment ${payment._id} verified via client callback`,
       {
         paymentId: payment._id,
         regularClassId: payment.regularClassId,
+        noteId: payment.noteId,
         gatewayPaymentId: paymentId,
         gatewayOrderId: orderId,
       }

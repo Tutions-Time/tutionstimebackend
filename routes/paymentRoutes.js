@@ -19,6 +19,14 @@ router.post(
   checkRole(["student"]),
   paymentController.verifyPayment
 );
+
+// notes: create order
+router.post(
+  "/notes/create-order",
+  authenticate,
+  checkRole(["student"]),
+  paymentController.createNoteOrder
+);
 // admin payouts
 router.get(
   "/admin/payouts",

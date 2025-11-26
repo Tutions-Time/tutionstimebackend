@@ -67,6 +67,7 @@ app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/bookings', require('./routes/bookingRoutes'));
 app.use('/api/enquiries', require('./routes/enquiryRoutes'));
 app.use('/api/payments', require('./routes/paymentRoutes'));
+app.use('/api/notes', require('./routes/noteRoutes'));
 app.use('/api/wallet', require('./routes/walletRoutes'));
 app.use('/api/tutors', require('./routes/tutorRoutes'));
 
