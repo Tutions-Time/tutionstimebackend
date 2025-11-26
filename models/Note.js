@@ -22,7 +22,9 @@ const noteSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-noteSchema.index({ title: "text", description: "text", keywords: 1, subject: 1, classLevel: 1, board: 1 });
+noteSchema.index({ title: "text", description: "text" });
+noteSchema.index({ subject: 1, classLevel: 1, board: 1 });
+noteSchema.index({ keywords: 1 });
 
 module.exports = mongoose.model("Note", noteSchema);
 
