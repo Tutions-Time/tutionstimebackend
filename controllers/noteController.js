@@ -44,7 +44,7 @@ exports.createNote = async (req, res) => {
       ? value.keywords.split(",").map((s) => s.trim()).filter(Boolean)
       : [];
 
-    const note = await Note.create({
+    const doc = {
       title: value.title,
       description: value.description || "",
       subject: value.subject,
@@ -57,9 +57,32 @@ exports.createNote = async (req, res) => {
       previewImageUrls: previewFiles.map((f) => f.location),
       previewImageKeys: previewFiles.map((f) => f.key),
       tutorId: req.user.profileId || req.user.id,
-    });
+    };
 
-    return res.json({ success: true, data: note });
+    try {
+      const note = await Note.create(doc);
+      return res.json({ success: true, data: note });
+    } catch (errCreate) {
+      if (String(errCreate?.message || "").toLowerCase().includes("keywords") && String(errCreate?.message || "").toLowerCase().includes("text index")) {
+        try {
+          const idx = await Note.collection.getIndexes();
+          for (const [name, spec] of Object.entries(idx)) {
+            const includesKeywordsText = name.includes("keywords_text") || (Array.isArray(spec) && spec.some(([field, type]) => field === "keywords" && type === "text"));
+            if (includesKeywordsText) {
+              await Note.collection.dropIndex(name).catch(() => {});
+            }
+          }
+          await Note.collection.createIndex({ title: "text", description: "text" });
+          await Note.collection.createIndex({ subject: 1, classLevel: 1, board: 1 });
+          await Note.collection.createIndex({ keywords: 1 });
+          const note = await Note.create(doc);
+          return res.json({ success: true, data: note });
+        } catch (fixErr) {
+          console.error("createNote index fix error:", fixErr);
+        }
+      }
+      throw errCreate;
+    }
   } catch (err) {
     console.error("createNote error:", err);
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
@@ -228,4 +251,3 @@ exports.getDownloadUrl = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
