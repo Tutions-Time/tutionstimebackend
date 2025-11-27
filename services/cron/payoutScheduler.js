@@ -48,7 +48,10 @@ async function runPayoutRelease() {
 
       await walletService.adminDecreaseHold(tutorNetAmount);
       await walletService.adminDebit(tutorNetAmount, "Tutor payout released", { type: "payout", id: payout._id });
-      await walletService.releasePendingToAvailable(sub.tutorId, "tutor", tutorNetAmount, "Payout released", { type: "payout", id: payout._id });
+      const TutorProfile = require("../../models/TutorProfile");
+      const tpSub = await TutorProfile.findById(sub.tutorId).select("userId");
+      const tutorUserIdSub = tpSub?.userId || sub.tutorId;
+      await walletService.releasePendingToAvailable(tutorUserIdSub, "tutor", tutorNetAmount, "Payout released", { type: "payout", id: payout._id });
 
       await Payment.updateOne({ _id: sub._id }, { payoutGenerated: true, payoutId: payout._id });
 
@@ -87,7 +90,10 @@ async function runPayoutRelease() {
 
       await walletService.adminDecreaseHold(tutorNetAmount);
       await walletService.adminDebit(tutorNetAmount, "Tutor payout released for note", { type: "payout", id: payout._id });
-      await walletService.releasePendingToAvailable(np.tutorId, "tutor", tutorNetAmount, "Payout released", { type: "payout", id: payout._id });
+      const TutorProfile = require("../../models/TutorProfile");
+      const tp = await TutorProfile.findById(np.tutorId).select("userId");
+      const tutorUserId = tp?.userId || np.tutorId;
+      await walletService.releasePendingToAvailable(tutorUserId, "tutor", tutorNetAmount, "Payout released", { type: "payout", id: payout._id });
 
       await Payment.updateOne({ _id: np._id }, { payoutGenerated: true, payoutId: payout._id });
 

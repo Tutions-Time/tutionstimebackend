@@ -250,7 +250,7 @@ exports.razorpayWebhook = async (req, res) => {
         await rc.save();
       }
 
-      // Wallet updates: Admin hold and Tutor pending credit
+      // Wallet updates: Admin hold and Tutor pending credit (Regular Class)
       try {
         const commissionPercent = 25;
         const commissionAmount = (amount * commissionPercent) / 100;
@@ -261,11 +261,17 @@ exports.razorpayWebhook = async (req, res) => {
         await walletService.adminIncreaseHold(tutorNetAmount);
 
         // Tutor sees locked credit immediately
-        await walletService.creditPending(rc.tutorId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
+        const TutorProfile = require("../models/TutorProfile");
+        const StudentProfile = require("../models/StudentProfile");
+        const tp = await TutorProfile.findById(rc.tutorId).select("userId");
+        const sp = await StudentProfile.findById(rc.studentId).select("userId");
+        const tutorUserId = tp?.userId || rc.tutorId;
+        const studentUserId = sp?.userId || rc.studentId;
+        await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
 
         // Student wallet history (virtual debit)
         await walletService.addTransaction({
-          userId: rc.studentId,
+          userId: studentUserId,
           type: "debit",
           amount,
           description: "Payment for regular class",
@@ -295,6 +301,54 @@ exports.razorpayWebhook = async (req, res) => {
           amount,
         }
       );
+    }
+
+    // Handle note purchases via webhook as well
+    if (payment.type === "note") {
+      try {
+        const nId = payment.noteId;
+        const note = await Note.findById(nId);
+        if (note) {
+          const amt = payment.amount || Number(note.price) || 0;
+          const commissionPercent = 25;
+          const commissionAmount = (amt * commissionPercent) / 100;
+          const tutorNetAmount = amt - commissionAmount;
+
+          await walletService.adminCredit(amt, "Note purchase captured", { type: "note", id: nId });
+          await walletService.adminIncreaseHold(tutorNetAmount);
+
+          const TutorProfile = require("../models/TutorProfile");
+          const StudentProfile = require("../models/StudentProfile");
+          const tp = await TutorProfile.findById(payment.tutorId).select("userId");
+          const sp = await StudentProfile.findById(payment.studentId).select("userId");
+          const tutorUserId = tp?.userId || payment.tutorId;
+          const studentUserId = sp?.userId || payment.studentId;
+
+          await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for note (locked)", { type: "note", id: nId });
+          await walletService.addTransaction({
+            userId: studentUserId,
+            type: "debit",
+            amount: amt,
+            description: "Payment for note",
+            reference: { type: "note", id: nId },
+            status: "completed",
+            paymentId: payment._id,
+          });
+
+          const baseDate = new Date();
+          const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+          payment.releaseAt = releaseAt;
+          await payment.save();
+
+          await createAdminNotification(
+            "Note payment received",
+            `Note payment ${payment._id} captured`,
+            { paymentId: payment._id, noteId: nId, gatewayPaymentId: paymentId, gatewayOrderId: orderId, amount: amt }
+          );
+        }
+      } catch (err2) {
+        console.error("Webhook note handling error:", err2.message);
+      }
     }
 
     return res.status(200).json({ received: true });
@@ -372,11 +426,17 @@ exports.verifyPayment = async (req, res) => {
       // Tutor sees locked credit
       const rc = await RegularClass.findById(rcId);
       if (rc) {
-        await walletService.creditPending(rc.tutorId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
+        const TutorProfile = require("../models/TutorProfile");
+        const StudentProfile = require("../models/StudentProfile");
+        const tp = await TutorProfile.findById(rc.tutorId).select("userId");
+        const sp = await StudentProfile.findById(rc.studentId).select("userId");
+        const tutorUserId = tp?.userId || rc.tutorId;
+        const studentUserId = sp?.userId || rc.studentId;
+        await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
 
         // Student wallet history
         await walletService.addTransaction({
-          userId: rc.studentId,
+          userId: studentUserId,
           type: "debit",
           amount,
           description: "Payment for regular class",
@@ -411,10 +471,17 @@ exports.verifyPayment = async (req, res) => {
         await walletService.adminCredit(amount, "Note purchase verified", { type: "note", id: nId });
         await walletService.adminIncreaseHold(tutorNetAmount);
 
-        await walletService.creditPending(payment.tutorId, "tutor", tutorNetAmount, "Payment received for note (locked)", { type: "note", id: nId });
+        const TutorProfile = require("../models/TutorProfile");
+        const StudentProfile = require("../models/StudentProfile");
+        const tutorProfile = await TutorProfile.findById(payment.tutorId).select("userId");
+        const studentProfile = await StudentProfile.findById(payment.studentId).select("userId");
+        const tutorUserId = tutorProfile?.userId || payment.tutorId;
+        const studentUserId = studentProfile?.userId || payment.studentId;
+
+        await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for note (locked)", { type: "note", id: nId });
 
         await walletService.addTransaction({
-          userId: payment.studentId,
+          userId: studentUserId,
           type: "debit",
           amount,
           description: "Payment for note",

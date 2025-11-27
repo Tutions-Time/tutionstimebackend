@@ -15,7 +15,7 @@ const app = express();
 
 
 app.use(helmet());
-
+        
 // ==================== CORS CONFIGURATION ====================
 // ✅ Allow all origins (safe for dev/public API)
 const corsOptions = {
@@ -81,7 +81,6 @@ const { autoCompletePastDemos } = require('./controllers/bookingController');
 const payoutScheduler = require('./services/cron/payoutScheduler');
 
 app.use("/api/sessions", require("./routes/sessionRoutes"));
-
 
 setInterval(() => {
   autoCompletePastDemos();

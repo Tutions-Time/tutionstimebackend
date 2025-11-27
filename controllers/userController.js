@@ -53,6 +53,75 @@ const getUserProfile = async (req, res) => {
 };
 
 /* ------------------------------------------------------------
+   GET FULL STUDENT PROFILE (FOR TUTOR VIEW)
+   GET /api/users/student-profile/:studentUserId
+------------------------------------------------------------ */
+const getStudentProfileForTutor = async (req, res) => {
+  try {
+    const tutorUserId = req.user.id; // logged-in user (should be tutor)
+    const { studentUserId } = req.params;
+
+    // Safety: make sure logged-in user is actually a tutor
+    const tutorUser = await User.findById(tutorUserId);
+    if (!tutorUser || tutorUser.role !== "tutor") {
+      return res.status(403).json({
+        success: false,
+        message: "Only tutors can view student profiles",
+      });
+    }
+
+    // 1) Load the student user
+    const studentUser = await User.findById(studentUserId).select(
+      "-password -refreshToken"
+    );
+
+    if (!studentUser || studentUser.role !== "student") {
+      return res.status(404).json({
+        success: false,
+        message: "Student user not found",
+      });
+    }
+
+    // 2) Load the student profile
+    const profile = await StudentProfile.findOne({ userId: studentUserId }).lean();
+
+    if (!profile) {
+      return res.status(404).json({
+        success: false,
+        message: "Student profile not found",
+      });
+    }
+
+    // 3) Return combined data (similar shape to getUserProfile)
+    return res.status(200).json({
+      success: true,
+      data: {
+        user: {
+          id: studentUser._id,
+          phone: studentUser.phone,
+          role: studentUser.role,
+          email: studentUser.email,
+          isProfileComplete: studentUser.isProfileComplete,
+          status: studentUser.status,
+          lastLogin: studentUser.lastLogin,
+          createdAt: studentUser.createdAt,
+          updatedAt: studentUser.updatedAt,
+        },
+        profile,       // full StudentProfile (name, city, board, classLevel, subjects, etc.)
+      },
+    });
+  } catch (error) {
+    console.error("Error in getStudentProfileForTutor:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching student profile",
+      error: error.message,
+    });
+  }
+};
+
+
+/* ------------------------------------------------------------
    UPDATE STUDENT PROFILE
 ------------------------------------------------------------ */
 const updateStudentProfile = async (req, res) => {
@@ -371,4 +440,5 @@ module.exports = {
   updateTutorProfile,
   getAllUsers,
   uploadTutorKyc,
+  getStudentProfileForTutor
 };
