@@ -14,7 +14,14 @@ async function runPayoutRelease() {
     $or: [{ payoutGenerated: { $exists: false } }, { payoutGenerated: false }],
   }).lean();
 
-  if (!subs.length) return;
+  const notes = await Payment.find({
+    type: "note",
+    status: "paid",
+    releaseAt: { $lte: now },
+    $or: [{ payoutGenerated: { $exists: false } }, { payoutGenerated: false }],
+  }).lean();
+
+  if (!subs.length && !notes.length) return;
 
   for (const sub of subs) {
     try {
@@ -51,6 +58,43 @@ async function runPayoutRelease() {
         "Tutor payout auto-released",
         `Payout ${payout._id} settled for class ${sub.regularClassId}`,
         { payoutId: payout._id, regularClassId: sub.regularClassId, tutorId: sub.tutorId, amount: tutorNetAmount }
+      );
+    } catch (err) {
+      console.error("Auto payout error:", err.message);
+    }
+  }
+
+  for (const np of notes) {
+    try {
+      const amount = np.amount;
+      const commissionPercent = 25;
+      const commissionAmount = (amount * commissionPercent) / 100;
+      const tutorNetAmount = amount - commissionAmount;
+
+      const payout = await Payment.create({
+        noteId: np.noteId,
+        studentId: np.studentId,
+        tutorId: np.tutorId,
+        type: "payout",
+        amount: np.amount,
+        currency: np.currency,
+        commissionPercent,
+        commissionAmount,
+        tutorNetAmount,
+        status: "settled",
+        notes: "Auto payout released for note after lock period",
+      });
+
+      await walletService.adminDecreaseHold(tutorNetAmount);
+      await walletService.adminDebit(tutorNetAmount, "Tutor payout released for note", { type: "payout", id: payout._id });
+      await walletService.releasePendingToAvailable(np.tutorId, "tutor", tutorNetAmount, "Payout released", { type: "payout", id: payout._id });
+
+      await Payment.updateOne({ _id: np._id }, { payoutGenerated: true, payoutId: payout._id });
+
+      await createAdminNotification(
+        "Tutor payout auto-released",
+        `Payout ${payout._id} settled for note ${np.noteId}`,
+        { payoutId: payout._id, noteId: np.noteId, tutorId: np.tutorId, amount: tutorNetAmount }
       );
     } catch (err) {
       console.error("Auto payout error:", err.message);

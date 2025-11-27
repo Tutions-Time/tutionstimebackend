@@ -1,6 +1,8 @@
 const mongoose = require('mongoose');
-require('../config/database');
+const connectDB = require('../config/database');
+connectDB();
 const User = require('../models/User');
+const Note = require('../models/Note');
 
 async function fixIndexes() {
     try {
@@ -28,6 +30,33 @@ async function fixIndexes() {
 
         // console.log('Final indexes:');
         console.log(await User.collection.getIndexes());
+
+        // ===== Notes index fix =====
+        console.log('Checking Note indexes...');
+        const noteIndexes = await Note.collection.getIndexes();
+        for (const [name, spec] of Object.entries(noteIndexes)) {
+            const includesKeywordsText = name.includes('keywords_text') || (Array.isArray(spec) && spec.some(([field, type]) => field === 'keywords' && type === 'text'));
+            if (includesKeywordsText) {
+                console.log(`Dropping problematic Note text index: ${name}`);
+                try {
+                    await Note.collection.dropIndex(name);
+                    console.log(`Dropped index ${name}`);
+                } catch (err) {
+                    if (err.code === 27) {
+                        console.log(`Index ${name} not found, skipping...`);
+                    } else {
+                        throw err;
+                    }
+                }
+            }
+        }
+
+        console.log('Ensuring Note indexes...');
+        await Note.collection.createIndex({ title: 'text', description: 'text' });
+        await Note.collection.createIndex({ subject: 1, classLevel: 1, board: 1 });
+        await Note.collection.createIndex({ keywords: 1 });
+
+        console.log('Final Note indexes:', await Note.collection.getIndexes());
 
         // Exit the script
         process.exit(0);

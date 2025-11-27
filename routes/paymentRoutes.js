@@ -19,12 +19,34 @@ router.post(
   checkRole(["student"]),
   paymentController.verifyPayment
 );
+
+// notes: create order
+router.post(
+  "/notes/create-order",
+  authenticate,
+  checkRole(["student"]),
+  paymentController.createNoteOrder
+);
 // admin payouts
 router.get(
   "/admin/payouts",
   authenticate,
   checkRole(["admin"]),
   paymentController.listTutorPayouts
+);
+
+router.get(
+  "/admin/note-history",
+  authenticate,
+  checkRole(["admin"]),
+  paymentController.listNotePayments
+);
+
+router.get(
+  "/tutor/note-revenue",
+  authenticate,
+  checkRole(["tutor"]),
+  paymentController.getTutorNoteRevenue
 );
 
 // admin payment history

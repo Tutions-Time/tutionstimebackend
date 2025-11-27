@@ -16,11 +16,12 @@ const paymentSchema = new mongoose.Schema(
       ref: "TutorProfile",
     },
 
-    // "subscription" = student pays admin
+    // "subscription" = student pays admin for classes
     // "payout"      = admin pays tutor
+    // "note"        = student buys paid note
     type: {
       type: String,
-      enum: ["subscription", "payout"],
+      enum: ["subscription", "payout", "note"],
       required: true,
     },
 
@@ -32,6 +33,9 @@ const paymentSchema = new mongoose.Schema(
     // Amount details
     amount: { type: Number, required: true }, // full amount
     currency: { type: String, default: "INR" },
+
+    // For note purchases
+    noteId: { type: mongoose.Schema.Types.ObjectId, ref: "Note" },
 
     // For payout records
     commissionPercent: { type: Number }, // 25
