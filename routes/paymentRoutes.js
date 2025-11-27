@@ -42,11 +42,27 @@ router.get(
   paymentController.listNotePayments
 );
 
+// admin: combined payment history (subscription + notes)
+router.get(
+  "/admin/all-history",
+  authenticate,
+  checkRole(["admin"]),
+  paymentController.listAllPaymentsHistory
+);
+
 router.get(
   "/tutor/note-revenue",
   authenticate,
   checkRole(["tutor"]),
   paymentController.getTutorNoteRevenue
+);
+
+// tutor: detailed note sales history
+router.get(
+  "/tutor/note-history",
+  authenticate,
+  checkRole(["tutor"]),
+  paymentController.getTutorNoteHistory
 );
 
 // admin payment history

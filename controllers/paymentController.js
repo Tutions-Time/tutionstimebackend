@@ -106,7 +106,10 @@ exports.createSubscriptionOrder = async (req, res) => {
 exports.createNoteOrder = async (req, res) => {
   try {
     const { noteId } = req.body;
-    const studentId = req.user.profileId || req.user.id;
+    const userId = req.user.id;
+    const StudentProfile = require("../models/StudentProfile");
+    const sp = await StudentProfile.findOne({ userId }).select("_id");
+    const studentId = sp?._id || userId;
 
     if (!noteId) {
       return res.status(400).json({ success: false, message: "noteId is required" });
@@ -523,8 +526,30 @@ exports.listNotePayments = async (req, res) => {
       if (to) filter.createdAt.$lte = new Date(to);
     }
 
-    const items = await Payment.find(filter).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, data: items });
+    const items = await Payment.find(filter)
+      .sort({ createdAt: -1 })
+      .populate({ path: "studentId", select: "name" })
+      .populate({ path: "tutorId", select: "name" })
+      .populate({ path: "noteId", select: "title" })
+      .lean();
+
+    const data = items.map((p) => ({
+      _id: p._id,
+      type: p.type,
+      amount: p.amount,
+      currency: p.currency,
+      status: p.status,
+      gateway: p.gateway,
+      gatewayOrderId: p.gatewayOrderId,
+      gatewayPaymentId: p.gatewayPaymentId,
+      createdAt: p.createdAt,
+      studentName: p.studentId?.name || "Student",
+      tutorName: p.tutorId?.name || "Tutor",
+      noteId: p.noteId?._id || p.noteId,
+      noteTitle: p.noteId?.title || "",
+    }));
+
+    res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
@@ -537,6 +562,110 @@ exports.getTutorNoteRevenue = async (req, res) => {
     const total = paidNotes.reduce((sum, p) => sum + Number(p.amount || 0), 0);
     const count = paidNotes.length;
     res.json({ success: true, data: { total, count } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+// Tutor: list note payments (sales) with student names and note titles
+exports.getTutorNoteHistory = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const userId = req.user.id;
+    const TutorProfile = require("../models/TutorProfile");
+    const tp = await TutorProfile.findOne({ userId }).select("_id");
+    if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
+
+    const filter = { type: "note", tutorId: tp._id };
+    if (from || to) {
+      filter.createdAt = {};
+      if (from) filter.createdAt.$gte = new Date(from);
+      if (to) filter.createdAt.$lte = new Date(to);
+    }
+
+    const items = await Payment.find(filter)
+      .sort({ createdAt: -1 })
+      .populate({ path: "studentId", select: "name" })
+      .populate({ path: "noteId", select: "title" })
+      .lean();
+
+    const data = items.map((p) => ({
+      _id: p._id,
+      amount: p.amount,
+      currency: p.currency,
+      status: p.status,
+      createdAt: p.createdAt,
+      studentName: p.studentId?.name || "Student",
+      noteTitle: p.noteId?.title || "",
+    }));
+
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+// Admin: combined payment history (subscription + note)
+exports.listAllPaymentsHistory = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const range = (q = {}) => {
+      if (from || to) {
+        q.createdAt = {};
+        if (from) q.createdAt.$gte = new Date(from);
+        if (to) q.createdAt.$lte = new Date(to);
+      }
+      return q;
+    };
+
+    const subs = await Payment.find(range({ type: "subscription" }))
+      .sort({ createdAt: -1 })
+      .populate({ path: "studentId", select: "name" })
+      .populate({ path: "tutorId", select: "name" })
+      .populate({ path: "regularClassId", select: "subject planType classCount" })
+      .lean();
+
+    const notes = await Payment.find(range({ type: "note" }))
+      .sort({ createdAt: -1 })
+      .populate({ path: "studentId", select: "name" })
+      .populate({ path: "tutorId", select: "name" })
+      .populate({ path: "noteId", select: "title" })
+      .lean();
+
+    const mapSub = subs.map((p) => ({
+      _id: p._id,
+      type: p.type,
+      amount: p.amount,
+      currency: p.currency,
+      status: p.status,
+      gateway: p.gateway,
+      gatewayOrderId: p.gatewayOrderId,
+      gatewayPaymentId: p.gatewayPaymentId,
+      createdAt: p.createdAt,
+      studentName: p.studentId?.name || "Student",
+      tutorName: p.tutorId?.name || "Tutor",
+      subject: p.regularClassId?.subject || "",
+      planType: p.regularClassId?.planType || "",
+      classCount: p.regularClassId?.classCount || null,
+    }));
+
+    const mapNote = notes.map((p) => ({
+      _id: p._id,
+      type: p.type,
+      amount: p.amount,
+      currency: p.currency,
+      status: p.status,
+      gateway: p.gateway,
+      gatewayOrderId: p.gatewayOrderId,
+      gatewayPaymentId: p.gatewayPaymentId,
+      createdAt: p.createdAt,
+      studentName: p.studentId?.name || "Student",
+      tutorName: p.tutorId?.name || "Tutor",
+      noteTitle: p.noteId?.title || "",
+    }));
+
+    const combined = [...mapSub, ...mapNote].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    res.json({ success: true, data: combined });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
@@ -591,9 +720,22 @@ exports.listTutorPayouts = async (req, res) => {
 
     const payouts = await Payment.find(filter)
       .sort({ createdAt: -1 })
+      .populate({ path: "tutorId", select: "name" })
       .lean();
 
-    res.json({ success: true, data: payouts });
+    const data = payouts.map((p) => ({
+      _id: p._id,
+      tutorId: p.tutorId?._id || p.tutorId,
+      tutorName: p.tutorId?.name || "Tutor",
+      amount: p.amount,
+      commissionAmount: p.commissionAmount,
+      tutorNetAmount: p.tutorNetAmount ?? Math.max(0, Number(p.amount || 0) - Number(p.commissionAmount || 0)),
+      periodStart: p.periodStart,
+      periodEnd: p.periodEnd,
+      status: p.status,
+    }));
+
+    res.json({ success: true, data });
   } catch (err) {
     console.error("listTutorPayouts error:", err);
     res.status(500).json({ success: false, message: "Server error", error: err.message });
@@ -619,7 +761,14 @@ exports.listSubscriptionPayments = async (req, res) => {
       .sort({ createdAt: -1 })
       .populate({ path: "studentId", select: "name" })
       .populate({ path: "tutorId", select: "name" })
-      .populate({ path: "regularClassId", select: "subject planType classCount" })
+      .populate({
+        path: "regularClassId",
+        select: "subject planType classCount studentId tutorId",
+        populate: [
+          { path: "studentId", select: "name" },
+          { path: "tutorId", select: "name" }
+        ]
+      })
       .lean();
 
     const data = payments.map((p) => ({
@@ -631,8 +780,8 @@ exports.listSubscriptionPayments = async (req, res) => {
       gatewayOrderId: p.gatewayOrderId,
       gatewayPaymentId: p.gatewayPaymentId,
       createdAt: p.createdAt,
-      studentName: p.studentId?.name || "Student",
-      tutorName: p.tutorId?.name || "Tutor",
+      studentName: p.studentId?.name || p.regularClassId?.studentId?.name || "Student",
+      tutorName: p.tutorId?.name || p.regularClassId?.tutorId?.name || "Tutor",
       subject: p.regularClassId?.subject || "",
       planType: p.regularClassId?.planType || "",
       classCount: p.regularClassId?.classCount || null,
