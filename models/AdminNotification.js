@@ -4,6 +4,7 @@ if (mongoose.models.AdminNotification) {
   delete mongoose.models.AdminNotification;
 }
 
+
 const adminNotificationSchema = new mongoose.Schema(
   {
     title: {
