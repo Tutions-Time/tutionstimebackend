@@ -46,16 +46,18 @@ const paymentSchema = new mongoose.Schema(
     periodStart: { type: Date },
     periodEnd: { type: Date },
 
-    status: {
-      type: String,
-      enum: ["created", "paid", "failed", "settled"],
-      default: "created",
-    },
+  status: {
+    type: String,
+    enum: ["created", "paid", "failed", "settled"],
+    default: "created",
+  },
 
-    // Payout tracking for subscriptions
-    payoutGenerated: { type: Boolean, default: false },
-    payoutId: { type: mongoose.Schema.Types.ObjectId, ref: "Payment" },
-    releaseAt: { type: Date },
+  // Payout tracking for subscriptions
+  payoutGenerated: { type: Boolean, default: false },
+  payoutId: { type: mongoose.Schema.Types.ObjectId, ref: "Payment" },
+  releaseAt: { type: Date },
+
+  walletProcessed: { type: Boolean, default: false },
 
     notes: { type: String },
   },
