@@ -19,16 +19,36 @@ const studentProfileSchema = new mongoose.Schema(
       enum: ["Male", "Female", "Other", ""],
       default: "",
     },
+    altPhone: { type: String, trim: true },
+    genderOther: { type: String, trim: true },
 
     // Address
+    addressLine1: { type: String, trim: true },
+    addressLine2: { type: String, trim: true },
     city: { type: String, trim: true },
     state: { type: String, trim: true },
     pincode: { type: String, trim: true },
 
     // Academic Preferences
+    track: { type: String, enum: ["school", "college", "competitive", ""], default: "" },
     board: { type: String, trim: true },
+    boardOther: { type: String, trim: true },
     classLevel: { type: String, trim: true },
+    classLevelOther: { type: String, trim: true },
+    stream: { type: String, trim: true },
+    streamOther: { type: String, trim: true },
+    program: { type: String, trim: true },
+    programOther: { type: String, trim: true },
+    discipline: { type: String, trim: true },
+    disciplineOther: { type: String, trim: true },
+    yearSem: { type: String, trim: true },
+    yearSemOther: { type: String, trim: true },
+    exam: { type: String, trim: true },
+    examOther: { type: String, trim: true },
+    targetYear: { type: String, trim: true },
+    targetYearOther: { type: String, trim: true },
     subjects: [String],
+    subjectOther: { type: String, trim: true },
 
     // Tutor Preference
     tutorGenderPref: {
@@ -36,6 +56,8 @@ const studentProfileSchema = new mongoose.Schema(
       enum: ["Male", "Female", "No Preference", "Other", ""],
       default: "No Preference",
     },
+    tutorGenderOther: { type: String, trim: true },
+    preferredTimes: [String],
 
     // Learning Goals
     goals: { type: String, trim: true },

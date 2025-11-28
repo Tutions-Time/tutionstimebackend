@@ -139,13 +139,19 @@ const updateStudentProfile = async (req, res) => {
       });
 
     const parseArray = (raw) => {
-      try {
-        if (!raw) return [];
-        const v = JSON.parse(raw);
-        return Array.isArray(v) ? v : [];
-      } catch {
-        return [];
+      if (!raw) return [];
+      if (Array.isArray(raw)) return raw;
+      if (typeof raw === "string") {
+        try {
+          const v = JSON.parse(raw);
+          if (Array.isArray(v)) return v;
+        } catch {}
+        return raw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
       }
+      return [];
     };
 
     // ⭐ S3 path
@@ -208,11 +214,14 @@ const updateStudentProfile = async (req, res) => {
       targetYear: b.targetYear || "",
       targetYearOther: b.targetYear === "Other" ? b.targetYearOther || "" : "",
       subjects: parseArray(b.subjects),
-      subjectOther:
-        parseArray(b.subjects).includes("Other") ? b.subjectOther || "" : "",
+      subjectOther: (() => {
+        const subs = parseArray(b.subjects);
+        return subs.includes("Other") ? b.subjectOther || "" : "";
+      })(),
       tutorGenderPref: b.tutorGenderPref || "No Preference",
       tutorGenderOther:
         b.tutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
+      preferredTimes: parseArray(b.preferredTimes),
       availability: parseArray(b.availability),
       goals: b.goals || "",
       ...(photoUrl && { photoUrl }),
