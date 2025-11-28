@@ -356,3 +356,112 @@ exports.getStudentRegularClasses = async (req, res) => {
   }
 };
 
+exports.getTutorRegularClasses = async (req, res) => {
+  try {
+    const tutorUserId = req.user.id;
+
+    const regularClasses = await RegularClass.find({
+      tutorId: tutorUserId,
+      paymentStatus: "paid",
+      status: "active",
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (!regularClasses.length) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const studentUserIds = regularClasses.map((rc) => rc.studentId.toString());
+    const students = await StudentProfile.find({
+      userId: { $in: studentUserIds },
+    })
+      .select("userId name photoUrl")
+      .lean();
+    const studentMap = new Map(students.map((s) => [String(s.userId), s]));
+
+    const rcIds = regularClasses.map((rc) => rc._id);
+    const now = new Date();
+    const sessions = await Session.find({
+      regularClassId: { $in: rcIds },
+      status: "scheduled",
+    })
+      .sort({ startDateTime: 1 })
+      .lean();
+
+    const nextSessionMap = new Map();
+    const sessionsCountMap = new Map();
+    for (const s of sessions) {
+      const key = String(s.regularClassId);
+      const sStart = new Date(s.startDateTime);
+      if (sStart >= now) {
+        sessionsCountMap.set(key, (sessionsCountMap.get(key) || 0) + 1);
+        if (!nextSessionMap.has(key)) {
+          nextSessionMap.set(key, s);
+        }
+      }
+    }
+
+    const CLASS_DURATION_MIN = 60;
+    const JOIN_BEFORE_MIN = 5;
+    const EXPIRE_AFTER_MIN = 5;
+
+    const enriched = regularClasses.map((rc) => {
+      const key = String(rc._id);
+      const s = studentMap.get(String(rc.studentId)) || {};
+      const nextSession = nextSessionMap.get(key) || null;
+
+      let canJoin = false;
+      let scheduledTime = null;
+
+      if (nextSession) {
+        const startDate = new Date(nextSession.startDateTime);
+        const startMs = startDate.getTime();
+        const endMs = startMs + CLASS_DURATION_MIN * 60 * 1000;
+        const nowMs = now.getTime();
+        const joinOpenAt = startMs - JOIN_BEFORE_MIN * 60 * 1000;
+        const joinCloseAt = endMs + EXPIRE_AFTER_MIN * 60 * 1000;
+        if (nowMs >= joinOpenAt && nowMs <= joinCloseAt) {
+          canJoin = true;
+        }
+        scheduledTime = startDate.toISOString().slice(11, 16);
+      }
+
+      return {
+        regularClassId: rc._id,
+        subject: rc.subject,
+        planType: rc.planType,
+        classCount: rc.classCount,
+        startDate: rc.startDate,
+        paymentStatus: rc.paymentStatus,
+        tutorPaymentStatus: rc.tutorPaymentStatus || "locked",
+        status: rc.status,
+        scheduleStatus: rc.scheduleStatus ?? "not-scheduled",
+        student: {
+          userId: rc.studentId,
+          name: s.name || "Student",
+          photoUrl: s.photoUrl || null,
+        },
+        studentName: s.name || "Student",
+        photoUrl: s.photoUrl || null,
+        nextSession: nextSession
+          ? {
+              sessionId: nextSession._id,
+              startDateTime: nextSession.startDateTime,
+              scheduledTime,
+              meetingLink: nextSession.meetingLink || null,
+              status: nextSession.status,
+              canJoin,
+            }
+          : null,
+        upcomingSessionsCount: sessionsCountMap.get(key) || 0,
+      };
+    });
+
+    return res.json({ success: true, data: enriched });
+  } catch (err) {
+    console.error("getTutorRegularClasses error:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+

@@ -12,6 +12,12 @@ router.get(
   regularClassController.getTutorRegularStudents
 );
 
+router.get(
+  "/tutor/regular-classes",
+  checkRole(["tutor"]),
+  regularClassController.getTutorRegularClasses
+);
+
 
 router.post(
   "/tutor/regular-class/:id/schedule",
