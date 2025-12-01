@@ -465,3 +465,24 @@ exports.getTutorRegularClasses = async (req, res) => {
   }
 };
 
+exports.getRegularClassSessions = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params; // regularClassId
+
+    const rc = await RegularClass.findById(id);
+    if (!rc) return res.status(404).json({ success: false, message: "Regular class not found" });
+
+    const sp = await StudentProfile.findOne({ userId }).select("_id");
+    const tp = await TutorProfile.findOne({ userId }).select("_id");
+    const isAssigned = (sp && String(sp._id) === String(rc.studentId)) || (tp && String(tp._id) === String(rc.tutorId));
+    if (!isAssigned) return res.status(403).json({ success: false, message: "Not authorized" });
+
+    const sessions = await Session.find({ regularClassId: id }).sort({ startDateTime: 1 }).lean();
+    return res.json({ success: true, data: sessions });
+  } catch (err) {
+    console.error("getRegularClassSessions error:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+

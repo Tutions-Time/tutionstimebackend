@@ -9,6 +9,13 @@ const sessionController = require("../controllers/sessionController");
 // All routes require auth
 router.use(authenticate);
 
+// Unified join for student & tutor
+router.post(
+  "/:id/join",
+  checkRole(["student", "tutor"]),
+  sessionController.joinSession
+);
+
 // Tutor: upload recording
 router.post(
   "/:id/upload-recording",
@@ -45,6 +52,39 @@ router.post(
   "/:id/complete",
   checkRole(["tutor"]),
   sessionController.markSessionCompleted
+);
+
+// Assignments per session
+router.post(
+  "/:id/assignments",
+  checkRole(["tutor"]),
+  uploadS3.fields([{ name: "files", maxCount: 5 }]),
+  sessionController.createOrUpdateAssignment
+);
+
+router.get(
+  "/:id/assignments",
+  checkRole(["student", "tutor"]),
+  sessionController.getSessionAssignments
+);
+
+router.get(
+  "/assignments/:assignmentId/download-urls",
+  checkRole(["student", "tutor"]),
+  sessionController.getAssignmentDownloadUrls
+);
+
+router.post(
+  "/assignments/:assignmentId/submit",
+  checkRole(["student"]),
+  uploadS3.fields([{ name: "files", maxCount: 5 }]),
+  sessionController.submitAssignment
+);
+
+router.put(
+  "/assignments/:assignmentId/status",
+  checkRole(["tutor"]),
+  sessionController.updateAssignmentStatus
 );
 
 module.exports = router;

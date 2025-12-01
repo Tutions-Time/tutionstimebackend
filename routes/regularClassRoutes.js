@@ -32,5 +32,12 @@ router.get(
   regularClassController.getStudentRegularClasses
 );
 
+router.get(
+  "/regular/:id/sessions",
+  authenticate,
+  checkRole(["student", "tutor"]),
+  regularClassController.getRegularClassSessions
+);
+
 
 module.exports = router;
