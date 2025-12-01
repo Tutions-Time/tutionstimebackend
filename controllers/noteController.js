@@ -204,7 +204,10 @@ exports.searchNotes = async (req, res) => {
 
 exports.getPurchasedNotes = async (req, res) => {
   try {
-    const studentId = req.user.profileId || req.user.id;
+    const userId = req.user.id;
+    const StudentProfile = require("../models/StudentProfile");
+    const sp = await StudentProfile.findOne({ userId }).select("_id");
+    const studentId = sp?._id || userId;
     const payments = await Payment.find({
       type: "note",
       status: "paid",

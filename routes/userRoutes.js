@@ -15,6 +15,13 @@ router.post(
   userController.updateStudentProfile
 );
 
+router.get(
+  '/student-profile/:studentUserId',
+  authenticate,
+  checkRole(['tutor']),
+  userController.getStudentProfileForTutor
+);
+
 router.post(
   '/tutor-profile',
   authenticate,

@@ -106,7 +106,10 @@ exports.createSubscriptionOrder = async (req, res) => {
 exports.createNoteOrder = async (req, res) => {
   try {
     const { noteId } = req.body;
-    const studentId = req.user.profileId || req.user.id;
+    const userId = req.user.id;
+    const StudentProfile = require("../models/StudentProfile");
+    const sp = await StudentProfile.findOne({ userId }).select("_id");
+    const studentId = sp?._id || userId;
 
     if (!noteId) {
       return res.status(400).json({ success: false, message: "noteId is required" });
@@ -245,40 +248,49 @@ exports.razorpayWebhook = async (req, res) => {
         }
 
         await rc.save();
-      }
 
-      // Wallet updates: Admin hold and Tutor pending credit
-      try {
-        const commissionPercent = 25;
-        const commissionAmount = (amount * commissionPercent) / 100;
-        const tutorNetAmount = amount - commissionAmount;
+        // Wallet updates: Admin hold and Tutor pending credit (Regular Class)
+        try {
+          if (!payment.walletProcessed) {
+            const commissionPercent = 25;
+            const commissionAmount = (amount * commissionPercent) / 100;
+            const tutorNetAmount = amount - commissionAmount;
 
-        // Admin receives full amount and holds tutor's share
-        await walletService.adminCredit(amount, "Subscription payment captured", { type: "booking", id: payment.regularClassId });
-        await walletService.adminIncreaseHold(tutorNetAmount);
+            // Admin receives full amount and holds tutor's share
+            await walletService.adminCredit(amount, "Subscription payment captured", { type: "booking", id: payment.regularClassId });
+            await walletService.adminIncreaseHold(tutorNetAmount);
 
-        // Tutor sees locked credit immediately
-        await walletService.creditPending(rc.tutorId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
+            // Tutor sees locked credit immediately
+            const TutorProfile = require("../models/TutorProfile");
+            const StudentProfile = require("../models/StudentProfile");
+            const tp = await TutorProfile.findById(rc.tutorId).select("userId");
+            const sp = await StudentProfile.findById(rc.studentId).select("userId");
+            const tutorUserId = tp?.userId || rc.tutorId;
+            const studentUserId = sp?.userId || rc.studentId;
+            await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
 
-        // Student wallet history (virtual debit)
-        await walletService.addTransaction({
-          userId: rc.studentId,
-          type: "debit",
-          amount,
-          description: "Payment for regular class",
-          reference: { type: "booking", id: payment.regularClassId },
-          status: "completed",
-          regularClassId: payment.regularClassId,
-          paymentId: payment._id,
-        });
+            // Student wallet history (virtual debit)
+            await walletService.addTransaction({
+              userId: studentUserId,
+              type: "debit",
+              amount,
+              description: "Payment for regular class",
+              reference: { type: "booking", id: payment.regularClassId },
+              status: "completed",
+              regularClassId: payment.regularClassId,
+              paymentId: payment._id,
+            });
 
-        // Schedule release after 30 days of period end (or startDate)
-        const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
-        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-        payment.releaseAt = releaseAt;
-        await payment.save();
-      } catch (walletErr) {
-        console.error("Wallet update error:", walletErr.message);
+            // Schedule release after 30 days of period end (or startDate)
+            const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
+            const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+            payment.releaseAt = releaseAt;
+            payment.walletProcessed = true;
+            await payment.save();
+          }
+        } catch (walletErr) {
+          console.error("Wallet update error:", walletErr.message);
+        }
       }
 
       await createAdminNotification(
@@ -292,6 +304,57 @@ exports.razorpayWebhook = async (req, res) => {
           amount,
         }
       );
+    }
+
+    // Handle note purchases via webhook as well
+    if (payment.type === "note") {
+      try {
+        const nId = payment.noteId;
+        const note = await Note.findById(nId);
+        if (note) {
+          const amt = payment.amount || Number(note.price) || 0;
+          const commissionPercent = 25;
+          const commissionAmount = (amt * commissionPercent) / 100;
+          const tutorNetAmount = amt - commissionAmount;
+
+          if (!payment.walletProcessed) {
+            await walletService.adminCredit(amt, "Note purchase captured", { type: "note", id: nId });
+            await walletService.adminIncreaseHold(tutorNetAmount);
+
+            const TutorProfile = require("../models/TutorProfile");
+            const StudentProfile = require("../models/StudentProfile");
+            const tp = await TutorProfile.findById(payment.tutorId).select("userId");
+            const sp = await StudentProfile.findById(payment.studentId).select("userId");
+            const tutorUserId = tp?.userId || payment.tutorId;
+            const studentUserId = sp?.userId || payment.studentId;
+
+            await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for note (locked)", { type: "note", id: nId });
+            await walletService.addTransaction({
+              userId: studentUserId,
+              type: "debit",
+              amount: amt,
+              description: "Payment for note",
+              reference: { type: "note", id: nId },
+              status: "completed",
+              paymentId: payment._id,
+            });
+
+            const baseDate = new Date();
+            const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+            payment.releaseAt = releaseAt;
+            payment.walletProcessed = true;
+            await payment.save();
+          }
+
+          await createAdminNotification(
+            "Note payment received",
+            `Note payment ${payment._id} captured`,
+            { paymentId: payment._id, noteId: nId, gatewayPaymentId: paymentId, gatewayOrderId: orderId, amount: amt }
+          );
+        }
+      } catch (err2) {
+        console.error("Webhook note handling error:", err2.message);
+      }
     }
 
     return res.status(200).json({ received: true });
@@ -355,43 +418,53 @@ exports.verifyPayment = async (req, res) => {
         await rc.save();
       }
 
-    // Wallet + release schedule
-    try {
-      const amount = payment.amount || 0;
-      const commissionPercent = 25;
-      const commissionAmount = (amount * commissionPercent) / 100;
-      const tutorNetAmount = amount - commissionAmount;
+      // Wallet + release schedule
+      try {
+        if (!payment.walletProcessed) {
+          const amount = payment.amount || 0;
+          const commissionPercent = 25;
+          const commissionAmount = (amount * commissionPercent) / 100;
+          const tutorNetAmount = amount - commissionAmount;
 
-      // Admin receives full amount and holds tutor's share
-      await walletService.adminCredit(amount, "Subscription payment verified", { type: "booking", id: payment.regularClassId });
-      await walletService.adminIncreaseHold(tutorNetAmount);
+          // Admin receives full amount and holds tutor's share
+          await walletService.adminCredit(amount, "Subscription payment verified", { type: "booking", id: payment.regularClassId });
+          await walletService.adminIncreaseHold(tutorNetAmount);
 
-      // Tutor sees locked credit
-      const rc = await RegularClass.findById(rcId);
-      if (rc) {
-        await walletService.creditPending(rc.tutorId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
+          const rc2 = await RegularClass.findById(rcId);
+          if (rc2) {
+            const TutorProfile = require("../models/TutorProfile");
+            const StudentProfile = require("../models/StudentProfile");
+            const tp = await TutorProfile.findById(rc2.tutorId).select("userId");
+            const sp = await StudentProfile.findById(rc2.studentId).select("userId");
+            const tutorUserId = tp?.userId || rc2.tutorId;
+            const studentUserId = sp?.userId || rc2.studentId;
+            await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
 
-        // Student wallet history
-        await walletService.addTransaction({
-          userId: rc.studentId,
-          type: "debit",
-          amount,
-          description: "Payment for regular class",
-          reference: { type: "booking", id: payment.regularClassId },
-          status: "completed",
-          regularClassId: payment.regularClassId,
-          paymentId: payment._id,
-        });
+            // Student wallet history
+            await walletService.addTransaction({
+              userId: studentUserId,
+              type: "debit",
+              amount,
+              description: "Payment for regular class",
+              reference: { type: "booking", id: payment.regularClassId },
+              status: "completed",
+              regularClassId: payment.regularClassId,
+              paymentId: payment._id,
+            });
 
-        const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
-        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-        payment.releaseAt = releaseAt;
-        await payment.save();
+            const baseDate = rc2.currentPeriodEnd || rc2.startDate || new Date();
+            const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+            payment.releaseAt = releaseAt;
+            payment.walletProcessed = true;
+            await payment.save();
+          }
+        }
+      } catch (walletErr) {
+        console.error("Wallet update error:", walletErr.message);
       }
-    } catch (walletErr) {
-      console.error("Wallet update error:", walletErr.message);
     }
 
+    // Notes processing (idempotent and independent of rcId)
     if (noteId || payment.type === "note") {
       const nId = noteId || payment.noteId;
       const note = await Note.findById(nId);
@@ -400,34 +473,43 @@ exports.verifyPayment = async (req, res) => {
       }
 
       try {
-        const amount = payment.amount || Number(note.price) || 0;
-        const commissionPercent = 25;
-        const commissionAmount = (amount * commissionPercent) / 100;
-        const tutorNetAmount = amount - commissionAmount;
+        if (!payment.walletProcessed) {
+          const amount = payment.amount || Number(note.price) || 0;
+          const commissionPercent = 25;
+          const commissionAmount = (amount * commissionPercent) / 100;
+          const tutorNetAmount = amount - commissionAmount;
 
-        await walletService.adminCredit(amount, "Note purchase verified", { type: "note", id: nId });
-        await walletService.adminIncreaseHold(tutorNetAmount);
+          await walletService.adminCredit(amount, "Note purchase verified", { type: "note", id: nId });
+          await walletService.adminIncreaseHold(tutorNetAmount);
 
-        await walletService.creditPending(payment.tutorId, "tutor", tutorNetAmount, "Payment received for note (locked)", { type: "note", id: nId });
+          const TutorProfile = require("../models/TutorProfile");
+          const StudentProfile = require("../models/StudentProfile");
+          const tutorProfile = await TutorProfile.findById(payment.tutorId).select("userId");
+          const studentProfile = await StudentProfile.findById(payment.studentId).select("userId");
+          const tutorUserId = tutorProfile?.userId || payment.tutorId;
+          const studentUserId = studentProfile?.userId || payment.studentId;
 
-        await walletService.addTransaction({
-          userId: payment.studentId,
-          type: "debit",
-          amount,
-          description: "Payment for note",
-          reference: { type: "note", id: nId },
-          status: "completed",
-          paymentId: payment._id,
-        });
+          await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for note (locked)", { type: "note", id: nId });
 
-        const baseDate = new Date();
-        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-        payment.releaseAt = releaseAt;
-        await payment.save();
+          await walletService.addTransaction({
+            userId: studentUserId,
+            type: "debit",
+            amount,
+            description: "Payment for note",
+            reference: { type: "note", id: nId },
+            status: "completed",
+            paymentId: payment._id,
+          });
+
+          const baseDate = new Date();
+          const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+          payment.releaseAt = releaseAt;
+          payment.walletProcessed = true;
+          await payment.save();
+        }
       } catch (walletErr) {
         console.error("Wallet update error:", walletErr.message);
       }
-    }
     }
 
     await createAdminNotification(
@@ -523,8 +605,30 @@ exports.listNotePayments = async (req, res) => {
       if (to) filter.createdAt.$lte = new Date(to);
     }
 
-    const items = await Payment.find(filter).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, data: items });
+    const items = await Payment.find(filter)
+      .sort({ createdAt: -1 })
+      .populate({ path: "studentId", select: "name" })
+      .populate({ path: "tutorId", select: "name" })
+      .populate({ path: "noteId", select: "title" })
+      .lean();
+
+    const data = items.map((p) => ({
+      _id: p._id,
+      type: p.type,
+      amount: p.amount,
+      currency: p.currency,
+      status: p.status,
+      gateway: p.gateway,
+      gatewayOrderId: p.gatewayOrderId,
+      gatewayPaymentId: p.gatewayPaymentId,
+      createdAt: p.createdAt,
+      studentName: p.studentId?.name || "Student",
+      tutorName: p.tutorId?.name || "Tutor",
+      noteId: p.noteId?._id || p.noteId,
+      noteTitle: p.noteId?.title || "",
+    }));
+
+    res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
@@ -537,6 +641,110 @@ exports.getTutorNoteRevenue = async (req, res) => {
     const total = paidNotes.reduce((sum, p) => sum + Number(p.amount || 0), 0);
     const count = paidNotes.length;
     res.json({ success: true, data: { total, count } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+// Tutor: list note payments (sales) with student names and note titles
+exports.getTutorNoteHistory = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const userId = req.user.id;
+    const TutorProfile = require("../models/TutorProfile");
+    const tp = await TutorProfile.findOne({ userId }).select("_id");
+    if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
+
+    const filter = { type: "note", tutorId: tp._id };
+    if (from || to) {
+      filter.createdAt = {};
+      if (from) filter.createdAt.$gte = new Date(from);
+      if (to) filter.createdAt.$lte = new Date(to);
+    }
+
+    const items = await Payment.find(filter)
+      .sort({ createdAt: -1 })
+      .populate({ path: "studentId", select: "name" })
+      .populate({ path: "noteId", select: "title" })
+      .lean();
+
+    const data = items.map((p) => ({
+      _id: p._id,
+      amount: p.amount,
+      currency: p.currency,
+      status: p.status,
+      createdAt: p.createdAt,
+      studentName: p.studentId?.name || "Student",
+      noteTitle: p.noteId?.title || "",
+    }));
+
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+// Admin: combined payment history (subscription + note)
+exports.listAllPaymentsHistory = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const range = (q = {}) => {
+      if (from || to) {
+        q.createdAt = {};
+        if (from) q.createdAt.$gte = new Date(from);
+        if (to) q.createdAt.$lte = new Date(to);
+      }
+      return q;
+    };
+
+    const subs = await Payment.find(range({ type: "subscription" }))
+      .sort({ createdAt: -1 })
+      .populate({ path: "studentId", select: "name" })
+      .populate({ path: "tutorId", select: "name" })
+      .populate({ path: "regularClassId", select: "subject planType classCount" })
+      .lean();
+
+    const notes = await Payment.find(range({ type: "note" }))
+      .sort({ createdAt: -1 })
+      .populate({ path: "studentId", select: "name" })
+      .populate({ path: "tutorId", select: "name" })
+      .populate({ path: "noteId", select: "title" })
+      .lean();
+
+    const mapSub = subs.map((p) => ({
+      _id: p._id,
+      type: p.type,
+      amount: p.amount,
+      currency: p.currency,
+      status: p.status,
+      gateway: p.gateway,
+      gatewayOrderId: p.gatewayOrderId,
+      gatewayPaymentId: p.gatewayPaymentId,
+      createdAt: p.createdAt,
+      studentName: p.studentId?.name || "Student",
+      tutorName: p.tutorId?.name || "Tutor",
+      subject: p.regularClassId?.subject || "",
+      planType: p.regularClassId?.planType || "",
+      classCount: p.regularClassId?.classCount || null,
+    }));
+
+    const mapNote = notes.map((p) => ({
+      _id: p._id,
+      type: p.type,
+      amount: p.amount,
+      currency: p.currency,
+      status: p.status,
+      gateway: p.gateway,
+      gatewayOrderId: p.gatewayOrderId,
+      gatewayPaymentId: p.gatewayPaymentId,
+      createdAt: p.createdAt,
+      studentName: p.studentId?.name || "Student",
+      tutorName: p.tutorId?.name || "Tutor",
+      noteTitle: p.noteId?.title || "",
+    }));
+
+    const combined = [...mapSub, ...mapNote].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    res.json({ success: true, data: combined });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
@@ -591,9 +799,22 @@ exports.listTutorPayouts = async (req, res) => {
 
     const payouts = await Payment.find(filter)
       .sort({ createdAt: -1 })
+      .populate({ path: "tutorId", select: "name" })
       .lean();
 
-    res.json({ success: true, data: payouts });
+    const data = payouts.map((p) => ({
+      _id: p._id,
+      tutorId: p.tutorId?._id || p.tutorId,
+      tutorName: p.tutorId?.name || "Tutor",
+      amount: p.amount,
+      commissionAmount: p.commissionAmount,
+      tutorNetAmount: p.tutorNetAmount ?? Math.max(0, Number(p.amount || 0) - Number(p.commissionAmount || 0)),
+      periodStart: p.periodStart,
+      periodEnd: p.periodEnd,
+      status: p.status,
+    }));
+
+    res.json({ success: true, data });
   } catch (err) {
     console.error("listTutorPayouts error:", err);
     res.status(500).json({ success: false, message: "Server error", error: err.message });
@@ -619,7 +840,14 @@ exports.listSubscriptionPayments = async (req, res) => {
       .sort({ createdAt: -1 })
       .populate({ path: "studentId", select: "name" })
       .populate({ path: "tutorId", select: "name" })
-      .populate({ path: "regularClassId", select: "subject planType classCount" })
+      .populate({
+        path: "regularClassId",
+        select: "subject planType classCount studentId tutorId",
+        populate: [
+          { path: "studentId", select: "name" },
+          { path: "tutorId", select: "name" }
+        ]
+      })
       .lean();
 
     const data = payments.map((p) => ({
@@ -631,8 +859,8 @@ exports.listSubscriptionPayments = async (req, res) => {
       gatewayOrderId: p.gatewayOrderId,
       gatewayPaymentId: p.gatewayPaymentId,
       createdAt: p.createdAt,
-      studentName: p.studentId?.name || "Student",
-      tutorName: p.tutorId?.name || "Tutor",
+      studentName: p.studentId?.name || p.regularClassId?.studentId?.name || "Student",
+      tutorName: p.tutorId?.name || p.regularClassId?.tutorId?.name || "Tutor",
       subject: p.regularClassId?.subject || "",
       planType: p.regularClassId?.planType || "",
       classCount: p.regularClassId?.classCount || null,
