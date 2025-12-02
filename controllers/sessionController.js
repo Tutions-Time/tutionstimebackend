@@ -258,3 +258,96 @@ exports.markSessionCompleted = async (req, res) => {
       .json({ success: false, message: err.message || "Server error" });
   }
 };
+
+/**
+ * Auto-complete sessions after 1 hour of start time
+ * Runs via setInterval from app.js
+ */
+exports.autoCompletePastSessions = async function autoCompletePastSessions() {
+  try {
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+
+    const sessions = await Session.find({
+      status: "scheduled",
+      startDateTime: { $lte: oneHourAgo },
+    });
+
+    if (!sessions.length) return;
+
+    for (const s of sessions) {
+      s.status = "completed";
+      if (s.attendance === "not-marked" && s.studentJoinTime) {
+        s.attendance = "present";
+      }
+      await s.save();
+    }
+  } catch (err) {
+    console.error("autoCompletePastSessions error:", err.message);
+  }
+};
+
+/**
+ * Join a session: returns meeting link and records attendance join event
+ * POST /api/sessions/:id/join
+ * Roles: student, tutor
+ */
+exports.joinSession = async (req, res) => {
+  try {
+    const sessionId = req.params.id;
+    const userId = req.user.id;
+    const role = req.user.role;
+
+    const session = await Session.findById(sessionId).populate("regularClassId");
+    if (!session) {
+      return res.status(404).json({ success: false, message: "Session not found" });
+    }
+
+    if (!session.meetingLink) {
+      return res.status(400).json({ success: false, message: "Meeting link unavailable" });
+    }
+
+    if (session.status !== "scheduled") {
+      return res.status(403).json({ success: false, message: "Session is not joinable" });
+    }
+
+    // Authorize membership
+    const isTutor = role === "tutor" && String(session.regularClassId.tutorId) === String(userId);
+    const isStudent = role === "student" && String(session.regularClassId.studentId) === String(userId);
+    if (!isTutor && !isStudent) {
+      return res.status(403).json({ success: false, message: "Not authorized" });
+    }
+
+    // Join window gating (open 5 min before, close 5 min after class end)
+    const start = new Date(session.startDateTime).getTime();
+    const classDurationMin = 60;
+    const joinBeforeMin = 5;
+    const expireAfterMin = 5;
+    const end = start + classDurationMin * 60 * 1000;
+    const openAt = start - joinBeforeMin * 60 * 1000;
+    const closeAt = end + expireAfterMin * 60 * 1000;
+    const now = Date.now();
+    const canJoin = now >= openAt && now <= closeAt;
+    if (!canJoin) {
+      return res.status(403).json({ success: false, message: "Join window closed" });
+    }
+
+    const nowDate = new Date();
+    if (isStudent) {
+      session.studentJoinTime = nowDate;
+    } else if (isTutor) {
+      session.tutorJoinTime = nowDate;
+    }
+
+    if (session.studentJoinTime && session.tutorJoinTime) {
+      session.attendance = "present";
+    }
+
+    await session.save();
+
+    return res.json({ success: true, url: session.meetingLink });
+  } catch (err) {
+    console.error("joinSession error:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};

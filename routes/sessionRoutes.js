@@ -40,6 +40,13 @@ router.post(
   sessionController.markAttendanceEvent
 );
 
+// Student & Tutor: join session (returns meeting link)
+router.post(
+  "/:id/join",
+  checkRole(["student", "tutor"]),
+  sessionController.joinSession
+);
+
 // Tutor: mark session as completed
 router.post(
   "/:id/complete",

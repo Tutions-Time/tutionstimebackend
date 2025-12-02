@@ -78,12 +78,14 @@ app.use("/api/regular", require("./routes/regularClassRoutes.js"));
 
 
 const { autoCompletePastDemos } = require('./controllers/bookingController');
+const { autoCompletePastSessions } = require('./controllers/sessionController');
 const payoutScheduler = require('./services/cron/payoutScheduler');
 
 app.use("/api/sessions", require("./routes/sessionRoutes"));
 
 setInterval(() => {
   autoCompletePastDemos();
+  autoCompletePastSessions();
 }, 5 * 60 * 1000);
 payoutScheduler.start();
 payoutScheduler.start();
