@@ -485,3 +485,33 @@ exports.getTutorRegularClasses = async (req, res) => {
   }
 };
 
+// List all sessions for a given regular class
+exports.getRegularClassSessions = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const role = req.user.role;
+    const rcId = req.params.id;
+
+    const rc = await RegularClass.findById(rcId).lean();
+    if (!rc) {
+      return res.status(404).json({ success: false, message: "Regular class not found" });
+    }
+
+    // Authorize: tutor or student assigned to this class
+    const isTutor = role === "tutor" && String(rc.tutorId) === String(userId);
+    const isStudent = role === "student" && String(rc.studentId) === String(userId);
+    if (!isTutor && !isStudent) {
+      return res.status(403).json({ success: false, message: "Not authorized" });
+    }
+
+    const sessions = await Session.find({ regularClassId: rcId })
+      .sort({ startDateTime: 1 })
+      .lean();
+
+    return res.json({ success: true, data: sessions });
+  } catch (err) {
+    console.error("getRegularClassSessions error:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+

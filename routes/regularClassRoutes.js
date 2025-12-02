@@ -32,5 +32,12 @@ router.get(
   regularClassController.getStudentRegularClasses
 );
 
+// List all sessions for a regular class (student or tutor)
+router.get(
+  "/:id/sessions",
+  (req, res, next) => next(), // already authenticated via router.use
+  regularClassController.getRegularClassSessions
+);
+
 
 module.exports = router;
