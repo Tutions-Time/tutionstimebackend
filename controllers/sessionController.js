@@ -8,6 +8,7 @@ const RegularClass = require("../models/RegularClass");
  * Helper: find session and check tutor ownership
  */
 async function findSessionForTutor(sessionId, tutorUserId) {
+  
   const session = await Session.findById(sessionId).populate("regularClassId");
   if (!session) {
     const err = new Error("Session not found");

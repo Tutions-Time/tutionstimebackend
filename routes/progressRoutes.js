@@ -1,0 +1,36 @@
+const express = require("express");
+const router = express.Router();
+const { authenticate, checkRole } = require("../middleware/auth");
+const progressController = require("../controllers/progressController");
+
+router.use(authenticate);
+
+// Student progress
+router.get(
+  "/student/summary",
+  checkRole(["student"]),
+  progressController.getStudentProgressSummary
+);
+
+router.get(
+  "/student/by-subject",
+  checkRole(["student"]),
+  progressController.getStudentProgressBySubject
+);
+
+// Tutor progress
+router.get(
+  "/tutor/summary",
+  checkRole(["tutor"]),
+  progressController.getTutorProgressSummary
+);
+
+// Student feedback for regular session
+router.post(
+  "/sessions/:id/feedback",
+  checkRole(["student"]),
+  progressController.giveSessionFeedback
+);
+
+module.exports = router;
+

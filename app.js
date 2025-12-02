@@ -75,11 +75,13 @@ app.use('/api/meta', require('./routes/metaRoutes.js'));
 app.use('/api/admin/notifications', require('./routes/adminNotificationRoutes'));
 app.use('/api/tutor-switch', require('./routes/tutorSwitch'));
 app.use("/api/regular", require("./routes/regularClassRoutes.js"));
+app.use("/api/progress", require("./routes/progressRoutes.js"));
 
 
 const { autoCompletePastDemos } = require('./controllers/bookingController');
 const { autoCompletePastSessions } = require('./controllers/sessionController');
 const payoutScheduler = require('./services/cron/payoutScheduler');
+const weeklyReportScheduler = require('./services/cron/weeklyReportScheduler');
 
 app.use("/api/sessions", require("./routes/sessionRoutes"));
 
@@ -89,6 +91,7 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 payoutScheduler.start();
 payoutScheduler.start();
+weeklyReportScheduler.start();
 
 
 app.get("/", (req, res) =>
