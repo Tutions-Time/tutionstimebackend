@@ -94,8 +94,12 @@ exports.scheduleRegularClassSessions = async (req, res) => {
       });
     }
 
-    // Check Tutor Ownership
-    if (rc.tutorId.toString() !== tutorUserId) {
+    // Check Tutor Ownership — support both User._id and TutorProfile._id stored in rc.tutorId
+    const ownsClass =
+      String(rc.tutorId) === String(tutorUserId) ||
+      (tutorProfile && String(rc.tutorId) === String(tutorProfile._id));
+
+    if (!ownsClass) {
       return res.status(403).json({
         success: false,
         message: "Not authorized",
@@ -164,14 +168,20 @@ exports.scheduleRegularClassSessions = async (req, res) => {
     // 🔥 2️⃣ MONTHLY PLAN (automatic)
     // ------------------------------
     else if (rc.planType === "monthly") {
-      const monthPrefix = rc.startDate.toISOString().slice(0, 7); // "YYYY-MM"
+      const start = new Date(rc.startDate);
+      const monthPrefix = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1))
+        .toISOString()
+        .slice(0, 7);
       selectedDates = futureDates.filter((d) => d.startsWith(monthPrefix));
 
       if (!selectedDates.length) {
-        return res.status(400).json({
-          success: false,
-          message: "No availability for this month",
-        });
+        const nextMonth = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+        const nextMonthPrefix = nextMonth.toISOString().slice(0, 7);
+        selectedDates = futureDates.filter((d) => d.startsWith(nextMonthPrefix));
+      }
+
+      if (!selectedDates.length) {
+        selectedDates = futureDates.slice(0, Math.min(futureDates.length, 8));
       }
     } else {
       return res.status(400).json({
@@ -185,6 +195,16 @@ exports.scheduleRegularClassSessions = async (req, res) => {
     // ------------------------------
     await Session.deleteMany({ regularClassId: rcId });
 
+    // Resolve StudentProfile._id and TutorProfile._id for sessions
+    const resolvedStudentProfile =
+      (await StudentProfile.findOne({ userId: rc.studentId }).select("_id")) ||
+      (await StudentProfile.findById(rc.studentId).select("_id"));
+    const resolvedTutorProfile =
+      tutorProfile || (await TutorProfile.findById(rc.tutorId).lean());
+
+    const studentProfileId = resolvedStudentProfile?._id || rc.studentId;
+    const tutorProfileId = resolvedTutorProfile?._id || rc.tutorId;
+
     // ------------------------------
     // 🧪 Create Sessions Automatically
     // ------------------------------
@@ -193,8 +213,8 @@ exports.scheduleRegularClassSessions = async (req, res) => {
 
       return {
         regularClassId: rc._id,
-        studentId: rc.studentId,
-        tutorId: rc.tutorId,
+        studentId: studentProfileId,
+        tutorId: tutorProfileId,
         startDateTime,
         meetingLink: `https://meet.jit.si/tuitiontime-${rcId}-${idx}-${Date.now()}`,
         status: "scheduled",
