@@ -124,6 +124,10 @@ exports.createGroupOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: "Batch not available" });
     }
 
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+      return res.status(500).json({ success: false, message: "Razorpay not configured" });
+    }
+
     const now = Date.now();
     const hold = (gb.holds || []).find(
       (h) => String(h.studentId) === String(sp._id) && h.status === "active" && new Date(h.expiresAt).getTime() > now

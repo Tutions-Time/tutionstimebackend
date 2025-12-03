@@ -32,17 +32,21 @@ const groupBatchSchema = new mongoose.Schema(
     recurring: scheduleRecurringSchema,
     seatCap: { type: Number, required: true },
     pricePerStudent: { type: Number, required: true },
-    meetingLink: { type: String },
-    accessWindow: {
-      joinBeforeMin: { type: Number, default: 5 },
-      expireAfterMin: { type: Number, default: 5 }
-    },
-    description: { type: String },
-    published: { type: Boolean, default: false },
-    status: { type: String, enum: ["active", "cancelled"], default: "active" },
-    enrolled: [{ type: mongoose.Schema.Types.ObjectId, ref: "StudentProfile" }],
-    holds: [holdSchema],
-    waitlist: [{ type: mongoose.Schema.Types.ObjectId, ref: "StudentProfile" }]
+  meetingLink: { type: String },
+  accessWindow: {
+    joinBeforeMin: { type: Number, default: 5 },
+    expireAfterMin: { type: Number, default: 5 }
+  },
+  description: { type: String },
+  published: { type: Boolean, default: false },
+  status: { type: String, enum: ["active", "cancelled"], default: "active" },
+  batchStartDate: { type: Date },
+  batchEndDate: { type: Date },
+  enrollmentOpenAt: { type: Date },
+  enrollmentCloseAt: { type: Date },
+  enrolled: [{ type: mongoose.Schema.Types.ObjectId, ref: "StudentProfile" }],
+  holds: [holdSchema],
+  waitlist: [{ type: mongoose.Schema.Types.ObjectId, ref: "StudentProfile" }]
   },
   { timestamps: true }
 );

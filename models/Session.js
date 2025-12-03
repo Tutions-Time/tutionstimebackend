@@ -14,7 +14,7 @@ const sessionSchema = new mongoose.Schema(
     studentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "StudentProfile",
-      required: true,
+      required: false,
     },
     tutorId: {
       type: mongoose.Schema.Types.ObjectId,

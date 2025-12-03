@@ -81,8 +81,7 @@ function validateBatchInput(tp, body) {
   }
   payload.fixedDates = Array.from(new Set(dates.map((d) => d.toISOString()))).map((s) => new Date(s));
 
-  const meetingLink = body.meetingLink && String(body.meetingLink).trim() ? String(body.meetingLink).trim() : `https://meet.jit.si/tuitiontime-${nanoid()}`;
-  payload.meetingLink = meetingLink;
+  payload.meetingLink = `https://meet.jit.si/tuitiontime-${Math.random().toString(36).slice(2, 10)}`;
 
   const published = !!body.published;
   payload.published = published;
@@ -121,6 +120,18 @@ exports.createBatch = async (req, res) => {
       description: payload.description,
       published: payload.published,
     });
+
+    const existingSessions = await Session.countDocuments({ groupBatchId: gb._id });
+    if (existingSessions === 0) {
+      const sessions = (gb.fixedDates || []).map((d, idx) => ({
+        groupBatchId: gb._id,
+        tutorId: gb.tutorId,
+        startDateTime: d,
+        meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${idx}-${Date.now()}`,
+        status: "scheduled",
+      }));
+      if (sessions.length) await Session.insertMany(sessions);
+    }
 
     await createAdminNotification("Group batch created", `Batch ${gb._id} created`, { batchId: gb._id, tutorId: tp._id });
     metrics.emit("group.created", { batchId: gb._id });
@@ -164,7 +175,31 @@ exports.editBatch = async (req, res) => {
     if (!tp || String(gb.tutorId) !== String(tp._id)) return res.status(403).json({ success: false, message: "Not authorized" });
 
     const update = req.body || {};
+    const wasPublished = !!gb.published;
     Object.assign(gb, update);
+
+    if (!wasPublished && gb.published) {
+      const dates = (gb.fixedDates || []).map((d) => new Date(d)).filter((d) => !isNaN(d.getTime()));
+      if (dates.length) {
+        dates.sort((a, b) => a.getTime() - b.getTime());
+        gb.batchStartDate = dates[0];
+        gb.batchEndDate = dates[dates.length - 1];
+        gb.enrollmentOpenAt = gb.enrollmentOpenAt || new Date();
+        gb.enrollmentCloseAt = gb.enrollmentCloseAt || new Date(dates[0].getTime());
+      }
+      const existing = await Session.countDocuments({ groupBatchId: gb._id });
+      if (existing === 0) {
+        const sessions = (gb.fixedDates || []).map((d, idx) => ({
+          groupBatchId: gb._id,
+          tutorId: gb.tutorId,
+          startDateTime: d,
+          meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${idx}-${Date.now()}`,
+          status: "scheduled",
+        }));
+        if (sessions.length) await Session.insertMany(sessions);
+      }
+    }
+
     await gb.save();
     await createAdminNotification("Group batch updated", `Batch ${gb._id} updated`, { batchId: gb._id });
     metrics.emit("group.updated", { batchId: gb._id });
@@ -230,7 +265,16 @@ exports.listBatches = async (req, res) => {
     const q = { published: true, status: "active" };
     if (subject) q.subject = subject;
     if (level) q.level = level;
-    const items = await GroupBatch.find(q).sort({ createdAt: -1 }).lean();
+    let items = await GroupBatch.find(q).sort({ createdAt: -1 }).lean();
+    if (date) {
+      const d0 = new Date(date);
+      const d1 = new Date(date);
+      d1.setHours(23, 59, 59, 999);
+      items = items.filter((b) => (b.fixedDates || []).some((fd) => {
+        const dt = new Date(fd).getTime();
+        return dt >= d0.getTime() && dt <= d1.getTime();
+      }));
+    }
     const now = Date.now();
     const data = items.map((b) => {
       const holdActive = (b.holds || []).filter((h) => h.status === "active" && new Date(h.expiresAt).getTime() > now).length;
@@ -277,6 +321,14 @@ exports.joinBatch = async (req, res) => {
         _id: batchId,
         status: "active",
         published: true,
+        $or: [
+          { enrollmentOpenAt: { $exists: false } },
+          { enrollmentOpenAt: { $lte: now } }
+        ],
+        $or: [
+          { enrollmentCloseAt: { $exists: false } },
+          { enrollmentCloseAt: { $gte: now } }
+        ],
         $expr: {
           $gt: [
             "$seatCap",
@@ -287,7 +339,14 @@ exports.joinBatch = async (req, res) => {
       { $push: { holds: { studentId: sp._id, expiresAt: expires } } },
       { new: true }
     );
-    if (!b) return res.status(409).json({ success: false, message: "No seats available" });
+    if (!b) {
+      // minimal waitlist handling
+      await GroupBatch.findOneAndUpdate(
+        { _id: batchId, status: "active", published: true },
+        { $addToSet: { waitlist: sp._id } }
+      );
+      return res.status(409).json({ success: false, message: "No seats available; added to waitlist" });
+    }
 
     const hold = (b.holds || []).find((h) => String(h.studentId) === String(sp._id) && h.status === "active" && new Date(h.expiresAt).getTime() >= now.getTime());
     await createAdminNotification("Seat reserved", `Hold created for batch ${batchId}`, { batchId, studentId: sp._id });
@@ -383,11 +442,16 @@ exports.generateUpcomingSessions = async (req, res) => {
     const batchId = req.params.id;
     const gb = await GroupBatch.findById(batchId);
     if (!gb) return res.status(404).json({ success: false, message: "Batch not found" });
-    const sessions = [];
-    for (const d of gb.fixedDates || []) {
-      sessions.push({ groupBatchId: gb._id, tutorId: gb.tutorId, startDateTime: d, meetingLink: gb.meetingLink });
-    }
-    const created = await Session.insertMany(sessions.map((s) => ({ ...s })));
+    const existing = await Session.countDocuments({ groupBatchId: gb._id });
+    if (existing > 0) return res.json({ success: true, count: existing });
+    const sessions = (gb.fixedDates || []).map((d, idx) => ({
+      groupBatchId: gb._id,
+      tutorId: gb.tutorId,
+      startDateTime: d,
+      meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${idx}-${Date.now()}`,
+      status: "scheduled",
+    }));
+    const created = sessions.length ? await Session.insertMany(sessions) : [];
     await createAdminNotification("Batch sessions generated", `Generated ${created.length} sessions`, { batchId: gb._id });
     metrics.emit("group.sessions.generated", { batchId: gb._id }, { count: created.length });
     res.json({ success: true, count: created.length });
