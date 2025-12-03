@@ -6,7 +6,10 @@ const sessionSchema = new mongoose.Schema(
     regularClassId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "RegularClass",
-      required: true,
+    },
+    groupBatchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "GroupBatch",
     },
     studentId: {
       type: mongoose.Schema.Types.ObjectId,

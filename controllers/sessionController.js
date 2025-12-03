@@ -2,6 +2,7 @@
 
 const Session = require("../models/Session");
 const RegularClass = require("../models/RegularClass");
+const GroupBatch = require("../models/GroupBatch");
 
 
 /**
@@ -16,8 +17,15 @@ async function findSessionForTutor(sessionId, tutorUserId) {
     throw err;
   }
 
-  // RegularClass stores tutorId = User._id
-  if (String(session.regularClassId.tutorId) !== String(tutorUserId)) {
+  // RegularClass stores tutorId = User._id; GroupBatch stores tutorId in batch
+  if (session.groupBatchId) {
+    const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId");
+    if (!gb || String(gb.tutorId) !== String(tutorUserId)) {
+      const err = new Error("Not authorized to modify this session");
+      err.statusCode = 403;
+      throw err;
+    }
+  } else if (String(session.regularClassId.tutorId) !== String(tutorUserId)) {
     const err = new Error("Not authorized to modify this session");
     err.statusCode = 403;
     throw err;
@@ -171,7 +179,17 @@ exports.markAttendanceEvent = async (req, res) => {
 
     // For safety, verify that this user belongs to the session
     if (role === "student") {
-      if (String(session.regularClassId.studentId) !== String(userId)) {
+      let authorized = false;
+      const StudentProfile = require("../models/StudentProfile");
+      const sp = await StudentProfile.findOne({ userId }).select("_id");
+      const spId = sp?._id || userId;
+      if (session.groupBatchId) {
+        const gb = await GroupBatch.findById(session.groupBatchId).select("enrolled");
+        authorized = !!gb && (gb.enrolled || []).some((s) => String(s) === String(spId));
+      } else {
+        authorized = String(session.regularClassId.studentId) === String(spId);
+      }
+      if (!authorized) {
         return res
           .status(403)
           .json({ success: false, message: "Not your session" });
@@ -183,7 +201,14 @@ exports.markAttendanceEvent = async (req, res) => {
         session.studentLeaveTime = now;
       }
     } else if (role === "tutor") {
-      if (String(session.regularClassId.tutorId) !== String(userId)) {
+      let authorized = false;
+      if (session.groupBatchId) {
+        const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId");
+        authorized = !!gb && String(gb.tutorId) === String(userId);
+      } else {
+        authorized = String(session.regularClassId.tutorId) === String(userId);
+      }
+      if (!authorized) {
         return res
           .status(403)
           .json({ success: false, message: "Not your session" });
@@ -314,8 +339,22 @@ exports.joinSession = async (req, res) => {
     }
 
     // Authorize membership
-    const isTutor = role === "tutor" && String(session.regularClassId.tutorId) === String(userId);
-    const isStudent = role === "student" && String(session.regularClassId.studentId) === String(userId);
+    let isTutor = false;
+    let isStudent = false;
+    if (session.groupBatchId) {
+      const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId enrolled");
+      const StudentProfile = require("../models/StudentProfile");
+      const sp = await StudentProfile.findOne({ userId }).select("_id");
+      const spId = sp?._id || userId;
+      isTutor = role === "tutor" && !!gb && String(gb.tutorId) === String(userId);
+      isStudent = role === "student" && !!gb && (gb.enrolled || []).some((s) => String(s) === String(spId));
+    } else {
+      const StudentProfile = require("../models/StudentProfile");
+      const sp = await StudentProfile.findOne({ userId }).select("_id");
+      const spId = sp?._id || userId;
+      isTutor = role === "tutor" && String(session.regularClassId.tutorId) === String(userId);
+      isStudent = role === "student" && String(session.regularClassId.studentId) === String(spId);
+    }
     if (!isTutor && !isStudent) {
       return res.status(403).json({ success: false, message: "Not authorized" });
     }
@@ -323,8 +362,13 @@ exports.joinSession = async (req, res) => {
     // Join window gating (open 5 min before, close 5 min after class end)
     const start = new Date(session.startDateTime).getTime();
     const classDurationMin = 60;
-    const joinBeforeMin = 5;
-    const expireAfterMin = 5;
+    let joinBeforeMin = 5;
+    let expireAfterMin = 5;
+    if (session.groupBatchId) {
+      const gb = await GroupBatch.findById(session.groupBatchId).select("accessWindow");
+      joinBeforeMin = gb?.accessWindow?.joinBeforeMin ?? joinBeforeMin;
+      expireAfterMin = gb?.accessWindow?.expireAfterMin ?? expireAfterMin;
+    }
     const end = start + classDurationMin * 60 * 1000;
     const openAt = start - joinBeforeMin * 60 * 1000;
     const closeAt = end + expireAfterMin * 60 * 1000;

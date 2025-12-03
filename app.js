@@ -76,6 +76,7 @@ app.use('/api/admin/notifications', require('./routes/adminNotificationRoutes'))
 app.use('/api/tutor-switch', require('./routes/tutorSwitch'));
 app.use("/api/regular", require("./routes/regularClassRoutes.js"));
 app.use("/api/progress", require("./routes/progressRoutes.js"));
+app.use("/api/group-batches", require("./routes/groupBatchRoutes"));
 
 
 const { autoCompletePastDemos } = require('./controllers/bookingController');

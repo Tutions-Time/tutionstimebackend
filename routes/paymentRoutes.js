@@ -3,6 +3,9 @@ const express = require("express");
 const router = express.Router();
 const { authenticate, checkRole } = require("../middleware/auth");
 const paymentController = require("../controllers/paymentController");
+const rateLimit = require("express-rate-limit");
+
+const joinLimiter = rateLimit({ windowMs: 60 * 1000, max: 10 });
 
 // student: create subscription-style order
 router.post(
@@ -18,6 +21,24 @@ router.post(
   authenticate,
   checkRole(["student"]),
   paymentController.verifyPayment
+);
+
+// group batch: create order
+router.post(
+  "/group/create-order",
+  authenticate,
+  checkRole(["student"]),
+  joinLimiter,
+  paymentController.createGroupOrder
+);
+
+// group batch: verify order
+router.post(
+  "/group/verify",
+  authenticate,
+  checkRole(["student"]),
+  joinLimiter,
+  paymentController.verifyGroupPayment
 );
 
 // notes: create order

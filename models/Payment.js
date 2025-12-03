@@ -7,6 +7,10 @@ const paymentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "RegularClass",
     },
+    groupBatchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "GroupBatch",
+    },
     studentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "StudentProfile",
@@ -21,7 +25,7 @@ const paymentSchema = new mongoose.Schema(
     // "note"        = student buys paid note
     type: {
       type: String,
-      enum: ["subscription", "payout", "note"],
+      enum: ["subscription", "payout", "note", "group"],
       required: true,
     },
 

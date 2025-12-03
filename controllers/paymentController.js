@@ -7,6 +7,7 @@ const Note = require("../models/Note");
 const { createAdminNotification } = require("../services/adminNotification");
 const walletService = require("../services/payments/walletService");
 const { default: mongoose } = require("mongoose");
+const GroupBatch = require("../models/GroupBatch");
 
 /**
  * STUDENT: Create Razorpay ORDER for a regular class
@@ -100,6 +101,68 @@ exports.createSubscriptionOrder = async (req, res) => {
     return res
       .status(500)
       .json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+/**
+ * GROUP BATCH: Create Razorpay ORDER for a reserved seat
+ * POST /api/payments/group/create-order
+ * Body: { batchId, reservationId }
+ * Flow: Ensure active hold exists for this student → create order → persist Payment(type="group")
+ */
+exports.createGroupOrder = async (req, res) => {
+  try {
+    const { batchId, reservationId } = req.body;
+    const userId = req.user.id;
+    const StudentProfile = require("../models/StudentProfile");
+    const TutorProfile = require("../models/TutorProfile");
+    const sp = await StudentProfile.findOne({ userId }).select("_id");
+    if (!sp) return res.status(404).json({ success: false, message: "Student profile not found" });
+
+    const gb = await GroupBatch.findById(batchId);
+    if (!gb || gb.status !== "active" || !gb.published) {
+      return res.status(404).json({ success: false, message: "Batch not available" });
+    }
+
+    const now = Date.now();
+    const hold = (gb.holds || []).find(
+      (h) => String(h.studentId) === String(sp._id) && h.status === "active" && new Date(h.expiresAt).getTime() > now
+    );
+    if (!hold) return res.status(409).json({ success: false, message: "Seat reservation expired or missing" });
+
+    const amountInPaise = Math.round(Number(gb.pricePerStudent || 0) * 100);
+    const order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: "INR",
+      receipt: `gb_${batchId}_${Date.now()}`,
+      notes: { batchId: batchId.toString(), studentId: sp._id.toString() },
+    });
+
+    const paymentDoc = await Payment.create({
+      type: "group",
+      groupBatchId: gb._id,
+      studentId: sp._id,
+      tutorId: gb.tutorId,
+      amount: Number(gb.pricePerStudent || 0),
+      currency: "INR",
+      gateway: "razorpay",
+      gatewayOrderId: order.id,
+      status: "created",
+      notes: `Group batch checkout for ${batchId}`,
+    });
+
+    await createAdminNotification(
+      "Group batch payment initiated",
+      `Order ${order.id} created for batch ${batchId}`,
+      { batchId, paymentId: paymentDoc._id, amount: gb.pricePerStudent }
+    );
+    const metrics = require("../services/metricsService");
+    metrics.emit("group.checkout.initiated", { batchId }, { amount: gb.pricePerStudent });
+
+    return res.json({ success: true, key: process.env.RAZORPAY_KEY_ID, orderId: order.id, amount: amountInPaise, currency: "INR" });
+  } catch (err) {
+    console.error("createGroupOrder error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
 
@@ -527,6 +590,90 @@ exports.verifyPayment = async (req, res) => {
     return res.json({ success: true });
   } catch (err) {
     console.error("verifyPayment error", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * GROUP BATCH: Verify payment and finalize enrollment idempotently
+ * POST /api/payments/group/verify
+ * Body: { orderId, paymentId, signature, batchId }
+ * Ensures: signature valid, Payment(type="group") updated, hold finalized, student enrolled
+ */
+exports.verifyGroupPayment = async (req, res) => {
+  try {
+    const { orderId, paymentId, signature, batchId } = req.body;
+    const userId = req.user.id;
+    const StudentProfile = require("../models/StudentProfile");
+    const sp = await StudentProfile.findOne({ userId }).select("_id");
+    if (!orderId || !paymentId || !signature) {
+      return res.status(400).json({ success: false, message: "orderId, paymentId, signature are required" });
+    }
+    const secret = process.env.RAZORPAY_KEY_SECRET;
+    const expected = crypto.createHmac("sha256", secret).update(`${orderId}|${paymentId}`).digest("hex");
+    if (expected !== signature) return res.status(400).json({ success: false, message: "Invalid signature" });
+
+    const payment = await Payment.findOne({ gatewayOrderId: orderId, type: "group" });
+    if (!payment) return res.status(404).json({ success: false, message: "Payment not found" });
+
+    // Idempotency: if already paid, return success
+    if (payment.status === "paid") return res.json({ success: true });
+
+    payment.status = "paid";
+    payment.gatewayPaymentId = paymentId;
+    await payment.save();
+
+    const gb = await GroupBatch.findById(payment.groupBatchId);
+    if (!gb) return res.status(404).json({ success: false, message: "Batch not found" });
+
+    const now = Date.now();
+    const holdIdx = (gb.holds || []).findIndex((h) => String(h.studentId) === String(sp._id) && h.status === "active" && new Date(h.expiresAt).getTime() > now);
+    if (holdIdx === -1) return res.status(409).json({ success: false, message: "Seat hold missing or expired" });
+
+    gb.holds[holdIdx].status = "finalized";
+    gb.enrolled = gb.enrolled || [];
+    if (!gb.enrolled.find((s) => String(s) === String(sp._id))) gb.enrolled.push(sp._id);
+    await gb.save();
+
+    await createAdminNotification(
+      "Group batch payment verified",
+      `Payment ${payment._id} verified and enrollment finalized`,
+      { paymentId: payment._id, batchId: gb._id, studentId: sp._id }
+    );
+    const metrics = require("../services/metricsService");
+    metrics.incrementConversion(gb._id);
+    metrics.incrementFill(gb._id);
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("verifyGroupPayment error", err);
+    try {
+      const { orderId, batchId } = req.body || {};
+      const payment = await Payment.findOne({ gatewayOrderId: orderId, type: "group" });
+      if (payment) {
+        payment.status = "failed";
+        await payment.save();
+      }
+      if (batchId) {
+        const userId = req.user?.id;
+        const StudentProfile = require("../models/StudentProfile");
+        const sp = await StudentProfile.findOne({ userId }).select("_id");
+        const gb = await GroupBatch.findById(batchId);
+        if (gb && sp) {
+          gb.holds = (gb.holds || []).map((h) => {
+            if (String(h.studentId) === String(sp._id) && h.status === "active") h.status = "released";
+            return h;
+          });
+          const next = (gb.waitlist || []).shift();
+          if (next) {
+            const ttlMin = Number(process.env.GROUP_SEAT_HOLD_TTL_MIN || 15);
+            const expires = new Date(Date.now() + ttlMin * 60 * 1000);
+            gb.holds.push({ studentId: next, expiresAt: expires, status: "active" });
+          }
+          await gb.save();
+        }
+      }
+    } catch (_) {}
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
