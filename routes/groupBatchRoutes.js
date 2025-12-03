@@ -7,6 +7,7 @@ const c = require("../controllers/groupBatchController");
 
 router.use(authenticate);
 
+router.get("/create/options", checkRole(["tutor"]), c.getCreateOptions);
 router.post("/create", checkRole(["tutor"]), c.createBatch);
 router.patch("/:id/edit", checkRole(["tutor"]), c.editBatch);
 router.post("/:id/cancel", checkRole(["tutor"]), c.cancelBatch);

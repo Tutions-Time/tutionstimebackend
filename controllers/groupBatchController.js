@@ -17,49 +17,136 @@ function featureEnabled() {
 
 const { nanoid } = require("nanoid");
 
+function toDayName(d) {
+  const map = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return map[new Date(d).getDay()];
+}
+
+function validateBatchInput(tp, body) {
+  const errors = [];
+  const now = Date.now();
+  const subjects = Array.isArray(tp.subjects) ? tp.subjects : [];
+  const levels = Array.isArray(tp.classLevels) ? tp.classLevels : [];
+  const availability = Array.isArray(tp.availability) ? tp.availability : [];
+  const availableDays = availability.map(toDayName);
+  const payload = {};
+
+  const subject = String(body.subject || "").trim();
+  if (!subject || !subjects.includes(subject)) errors.push("Invalid subject");
+  payload.subject = subject;
+
+  const level = body.level ? String(body.level).trim() : undefined;
+  if (level && !levels.includes(level)) errors.push("Invalid level");
+  if (level) payload.level = level;
+
+  const batchType = String(body.batchType || "").trim();
+  if (!["revision", "exam"].includes(batchType)) errors.push("Invalid batchType");
+  payload.batchType = batchType;
+
+  payload.scheduleType = "fixed";
+
+  const seatCap = Number(body.seatCap);
+  if (!Number.isFinite(seatCap) || seatCap < 2 || seatCap > 200) errors.push("Invalid seatCap");
+  payload.seatCap = seatCap;
+
+  const pricePerStudent = Number(body.pricePerStudent);
+  if (!Number.isFinite(pricePerStudent) || pricePerStudent <= 0) errors.push("Invalid pricePerStudent");
+  payload.pricePerStudent = pricePerStudent;
+
+  const description = body.description ? String(body.description).trim() : "";
+  if (description.length > 2000) errors.push("Description too long");
+  payload.description = description;
+
+  const accessWindow = body.accessWindow || {};
+  const joinBeforeMin = Number(accessWindow.joinBeforeMin ?? 5);
+  const expireAfterMin = Number(accessWindow.expireAfterMin ?? 5);
+  if (joinBeforeMin < 0 || joinBeforeMin > 120) errors.push("Invalid joinBeforeMin");
+  if (expireAfterMin < 0 || expireAfterMin > 240) errors.push("Invalid expireAfterMin");
+  payload.accessWindow = { joinBeforeMin, expireAfterMin };
+
+  const fixedDates = Array.isArray(body.fixedDates) ? body.fixedDates : [];
+  const dates = fixedDates
+    .map((d) => new Date(d))
+    .filter((d) => !isNaN(d.getTime()) && d.getTime() > now)
+    .map((d) => new Date(d.toISOString()));
+  if (dates.length === 0) errors.push("No valid fixedDates");
+  if (availability.length > 0) {
+    const availSet = new Set(availability.map((x) => new Date(x).toISOString()));
+    for (const d of dates) {
+      if (!availSet.has(d.toISOString())) {
+        errors.push("fixedDates must be from availability");
+        break;
+      }
+    }
+  }
+  payload.fixedDates = Array.from(new Set(dates.map((d) => d.toISOString()))).map((s) => new Date(s));
+
+  const meetingLink = body.meetingLink && String(body.meetingLink).trim() ? String(body.meetingLink).trim() : `https://meet.jit.si/tuitiontime-${nanoid()}`;
+  payload.meetingLink = meetingLink;
+
+  const published = !!body.published;
+  payload.published = published;
+
+  if (errors.length) {
+    const e = new Error("Validation failed");
+    e.status = 422;
+    e.errors = errors;
+    throw e;
+  }
+  return payload;
+}
+
 exports.createBatch = async (req, res) => {
   try {
     if (!featureEnabled()) return res.status(404).json({ success: false, message: "Feature disabled" });
     const tutorUserId = req.user.id;
     const TutorProfile = require("../models/TutorProfile");
-    const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id");
+    const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id subjects classLevels availability isVerified");
     if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
+    if (!tp.isVerified) return res.status(403).json({ success: false, message: "Tutor not verified" });
 
-    const {
-      subject,
-      level,
-      batchType,
-      scheduleType,
-      fixedDates,
-      recurring,
-      seatCap,
-      pricePerStudent,
-      meetingLink,
-      accessWindow,
-      description,
-      published,
-    } = req.body;
-
-    const autoLink = meetingLink && String(meetingLink).trim() ? meetingLink : `https://meet.jit.si/tuitiontime-${nanoid()}`;
+    const payload = validateBatchInput(tp, req.body || {});
     const gb = await GroupBatch.create({
       tutorId: tp._id,
-      subject,
-      level,
-      batchType,
-      scheduleType,
-      fixedDates: fixedDates || [],
-      recurring: recurring || undefined,
-      seatCap,
-      pricePerStudent,
-      meetingLink: autoLink,
-      accessWindow,
-      description,
-      published: !!published,
+      subject: payload.subject,
+      level: payload.level,
+      batchType: payload.batchType,
+      scheduleType: "fixed",
+      fixedDates: payload.fixedDates,
+      recurring: undefined,
+      seatCap: payload.seatCap,
+      pricePerStudent: payload.pricePerStudent,
+      meetingLink: payload.meetingLink,
+      accessWindow: payload.accessWindow,
+      description: payload.description,
+      published: payload.published,
     });
 
     await createAdminNotification("Group batch created", `Batch ${gb._id} created`, { batchId: gb._id, tutorId: tp._id });
     metrics.emit("group.created", { batchId: gb._id });
     res.json({ success: true, data: gb });
+  } catch (err) {
+    if (err && err.status === 422) return res.status(422).json({ success: false, message: err.message, errors: err.errors });
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.getCreateOptions = async (req, res) => {
+  try {
+    if (!featureEnabled()) return res.status(404).json({ success: false, message: "Feature disabled" });
+    const TutorProfile = require("../models/TutorProfile");
+    const tp = await TutorProfile.findOne({ userId: req.user.id }).select("subjects classLevels availability");
+    if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
+    const subjects = Array.isArray(tp.subjects) ? tp.subjects : [];
+    const levels = Array.isArray(tp.classLevels) ? tp.classLevels : [];
+    const availability = Array.isArray(tp.availability) ? tp.availability : [];
+    const futureDates = availability
+      .map((x) => new Date(x))
+      .filter((d) => !isNaN(d.getTime()) && d.getTime() > Date.now())
+      .map((d) => d.toISOString());
+    const batchTypes = ["revision", "exam"];
+    const scheduleTypes = ["fixed"];
+    res.json({ success: true, data: { subjects, levels, availabilityDates: futureDates, batchTypes, scheduleTypes } });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
@@ -297,29 +384,8 @@ exports.generateUpcomingSessions = async (req, res) => {
     const gb = await GroupBatch.findById(batchId);
     if (!gb) return res.status(404).json({ success: false, message: "Batch not found" });
     const sessions = [];
-    if (gb.scheduleType === "fixed") {
-      for (const d of gb.fixedDates || []) {
-        sessions.push({ groupBatchId: gb._id, tutorId: gb.tutorId, startDateTime: d, meetingLink: gb.meetingLink });
-      }
-    } else {
-      const days = gb.recurring?.days || [];
-      const time = gb.recurring?.time || "";
-      const start = gb.recurring?.startDate ? new Date(gb.recurring.startDate) : new Date();
-      const end = gb.recurring?.endDate ? new Date(gb.recurring.endDate) : new Date(start.getTime() + 30 * 24 * 60 * 60 * 1000);
-      const dayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-      let cur = new Date(start);
-      while (cur <= end) {
-        const dayName = Object.keys(dayMap).find((k) => dayMap[k] === cur.getDay());
-        if (days.includes(dayName)) {
-          const [hh, mm] = String(time).split(":");
-          const dt = new Date(cur);
-          if (hh) dt.setHours(Number(hh));
-          if (mm) dt.setMinutes(Number(mm));
-          dt.setSeconds(0);
-          sessions.push({ groupBatchId: gb._id, tutorId: gb.tutorId, startDateTime: dt, meetingLink: gb.meetingLink });
-        }
-        cur = new Date(cur.getTime() + 24 * 60 * 60 * 1000);
-      }
+    for (const d of gb.fixedDates || []) {
+      sessions.push({ groupBatchId: gb._id, tutorId: gb.tutorId, startDateTime: d, meetingLink: gb.meetingLink });
     }
     const created = await Session.insertMany(sessions.map((s) => ({ ...s })));
     await createAdminNotification("Batch sessions generated", `Generated ${created.length} sessions`, { batchId: gb._id });
