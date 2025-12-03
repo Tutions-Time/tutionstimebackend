@@ -5,6 +5,7 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
 
 async function createAdminNotification(title, message, meta = {}) {
   try {
+    if (process.env.NODE_ENV === 'test') return;
     await AdminNotification.create({ title, message, meta });
 
     if (ADMIN_EMAIL && notificationService?.sendEmail) {
@@ -16,7 +17,9 @@ async function createAdminNotification(title, message, meta = {}) {
       await notificationService.sendEmail(ADMIN_EMAIL, title, html);
     }
   } catch (err) {
-    console.error("Error creating admin notification:", err);
+    if (process.env.NODE_ENV !== 'test') {
+      console.error("Error creating admin notification:", err);
+    }
   }
 }
 

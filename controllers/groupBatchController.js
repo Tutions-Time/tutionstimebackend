@@ -15,6 +15,8 @@ function featureEnabled() {
   return String(process.env.FEATURE_GROUP_BATCHES || "false").toLowerCase() === "true";
 }
 
+const { nanoid } = require("nanoid");
+
 exports.createBatch = async (req, res) => {
   try {
     if (!featureEnabled()) return res.status(404).json({ success: false, message: "Feature disabled" });
@@ -38,6 +40,7 @@ exports.createBatch = async (req, res) => {
       published,
     } = req.body;
 
+    const autoLink = meetingLink && String(meetingLink).trim() ? meetingLink : `https://meet.jit.si/tuitiontime-${nanoid()}`;
     const gb = await GroupBatch.create({
       tutorId: tp._id,
       subject,
@@ -48,7 +51,7 @@ exports.createBatch = async (req, res) => {
       recurring: recurring || undefined,
       seatCap,
       pricePerStudent,
-      meetingLink,
+      meetingLink: autoLink,
       accessWindow,
       description,
       published: !!published,
@@ -133,6 +136,7 @@ exports.rescheduleBatch = async (req, res) => {
 };
 
 exports.listBatches = async (req, res) => {
+  console.log("listBatches", req.query);
   try {
     if (!featureEnabled()) return res.status(404).json({ success: false, message: "Feature disabled" });
     const { subject, level, date } = req.query;
