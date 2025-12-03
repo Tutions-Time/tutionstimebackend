@@ -3,6 +3,7 @@ const Session = require("../../models/Session");
 const TutorProfile = require("../../models/TutorProfile");
 const StudentProfile = require("../../models/StudentProfile");
 const notificationService = require("../notificationService");
+const AdminNotification = require("../../models/AdminNotification");
 
 function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function addDays(d, n) { return new Date(d.getTime() + n * 86400000); }
@@ -38,7 +39,28 @@ async function tutorWeeklySummary(userId) {
   const completed = sessions.filter(s => s.status === "completed").length;
   const present = sessions.filter(s => s.attendance === "present").length;
   const tp = await TutorProfile.findOne({ userId }).select("rating ratingCount").lean();
-  return { sessions: sessions.length, completed, attendanceConsistency: sessions.length ? Math.round((present/sessions.length)*100) : 0, averageRating: tp?.rating || 0, ratingCount: tp?.ratingCount || 0 };
+  const withFeedback = sessions.filter(s => s.status === "completed" && s.sessionFeedback && typeof s.sessionFeedback.overall === "number");
+  const avg = (arr, key) => {
+    const vals = arr.map(x => x.sessionFeedback[key]).filter(n => typeof n === "number");
+    return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : 0;
+  };
+  const rubricAverages = {
+    teaching: avg(withFeedback, "teaching"),
+    communication: avg(withFeedback, "communication"),
+    understanding: avg(withFeedback, "understanding"),
+  };
+  const materials = {
+    notes: sessions.filter(s => s.status === "completed" && !!s.notesUrl).length,
+    assignments: sessions.filter(s => s.status === "completed" && !!s.assignmentUrl).length,
+    recordings: sessions.filter(s => s.status === "completed" && !!s.recordingUrl).length,
+  };
+  const topComments = withFeedback
+    .map(s => ({ c: (s.sessionFeedback.comment||"").trim(), t: s.sessionFeedback.createdAt || s.startDateTime }))
+    .filter(x => !!x.c)
+    .sort((a,b)=>new Date(b.t).getTime()-new Date(a.t).getTime())
+    .slice(0,5)
+    .map(x=>x.c);
+  return { sessions: sessions.length, completed, attendanceConsistency: sessions.length ? Math.round((present/sessions.length)*100) : 0, averageRating: tp?.rating || 0, ratingCount: tp?.ratingCount || 0, rubricAverages, materials, topComments };
 }
 
 async function sendWeeklyReports() {
@@ -55,15 +77,35 @@ async function sendWeeklyReports() {
         const html = `<h3>Your Weekly Learning Summary</h3><p>Sessions: ${sum.sessions}</p><p>Completed: ${sum.completed}</p><p>Attendance: ${sum.attendanceRate}%</p><p>Assignments received: ${sum.assignments}</p>`;
         await notificationService.sendEmail(s.email, "Weekly Summary - TuitionTime", "", html);
       }
+      try {
+        await AdminNotification.create({ title: "Weekly summary sent (student)", message: `Sent to ${s.name}`, meta: { userId: s.userId, ...sum } });
+        if (notificationService?.createInApp) {
+          await notificationService.createInApp(s.userId, "Weekly Summary", `Sessions ${sum.sessions}, Completed ${sum.completed}`, { type: "weekly", period: "7d" });
+        }
+      } catch {}
     }
 
     const tutors = await TutorProfile.find({}).select("userId name email").lean();
     for (const t of tutors) {
       const sum = await tutorWeeklySummary(t.userId);
       if (t.email && notificationService?.sendEmail) {
-        const html = `<h3>Your Weekly Teaching Summary</h3><p>Sessions: ${sum.sessions}</p><p>Completed: ${sum.completed}</p><p>Attendance consistency: ${sum.attendanceConsistency}%</p><p>Avg rating: ${sum.averageRating.toFixed(1)} (${sum.ratingCount})</p>`;
+        const html = `<h3>Your Weekly Teaching Summary</h3>
+          <p>Sessions: ${sum.sessions}</p>
+          <p>Completed: ${sum.completed}</p>
+          <p>Attendance consistency: ${sum.attendanceConsistency}%</p>
+          <p>Avg rating: ${sum.averageRating.toFixed(1)} (${sum.ratingCount})</p>
+          <p>Rubric Averages: T ${sum.rubricAverages.teaching.toFixed(1)}, C ${sum.rubricAverages.communication.toFixed(1)}, U ${sum.rubricAverages.understanding.toFixed(1)}</p>
+          <p>Materials uploaded: Notes ${sum.materials.notes}, Assignments ${sum.materials.assignments}, Recordings ${sum.materials.recordings}</p>
+          ${sum.topComments.length ? `<p>Top comments:</p><ul>${sum.topComments.map(c=>`<li>${c}</li>`).join("")}</ul>` : ""}
+        `;
         await notificationService.sendEmail(t.email, "Weekly Summary - TuitionTime", "", html);
       }
+      if (notificationService?.createInApp) {
+        await notificationService.createInApp(t.userId, "Weekly Summary", `Sessions ${sum.sessions}, Completed ${sum.completed}, Rating ${sum.averageRating.toFixed(1)}`, { type: "weekly", period: "7d" });
+      }
+      try {
+        await AdminNotification.create({ title: "Weekly summary sent (tutor)", message: `Sent to ${t.name}`, meta: { userId: t.userId, ...sum } });
+      } catch {}
     }
   } catch (err) {
     console.error("weeklyReportScheduler error:", err);

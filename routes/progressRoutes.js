@@ -25,11 +25,23 @@ router.get(
   progressController.getTutorProgressSummary
 );
 
+router.get(
+  "/tutor/weekly",
+  checkRole(["tutor"]),
+  progressController.getTutorWeeklySummary
+);
+
 // Student feedback for regular session
 router.post(
   "/sessions/:id/feedback",
   checkRole(["student"]),
   progressController.giveSessionFeedback
+);
+
+router.get(
+  "/student/weekly",
+  checkRole(["student"]),
+  progressController.getStudentWeeklySummary
 );
 
 module.exports = router;

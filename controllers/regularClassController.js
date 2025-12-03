@@ -404,7 +404,6 @@ exports.getTutorRegularClasses = async (req, res) => {
     const now = new Date();
     const sessions = await Session.find({
       regularClassId: { $in: rcIds },
-      status: "scheduled",
     })
       .sort({ startDateTime: 1 })
       .lean();
@@ -430,6 +429,19 @@ exports.getTutorRegularClasses = async (req, res) => {
       const key = String(rc._id);
       const s = studentMap.get(String(rc.studentId)) || {};
       const nextSession = nextSessionMap.get(key) || null;
+
+      // feedback summary per class (from completed sessions)
+      const completedForClass = sessions.filter((x) => String(x.regularClassId) === key && x.status === "completed");
+      const withFeedback = completedForClass.filter((x) => x.sessionFeedback && typeof x.sessionFeedback.overall === "number");
+      const avgOverall = withFeedback.length
+        ? withFeedback.reduce((sum, x) => sum + (x.sessionFeedback.overall || 0), 0) / withFeedback.length
+        : 0;
+      const recentComments = withFeedback
+        .map((x) => ({ c: (x.sessionFeedback.comment || "").trim(), t: x.sessionFeedback.createdAt || x.startDateTime }))
+        .filter((z) => !!z.c)
+        .sort((a, b) => new Date(b.t).getTime() - new Date(a.t).getTime())
+        .slice(0, 5)
+        .map((z) => z.c);
 
       let canJoin = false;
       let scheduledTime = null;
@@ -464,6 +476,11 @@ exports.getTutorRegularClasses = async (req, res) => {
         },
         studentName: s.name || "Student",
         photoUrl: s.photoUrl || null,
+        feedbackSummary: {
+          averageOverall: avgOverall,
+          commentCount: recentComments.length,
+          recentComments,
+        },
         nextSession: nextSession
           ? {
               sessionId: nextSession._id,

@@ -126,6 +126,34 @@ exports.getTutorProgressSummary = async (req, res) => {
     // rating from profile
     const tp = await TutorProfile.findOne({ userId }).select("rating ratingCount").lean();
 
+    // rubric averages (only completed sessions with feedback)
+    const withFeedback = completed.filter((s) => s.sessionFeedback && typeof s.sessionFeedback.teaching === "number");
+    const avg = (arr, key) => {
+      const vals = arr.map((x) => x.sessionFeedback[key]).filter((n) => typeof n === "number");
+      if (!vals.length) return 0;
+      return vals.reduce((a, b) => a + b, 0) / vals.length;
+    };
+    const rubricAverages = {
+      teaching: avg(withFeedback, "teaching"),
+      communication: avg(withFeedback, "communication"),
+      understanding: avg(withFeedback, "understanding"),
+    };
+
+    // recent comments (latest 10 in window)
+    const recentComments = withFeedback
+      .map((s) => ({ c: (s.sessionFeedback.comment || "").trim(), t: s.sessionFeedback.createdAt || s.startDateTime }))
+      .filter((x) => !!x.c)
+      .sort((a, b) => new Date(b.t).getTime() - new Date(a.t).getTime())
+      .slice(0, 10)
+      .map((x) => x.c);
+
+    // materials uploaded counts
+    const materials = {
+      notes: completed.filter((s) => !!s.notesUrl).length,
+      assignments: completed.filter((s) => !!s.assignmentUrl).length,
+      recordings: completed.filter((s) => !!s.recordingUrl).length,
+    };
+
     return res.json({
       success: true,
       data: {
@@ -137,6 +165,9 @@ exports.getTutorProgressSummary = async (req, res) => {
           averageRating: tp?.rating || 0,
           ratingCount: tp?.ratingCount || 0,
         },
+        rubricAverages,
+        recentComments,
+        materials,
       },
     });
   } catch (err) {
@@ -144,6 +175,9 @@ exports.getTutorProgressSummary = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+const AdminNotification = require("../models/AdminNotification");
+const notificationService = require("../services/notificationService");
 
 exports.giveSessionFeedback = async (req, res) => {
   try {
@@ -154,6 +188,13 @@ exports.giveSessionFeedback = async (req, res) => {
     if (!teaching || !communication || !understanding) {
       return res.status(400).json({ success: false, message: "teaching, communication, understanding are required" });
     }
+
+    const isValidScore = (n) => Number.isFinite(n) && n >= 1 && n <= 5;
+    if (![teaching, communication, understanding].every(isValidScore)) {
+      return res.status(400).json({ success: false, message: "Scores must be integers between 1 and 5" });
+    }
+
+    const safeComment = (comment || "").toString().trim().slice(0, 500);
 
     const session = await Session.findById(sessionId).populate("regularClassId");
     if (!session) return res.status(404).json({ success: false, message: "Session not found" });
@@ -176,7 +217,7 @@ exports.giveSessionFeedback = async (req, res) => {
       communication,
       understanding,
       overall,
-      comment: comment || "",
+      comment: safeComment,
       createdAt: new Date(),
     };
     await session.save();
@@ -191,9 +232,132 @@ exports.giveSessionFeedback = async (req, res) => {
       await tp.save();
     }
 
+    try {
+      await AdminNotification.create({
+        title: "Session feedback submitted",
+        message: `Feedback for session ${session._id}`,
+        meta: {
+          sessionId: session._id,
+          regularClassId: session.regularClassId?._id,
+          studentId: userId,
+          tutorId: session.regularClassId?.tutorId,
+          overall,
+        },
+      });
+      const tutorProfile = await TutorProfile.findOne({ userId: session.regularClassId.tutorId }).lean();
+      if (tutorProfile?.email && notificationService?.sendEmail) {
+        await notificationService.sendEmail(
+          tutorProfile.email,
+          "New class feedback received",
+          "",
+          `<p>You received new class feedback. Overall: ${overall}/5</p>`
+        );
+      }
+      if (notificationService?.createInApp) {
+        await notificationService.createInApp(session.regularClassId.tutorId, "New Feedback", `Overall ${overall}/5`, { sessionId: session._id });
+      }
+    } catch {}
+
     return res.json({ success: true, message: "Feedback submitted", data: session.sessionFeedback });
   } catch (err) {
     console.error("giveSessionFeedback error:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+exports.getTutorWeeklySummary = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const now = new Date();
+    const to = addDays(startOfDay(now), 1);
+    const from = addDays(startOfDay(now), -7);
+
+    const classes = await getTutorClasses(userId);
+    const classIds = classes.map((c) => c._id);
+    const sessions = classIds.length ? await getSessionsForClasses(classIds, from, to) : [];
+
+    const completed = sessions.filter((s) => s.status === "completed");
+    const present = sessions.filter((s) => s.attendance === "present");
+    const withFeedback = completed.filter((s) => s.sessionFeedback && s.sessionFeedback.createdAt);
+
+    const avg = (arr, key) => {
+      const vals = arr.map((x) => x.sessionFeedback[key]).filter((n) => typeof n === "number");
+      if (!vals.length) return 0;
+      return vals.reduce((a, b) => a + b, 0) / vals.length;
+    };
+
+    const materials = {
+      notes: completed.filter((s) => !!s.notesUrl).length,
+      assignments: completed.filter((s) => !!s.assignmentUrl).length,
+      recordings: completed.filter((s) => !!s.recordingUrl).length,
+    };
+
+    const topComments = withFeedback
+      .map((s) => ({ c: (s.sessionFeedback.comment || "").trim(), t: s.sessionFeedback.createdAt || s.startDateTime }))
+      .filter((x) => !!x.c)
+      .sort((a, b) => new Date(b.t).getTime() - new Date(a.t).getTime())
+      .slice(0, 10)
+      .map((x) => x.c);
+
+    return res.json({
+      success: true,
+      data: {
+        period: { from, to },
+        sessions: sessions.length,
+        completed: completed.length,
+        attendanceConsistency: sessions.length ? Math.round((present.length / sessions.length) * 100) : 0,
+        rubricAverages: {
+          teaching: avg(withFeedback, "teaching"),
+          communication: avg(withFeedback, "communication"),
+          understanding: avg(withFeedback, "understanding"),
+        },
+        materials,
+        topComments,
+      },
+    });
+  } catch (err) {
+    console.error("getTutorWeeklySummary error:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+exports.getStudentWeeklySummary = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const now = new Date();
+    const to = addDays(startOfDay(now), 1);
+    const from = addDays(startOfDay(now), -7);
+
+    const classes = await getStudentClasses(userId);
+    const classIds = classes.map((c) => c._id);
+    const sessions = classIds.length ? await getSessionsForClasses(classIds, from, to) : [];
+    const completed = sessions.filter((s) => s.status === "completed");
+    const present = sessions.filter((s) => s.attendance === "present");
+
+    const materials = {
+      notes: completed.filter((s) => !!s.notesUrl).length,
+      assignments: completed.filter((s) => !!s.assignmentUrl).length,
+      recordings: completed.filter((s) => !!s.recordingUrl).length,
+    };
+
+    const comments = completed
+      .filter((s) => s.sessionFeedback && s.sessionFeedback.comment)
+      .map((s) => (s.sessionFeedback.comment || "").trim())
+      .slice(0, 10);
+
+    return res.json({
+      success: true,
+      data: {
+        period: { from, to },
+        sessions: sessions.length,
+        completed: completed.length,
+        attendanceRate: sessions.length ? Math.round((present.length / sessions.length) * 100) : 0,
+        materials,
+        comments,
+      },
+    });
+  } catch (err) {
+    console.error("getStudentWeeklySummary error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
