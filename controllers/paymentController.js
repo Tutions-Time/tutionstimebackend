@@ -135,11 +135,12 @@ exports.createGroupOrder = async (req, res) => {
     if (!hold) return res.status(409).json({ success: false, message: "Seat reservation expired or missing" });
 
     const amountInPaise = Math.round(Number(gb.pricePerStudent || 0) * 100);
+    const safeReceipt = `gb_${Math.random().toString(36).substring(2, 10)}`;
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: "INR",
-      receipt: `gb_${batchId}_${Date.now()}`,
-      notes: { batchId: batchId.toString(), studentId: sp._id.toString() },
+      receipt: safeReceipt,
+      notes: { batchId: batchId.toString().slice(-8), studentId: sp._id.toString().slice(-8) },
     });
 
     const paymentDoc = await Payment.create({
@@ -154,6 +155,18 @@ exports.createGroupOrder = async (req, res) => {
       status: "created",
       notes: `Group batch checkout for ${batchId}`,
     });
+
+    // Link orderId to the student's active seat hold for traceability
+    try {
+      const now2 = Date.now();
+      const idx = (gb.holds || []).findIndex(
+        (h) => String(h.studentId) === String(sp._id) && h.status === "active" && new Date(h.expiresAt).getTime() > now2
+      );
+      if (idx !== -1) {
+        gb.holds[idx].orderId = order.id;
+        await gb.save();
+      }
+    } catch (_) {}
 
     await createAdminNotification(
       "Group batch payment initiated",
@@ -610,15 +623,31 @@ exports.verifyGroupPayment = async (req, res) => {
     const userId = req.user.id;
     const StudentProfile = require("../models/StudentProfile");
     const sp = await StudentProfile.findOne({ userId }).select("_id");
+    if (!sp) {
+      return res.status(404).json({ success: false, message: "Student profile not found" });
+    }
     if (!orderId || !paymentId || !signature) {
       return res.status(400).json({ success: false, message: "orderId, paymentId, signature are required" });
     }
     const secret = process.env.RAZORPAY_KEY_SECRET;
+    if (!secret) {
+      return res.status(500).json({ success: false, message: "Razorpay secret not configured" });
+    }
     const expected = crypto.createHmac("sha256", secret).update(`${orderId}|${paymentId}`).digest("hex");
     if (expected !== signature) return res.status(400).json({ success: false, message: "Invalid signature" });
 
     const payment = await Payment.findOne({ gatewayOrderId: orderId, type: "group" });
     if (!payment) return res.status(404).json({ success: false, message: "Payment not found" });
+
+    // Authorization: ensure the payment belongs to the logged-in student
+    if (String(payment.studentId) !== String(sp._id)) {
+      return res.status(403).json({ success: false, message: "Payment does not belong to this student" });
+    }
+
+    // Optional safety: ensure provided batchId (if any) matches payment record
+    if (batchId && String(payment.groupBatchId) !== String(batchId)) {
+      return res.status(400).json({ success: false, message: "Batch mismatch" });
+    }
 
     // Idempotency: if already paid, return success
     if (payment.status === "paid") return res.json({ success: true });
@@ -631,7 +660,7 @@ exports.verifyGroupPayment = async (req, res) => {
     if (!gb) return res.status(404).json({ success: false, message: "Batch not found" });
 
     const now = Date.now();
-    const holdIdx = (gb.holds || []).findIndex((h) => String(h.studentId) === String(sp._id) && h.status === "active" && new Date(h.expiresAt).getTime() > now);
+    const holdIdx = (gb.holds || []).findIndex((h) => String(h.studentId) === String(payment.studentId || sp._id) && h.status === "active" && new Date(h.expiresAt).getTime() > now);
     if (holdIdx === -1) return res.status(409).json({ success: false, message: "Seat hold missing or expired" });
 
     gb.holds[holdIdx].status = "finalized";
@@ -644,6 +673,18 @@ exports.verifyGroupPayment = async (req, res) => {
       `Payment ${payment._id} verified and enrollment finalized`,
       { paymentId: payment._id, batchId: gb._id, studentId: sp._id }
     );
+    try {
+      const notificationService = require("../services/notificationService");
+      const tp = await TutorProfile.findById(gb.tutorId).select("userId");
+      if (tp?.userId) {
+        await notificationService.createInApp(
+          tp.userId,
+          "New student enrolled",
+          "A student has joined your group batch",
+          { batchId: gb._id, studentId: sp._id }
+        );
+      }
+    } catch (_) {}
     const metrics = require("../services/metricsService");
     metrics.incrementConversion(gb._id);
     metrics.incrementFill(gb._id);
