@@ -64,16 +64,40 @@ function validateBatchInput(tp, body) {
   if (expireAfterMin < 0 || expireAfterMin > 240) errors.push("Invalid expireAfterMin");
   payload.accessWindow = { joinBeforeMin, expireAfterMin };
 
+  // Tutor-selected class start time (HH:mm)
+  const startTimeStr = String(body.classStartTime || "").trim();
+  let startHour = null;
+  let startMinute = null;
+  if (startTimeStr) {
+    const m = startTimeStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+    if (!m) errors.push("Invalid classStartTime");
+    else {
+      startHour = Number(m[1]);
+      startMinute = Number(m[2]);
+    }
+  } else {
+    errors.push("classStartTime required");
+  }
+
   const fixedDates = Array.isArray(body.fixedDates) ? body.fixedDates : [];
-  const dates = fixedDates
+  let dates = fixedDates
     .map((d) => new Date(d))
     .filter((d) => !isNaN(d.getTime()) && d.getTime() > now)
     .map((d) => new Date(d.toISOString()));
+  // Apply selected start time to each date
+  if (startHour !== null && startMinute !== null) {
+    dates = dates.map((d) => {
+      const nd = new Date(d);
+      nd.setHours(startHour, startMinute, 0, 0);
+      return nd;
+    });
+  }
   if (dates.length === 0) errors.push("No valid fixedDates");
   if (availability.length > 0) {
-    const availSet = new Set(availability.map((x) => new Date(x).toISOString()));
+    // Validate selected dates are part of availability (date-only match)
+    const availDateOnlySet = new Set(availability.map((x) => new Date(x).toDateString()));
     for (const d of dates) {
-      if (!availSet.has(d.toISOString())) {
+      if (!availDateOnlySet.has(new Date(d).toDateString())) {
         errors.push("fixedDates must be from availability");
         break;
       }
