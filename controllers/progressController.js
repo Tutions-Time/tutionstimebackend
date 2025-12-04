@@ -29,7 +29,21 @@ async function getSessionsForClasses(classIds, from, to) {
     regularClassId: { $in: classIds },
     startDateTime: { $gte: from, $lt: to },
   })
-    .select("regularClassId status attendance notesUrl assignmentUrl recordingUrl startDateTime sessionFeedback")
+    .select("regularClassId groupBatchId tutorId status attendance notesUrl assignmentUrl recordingUrl startDateTime sessionFeedback")
+    .lean();
+}
+
+async function getGroupSessionsForTutor(tutorUserId, from, to) {
+  const TutorProfile = require("../models/TutorProfile");
+  const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id");
+  const tutorProfileId = tp?._id;
+  if (!tutorProfileId) return [];
+  return Session.find({
+    groupBatchId: { $ne: null },
+    tutorId: tutorProfileId,
+    startDateTime: { $gte: from, $lt: to },
+  })
+    .select("regularClassId groupBatchId tutorId status attendance notesUrl assignmentUrl recordingUrl startDateTime sessionFeedback")
     .lean();
 }
 
@@ -119,7 +133,9 @@ exports.getTutorProgressSummary = async (req, res) => {
 
     const classes = await getTutorClasses(userId);
     const classIds = classes.map((c) => c._id);
-    const sessions = classIds.length ? await getSessionsForClasses(classIds, from, to) : [];
+    const regularSessions = classIds.length ? await getSessionsForClasses(classIds, from, to) : [];
+    const groupSessions = await getGroupSessionsForTutor(userId, from, to);
+    const sessions = [...regularSessions, ...groupSessions];
     const completed = sessions.filter((s) => s.status === "completed");
     const present = sessions.filter((s) => s.attendance === "present");
 
@@ -289,7 +305,9 @@ exports.getTutorWeeklySummary = async (req, res) => {
 
     const classes = await getTutorClasses(userId);
     const classIds = classes.map((c) => c._id);
-    const sessions = classIds.length ? await getSessionsForClasses(classIds, from, to) : [];
+    const regularSessions = classIds.length ? await getSessionsForClasses(classIds, from, to) : [];
+    const groupSessions = await getGroupSessionsForTutor(userId, from, to);
+    const sessions = [...regularSessions, ...groupSessions];
 
     const completed = sessions.filter((s) => s.status === "completed");
     const present = sessions.filter((s) => s.attendance === "present");
