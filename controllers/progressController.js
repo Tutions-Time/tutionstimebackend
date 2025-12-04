@@ -199,7 +199,20 @@ exports.giveSessionFeedback = async (req, res) => {
     const session = await Session.findById(sessionId).populate("regularClassId");
     if (!session) return res.status(404).json({ success: false, message: "Session not found" });
 
-    if (String(session.regularClassId.studentId) !== String(userId)) {
+    // Authorize student membership for both regular class and group batch sessions
+    const StudentProfile = require("../models/StudentProfile");
+    const GroupBatch = require("../models/GroupBatch");
+    const sp = await StudentProfile.findOne({ userId }).select("_id");
+    const studentProfileId = sp?._id || userId;
+
+    let authorized = false;
+    if (session.groupBatchId) {
+      const gb = await GroupBatch.findById(session.groupBatchId).select("enrolled");
+      authorized = !!gb && (gb.enrolled || []).some((s) => String(s) === String(studentProfileId));
+    } else if (session.regularClassId) {
+      authorized = String(session.regularClassId.studentId) === String(studentProfileId);
+    }
+    if (!authorized) {
       return res.status(403).json({ success: false, message: "Not authorized for this session" });
     }
 
@@ -222,9 +235,9 @@ exports.giveSessionFeedback = async (req, res) => {
     };
     await session.save();
 
-    // Update tutor profile aggregate rating
-    const tutorUserId = session.regularClassId.tutorId;
-    const tp = await TutorProfile.findOne({ userId: tutorUserId });
+    // Update tutor profile aggregate rating (supports group batch and regular)
+    const tutorProfileId = session.groupBatchId ? session.tutorId : session.regularClassId?.tutorId;
+    const tp = tutorProfileId ? await TutorProfile.findById(tutorProfileId) : null;
     if (tp) {
       tp.ratingSum = (tp.ratingSum || 0) + overall;
       tp.ratingCount = (tp.ratingCount || 0) + 1;
@@ -240,11 +253,11 @@ exports.giveSessionFeedback = async (req, res) => {
           sessionId: session._id,
           regularClassId: session.regularClassId?._id,
           studentId: userId,
-          tutorId: session.regularClassId?.tutorId,
+          tutorId: tutorProfileId,
           overall,
         },
       });
-      const tutorProfile = await TutorProfile.findOne({ userId: session.regularClassId.tutorId }).lean();
+      const tutorProfile = tutorProfileId ? await TutorProfile.findById(tutorProfileId).lean() : null;
       if (tutorProfile?.email && notificationService?.sendEmail) {
         await notificationService.sendEmail(
           tutorProfile.email,
@@ -254,7 +267,9 @@ exports.giveSessionFeedback = async (req, res) => {
         );
       }
       if (notificationService?.createInApp) {
-        await notificationService.createInApp(session.regularClassId.tutorId, "New Feedback", `Overall ${overall}/5`, { sessionId: session._id });
+        if (tutorProfileId) {
+          await notificationService.createInApp(tutorProfileId, "New Feedback", `Overall ${overall}/5`, { sessionId: session._id });
+        }
       }
     } catch {}
 
