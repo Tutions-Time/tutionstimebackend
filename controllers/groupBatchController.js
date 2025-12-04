@@ -200,6 +200,27 @@ exports.editBatch = async (req, res) => {
       }
     }
 
+    // Auto-sync: ensure a session exists for every fixed date (create missing)
+    const desiredDates = (gb.fixedDates || [])
+      .map((d) => new Date(d))
+      .filter((d) => !isNaN(d.getTime()))
+      .map((d) => d.toISOString());
+    if (desiredDates.length) {
+      const existingSessions = await Session.find({ groupBatchId: gb._id }).select("startDateTime").lean();
+      const existingSet = new Set(existingSessions.map((s) => new Date(s.startDateTime).toISOString()));
+      const toCreate = desiredDates.filter((iso) => !existingSet.has(iso));
+      if (toCreate.length) {
+        const payload = toCreate.map((iso, idx) => ({
+          groupBatchId: gb._id,
+          tutorId: gb.tutorId,
+          startDateTime: new Date(iso),
+          meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${idx}-${Date.now()}`,
+          status: "scheduled",
+        }));
+        await Session.insertMany(payload);
+      }
+    }
+
     await gb.save();
     await createAdminNotification("Group batch updated", `Batch ${gb._id} updated`, { batchId: gb._id });
     metrics.emit("group.updated", { batchId: gb._id });
@@ -276,11 +297,19 @@ exports.listBatches = async (req, res) => {
       }));
     }
     const now = Date.now();
+    let spId = null;
+    try {
+      const StudentProfile = require("../models/StudentProfile");
+      const sp = await StudentProfile.findOne({ userId: req.user?.id }).select("_id");
+      spId = sp?._id || null;
+    } catch (_) {}
     const data = items.map((b) => {
-      const holdActive = (b.holds || []).filter((h) => h.status === "active" && new Date(h.expiresAt).getTime() > now).length;
+      const holdActiveCount = (b.holds || []).filter((h) => h.status === "active" && new Date(h.expiresAt).getTime() > now).length;
       const enrolledCount = (b.enrolled || []).length;
-      const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount - holdActive);
-      return { ...b, liveSeats };
+      const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount - holdActiveCount);
+      const isEnrolledForCurrentUser = spId ? (b.enrolled || []).some((s) => String(s) === String(spId)) : false;
+      const hasActiveHoldForCurrentUser = spId ? (b.holds || []).some((h) => String(h.studentId) === String(spId) && h.status === "active" && new Date(h.expiresAt).getTime() > now) : false;
+      return { ...b, liveSeats, isEnrolledForCurrentUser, hasActiveHoldForCurrentUser };
     });
     res.json({ success: true, data });
   } catch (err) {
