@@ -7,8 +7,9 @@ const GroupBatch = require("../models/GroupBatch");
 
 /**
  * Helper: find session and check tutor ownership
+ * Admin role bypasses ownership checks
  */
-async function findSessionForTutor(sessionId, tutorUserId) {
+async function findSessionForTutor(sessionId, tutorUserId, role = "tutor") {
   
   const session = await Session.findById(sessionId).populate("regularClassId");
   if (!session) {
@@ -17,18 +18,24 @@ async function findSessionForTutor(sessionId, tutorUserId) {
     throw err;
   }
 
-  // RegularClass stores tutorId = User._id; GroupBatch stores tutorId in batch
-  if (session.groupBatchId) {
-    const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId");
-    if (!gb || String(gb.tutorId) !== String(tutorUserId)) {
+  // Allow admin to modify any session
+  if (role !== "admin") {
+    const TutorProfile = require("../models/TutorProfile");
+    const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id");
+    const tutorProfileId = tp?._id || tutorUserId;
+
+    if (session.groupBatchId) {
+      const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId");
+      if (!gb || String(gb.tutorId) !== String(tutorProfileId)) {
+        const err = new Error("Not authorized to modify this session");
+        err.statusCode = 403;
+        throw err;
+      }
+    } else if (String(session.regularClassId.tutorId) !== String(tutorProfileId)) {
       const err = new Error("Not authorized to modify this session");
       err.statusCode = 403;
       throw err;
     }
-  } else if (String(session.regularClassId.tutorId) !== String(tutorUserId)) {
-    const err = new Error("Not authorized to modify this session");
-    err.statusCode = 403;
-    throw err;
   }
 
   return session;
@@ -42,6 +49,7 @@ async function findSessionForTutor(sessionId, tutorUserId) {
 exports.uploadRecording = async (req, res) => {
   try {
     const tutorUserId = req.user.id;
+    const role = req.user.role;
     const sessionId = req.params.id;
 
     if (!req.file || !req.file.location) {
@@ -51,7 +59,7 @@ exports.uploadRecording = async (req, res) => {
       });
     }
 
-    const session = await findSessionForTutor(sessionId, tutorUserId);
+    const session = await findSessionForTutor(sessionId, tutorUserId, role);
 
     session.recordingUrl = req.file.location;
     await session.save();
@@ -80,6 +88,7 @@ exports.uploadRecording = async (req, res) => {
 exports.uploadNotes = async (req, res) => {
   try {
     const tutorUserId = req.user.id;
+    const role = req.user.role;
     const sessionId = req.params.id;
 
     if (!req.file || !req.file.location) {
@@ -89,7 +98,7 @@ exports.uploadNotes = async (req, res) => {
       });
     }
 
-    const session = await findSessionForTutor(sessionId, tutorUserId);
+    const session = await findSessionForTutor(sessionId, tutorUserId, role);
 
     session.notesUrl = req.file.location;
     await session.save();
@@ -118,6 +127,7 @@ exports.uploadNotes = async (req, res) => {
 exports.uploadAssignment = async (req, res) => {
   try {
     const tutorUserId = req.user.id;
+    const role = req.user.role;
     const sessionId = req.params.id;
 
     if (!req.file || !req.file.location) {
@@ -127,7 +137,7 @@ exports.uploadAssignment = async (req, res) => {
       });
     }
 
-    const session = await findSessionForTutor(sessionId, tutorUserId);
+    const session = await findSessionForTutor(sessionId, tutorUserId, role);
 
     session.assignmentUrl = req.file.location;
     await session.save();
@@ -260,9 +270,10 @@ exports.markAttendanceEvent = async (req, res) => {
 exports.markSessionCompleted = async (req, res) => {
   try {
     const tutorUserId = req.user.id;
+    const role = req.user.role;
     const sessionId = req.params.id;
 
-    const session = await findSessionForTutor(sessionId, tutorUserId);
+    const session = await findSessionForTutor(sessionId, tutorUserId, role);
 
     session.status = "completed";
 

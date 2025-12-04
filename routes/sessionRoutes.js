@@ -9,26 +9,26 @@ const sessionController = require("../controllers/sessionController");
 // All routes require auth
 router.use(authenticate);
 
-// Tutor: upload recording
+// Tutor/Admin: upload recording
 router.post(
   "/:id/upload-recording",
-  checkRole(["tutor"]),
+  checkRole(["tutor", "admin"]),
   uploadS3.single("recording"),
   sessionController.uploadRecording
 );
 
-// Tutor: upload notes
+// Tutor/Admin: upload notes
 router.post(
   "/:id/upload-notes",
-  checkRole(["tutor"]),
+  checkRole(["tutor", "admin"]),
   uploadS3.single("notes"),
   sessionController.uploadNotes
 );
 
-// Tutor: upload assignment
+// Tutor/Admin: upload assignment
 router.post(
   "/:id/upload-assignment",
-  checkRole(["tutor"]),
+  checkRole(["tutor", "admin"]),
   uploadS3.single("assignment"),
   sessionController.uploadAssignment
 );
@@ -47,10 +47,10 @@ router.post(
   sessionController.joinSession
 );
 
-// Tutor: mark session as completed
+// Tutor/Admin: mark session as completed
 router.post(
   "/:id/complete",
-  checkRole(["tutor"]),
+  checkRole(["tutor", "admin"]),
   sessionController.markSessionCompleted
 );
 
