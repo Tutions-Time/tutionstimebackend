@@ -343,18 +343,24 @@ exports.razorpayWebhook = async (req, res) => {
             // Tutor sees locked credit immediately
             const TutorProfile = require("../models/TutorProfile");
             const StudentProfile = require("../models/StudentProfile");
-            const tp = await TutorProfile.findById(rc.tutorId).select("userId");
-            const sp = await StudentProfile.findById(rc.studentId).select("userId");
+            const tp = await TutorProfile.findById(rc.tutorId).select("userId name");
+            const sp = await StudentProfile.findById(rc.studentId).select("userId name");
             const tutorUserId = tp?.userId || rc.tutorId;
             const studentUserId = sp?.userId || rc.studentId;
-            await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
+            await walletService.creditPending(
+              tutorUserId,
+              "tutor",
+              tutorNetAmount,
+              `Payment received for class (locked) — Student: ${sp?.name || "Student"}`,
+              { type: "booking", id: payment.regularClassId }
+            );
 
             // Student wallet history (virtual debit)
             await walletService.addTransaction({
               userId: studentUserId,
               type: "debit",
               amount,
-              description: "Payment for regular class",
+              description: `Payment for regular class — Tutor: ${tp?.name || "Tutor"}`,
               reference: { type: "booking", id: payment.regularClassId },
               status: "completed",
               regularClassId: payment.regularClassId,
@@ -403,17 +409,22 @@ exports.razorpayWebhook = async (req, res) => {
 
             const TutorProfile = require("../models/TutorProfile");
             const StudentProfile = require("../models/StudentProfile");
-            const tp = await TutorProfile.findById(payment.tutorId).select("userId");
-            const sp = await StudentProfile.findById(payment.studentId).select("userId");
+            const tp = await TutorProfile.findById(payment.tutorId).select("userId name");
+            const sp = await StudentProfile.findById(payment.studentId).select("userId name");
             const tutorUserId = tp?.userId || payment.tutorId;
             const studentUserId = sp?.userId || payment.studentId;
-
-            await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for note (locked)", { type: "note", id: nId });
+            await walletService.creditPending(
+              tutorUserId,
+              "tutor",
+              tutorNetAmount,
+              `Payment received for note (locked) — Student: ${sp?.name || "Student"}`,
+              { type: "note", id: nId }
+            );
             await walletService.addTransaction({
               userId: studentUserId,
               type: "debit",
               amount: amt,
-              description: "Payment for note",
+              description: `Payment for note — Tutor: ${tp?.name || "Tutor"}`,
               reference: { type: "note", id: nId },
               status: "completed",
               paymentId: payment._id,
@@ -514,18 +525,24 @@ exports.verifyPayment = async (req, res) => {
           if (rc2) {
             const TutorProfile = require("../models/TutorProfile");
             const StudentProfile = require("../models/StudentProfile");
-            const tp = await TutorProfile.findById(rc2.tutorId).select("userId");
-            const sp = await StudentProfile.findById(rc2.studentId).select("userId");
+            const tp = await TutorProfile.findById(rc2.tutorId).select("userId name");
+            const sp = await StudentProfile.findById(rc2.studentId).select("userId name");
             const tutorUserId = tp?.userId || rc2.tutorId;
             const studentUserId = sp?.userId || rc2.studentId;
-            await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for class (locked)", { type: "booking", id: payment.regularClassId });
+            await walletService.creditPending(
+              tutorUserId,
+              "tutor",
+              tutorNetAmount,
+              `Payment received for class (locked) — Student: ${sp?.name || "Student"}`,
+              { type: "booking", id: payment.regularClassId }
+            );
 
             // Student wallet history
             await walletService.addTransaction({
               userId: studentUserId,
               type: "debit",
               amount,
-              description: "Payment for regular class",
+              description: `Payment for regular class — Tutor: ${tp?.name || "Tutor"}`,
               reference: { type: "booking", id: payment.regularClassId },
               status: "completed",
               regularClassId: payment.regularClassId,
@@ -564,18 +581,24 @@ exports.verifyPayment = async (req, res) => {
 
           const TutorProfile = require("../models/TutorProfile");
           const StudentProfile = require("../models/StudentProfile");
-          const tutorProfile = await TutorProfile.findById(payment.tutorId).select("userId");
-          const studentProfile = await StudentProfile.findById(payment.studentId).select("userId");
+          const tutorProfile = await TutorProfile.findById(payment.tutorId).select("userId name");
+          const studentProfile = await StudentProfile.findById(payment.studentId).select("userId name");
           const tutorUserId = tutorProfile?.userId || payment.tutorId;
           const studentUserId = studentProfile?.userId || payment.studentId;
 
-          await walletService.creditPending(tutorUserId, "tutor", tutorNetAmount, "Payment received for note (locked)", { type: "note", id: nId });
+          await walletService.creditPending(
+            tutorUserId,
+            "tutor",
+            tutorNetAmount,
+            `Payment received for note (locked) — Student: ${studentProfile?.name || "Student"}`,
+            { type: "note", id: nId }
+          );
 
           await walletService.addTransaction({
             userId: studentUserId,
             type: "debit",
             amount,
-            description: "Payment for note",
+            description: `Payment for note — Tutor: ${tutorProfile?.name || "Tutor"}`,
             reference: { type: "note", id: nId },
             status: "completed",
             paymentId: payment._id,
@@ -688,6 +711,47 @@ exports.verifyGroupPayment = async (req, res) => {
     const metrics = require("../services/metricsService");
     metrics.incrementConversion(gb._id);
     metrics.incrementFill(gb._id);
+
+    try {
+      if (!payment.walletProcessed) {
+        const amount = Number(payment.amount || 0);
+        const commissionPercent = 25;
+        const commissionAmount = (amount * commissionPercent) / 100;
+        const tutorNetAmount = amount - commissionAmount;
+
+        await walletService.adminCredit(amount, "Group batch payment verified", { type: "group", id: gb._id });
+        await walletService.adminIncreaseHold(tutorNetAmount);
+
+        const tp2 = await TutorProfile.findById(gb.tutorId).select("userId name");
+        const sp2 = await StudentProfile.findById(sp._id).select("userId name");
+        const tutorUserId = tp2?.userId || gb.tutorId;
+        const studentUserId = sp2?.userId || sp._id;
+        await walletService.creditPending(
+          tutorUserId,
+          "tutor",
+          tutorNetAmount,
+          `Payment received for group batch (locked) — Student: ${sp2?.name || "Student"}`,
+          { type: "group", id: gb._id }
+        );
+        await walletService.addTransaction({
+          userId: studentUserId,
+          type: "debit",
+          amount,
+          description: `Payment for group batch — Tutor: ${tp2?.name || "Tutor"}`,
+          reference: { type: "group", id: gb._id },
+          status: "completed",
+          paymentId: payment._id,
+        });
+
+        const baseDate = new Date();
+        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+        payment.releaseAt = releaseAt;
+        payment.walletProcessed = true;
+        await payment.save();
+      }
+    } catch (walletErr) {
+      console.error("Wallet update error:", walletErr.message);
+    }
 
     return res.json({ success: true });
   } catch (err) {
@@ -876,7 +940,7 @@ exports.getTutorNoteHistory = async (req, res) => {
   }
 };
 
-// Admin: combined payment history (subscription + note)
+// Admin: combined payment history (subscription + note + group)
 exports.listAllPaymentsHistory = async (req, res) => {
   try {
     const { from, to } = req.query;
@@ -901,6 +965,13 @@ exports.listAllPaymentsHistory = async (req, res) => {
       .populate({ path: "studentId", select: "name" })
       .populate({ path: "tutorId", select: "name" })
       .populate({ path: "noteId", select: "title" })
+      .lean();
+
+    const groups = await Payment.find(range({ type: "group" }))
+      .sort({ createdAt: -1 })
+      .populate({ path: "studentId", select: "name" })
+      .populate({ path: "tutorId", select: "name" })
+      .populate({ path: "groupBatchId", select: "subject level" })
       .lean();
 
     const mapSub = subs.map((p) => ({
@@ -935,7 +1006,22 @@ exports.listAllPaymentsHistory = async (req, res) => {
       noteTitle: p.noteId?.title || "",
     }));
 
-    const combined = [...mapSub, ...mapNote].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const mapGroup = groups.map((p) => ({
+      _id: p._id,
+      type: p.type,
+      amount: p.amount,
+      currency: p.currency,
+      status: p.status,
+      gateway: p.gateway,
+      gatewayOrderId: p.gatewayOrderId,
+      gatewayPaymentId: p.gatewayPaymentId,
+      createdAt: p.createdAt,
+      studentName: p.studentId?.name || "Student",
+      tutorName: p.tutorId?.name || "Tutor",
+      subject: p.groupBatchId?.subject || "",
+    }));
+
+    const combined = [...mapSub, ...mapNote, ...mapGroup].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     res.json({ success: true, data: combined });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });

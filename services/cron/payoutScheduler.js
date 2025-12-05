@@ -21,7 +21,14 @@ async function runPayoutRelease() {
     $or: [{ payoutGenerated: { $exists: false } }, { payoutGenerated: false }],
   }).lean();
 
-  if (!subs.length && !notes.length) return;
+  const groups = await Payment.find({
+    type: "group",
+    status: "paid",
+    releaseAt: { $lte: now },
+    $or: [{ payoutGenerated: { $exists: false } }, { payoutGenerated: false }],
+  }).lean();
+
+  if (!subs.length && !notes.length && !groups.length) return;
 
   for (const sub of subs) {
     try {
@@ -101,6 +108,46 @@ async function runPayoutRelease() {
         "Tutor payout auto-released",
         `Payout ${payout._id} settled for note ${np.noteId}`,
         { payoutId: payout._id, noteId: np.noteId, tutorId: np.tutorId, amount: tutorNetAmount }
+      );
+    } catch (err) {
+      console.error("Auto payout error:", err.message);
+    }
+  }
+
+  for (const gp of groups) {
+    try {
+      const amount = gp.amount;
+      const commissionPercent = 25;
+      const commissionAmount = (amount * commissionPercent) / 100;
+      const tutorNetAmount = amount - commissionAmount;
+
+      const payout = await Payment.create({
+        groupBatchId: gp.groupBatchId,
+        studentId: gp.studentId,
+        tutorId: gp.tutorId,
+        type: "payout",
+        amount: gp.amount,
+        currency: gp.currency,
+        commissionPercent,
+        commissionAmount,
+        tutorNetAmount,
+        status: "settled",
+        notes: "Auto payout released for group batch after lock period",
+      });
+
+      await walletService.adminDecreaseHold(tutorNetAmount);
+      await walletService.adminDebit(tutorNetAmount, "Tutor payout released for group batch", { type: "payout", id: payout._id });
+      const TutorProfile = require("../../models/TutorProfile");
+      const tp = await TutorProfile.findById(gp.tutorId).select("userId");
+      const tutorUserId = tp?.userId || gp.tutorId;
+      await walletService.releasePendingToAvailable(tutorUserId, "tutor", tutorNetAmount, "Payout released", { type: "payout", id: payout._id });
+
+      await Payment.updateOne({ _id: gp._id }, { payoutGenerated: true, payoutId: payout._id });
+
+      await createAdminNotification(
+        "Tutor payout auto-released",
+        `Payout ${payout._id} settled for group batch ${gp.groupBatchId}`,
+        { payoutId: payout._id, groupBatchId: gp.groupBatchId, tutorId: gp.tutorId, amount: tutorNetAmount }
       );
     } catch (err) {
       console.error("Auto payout error:", err.message);
