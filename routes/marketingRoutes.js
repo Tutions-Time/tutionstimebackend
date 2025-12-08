@@ -1,0 +1,20 @@
+const express = require('express');
+const router = express.Router();
+const { authenticate, checkRole } = require('../middleware/auth');
+const ctrl = require('../controllers/marketingController');
+
+// Public endpoints
+router.post('/coupons/validate', ctrl.validateCoupon);
+router.post('/referrals/apply-at-signup', ctrl.applyReferralOnSignup);
+
+// Admin-only management
+router.use(authenticate);
+router.post('/referrals', checkRole(['admin']), ctrl.createReferralCode);
+router.get('/referrals', checkRole(['admin']), ctrl.listReferralCodes);
+router.put('/referrals/:id', checkRole(['admin']), ctrl.updateReferralCode);
+
+router.post('/coupons', checkRole(['admin']), ctrl.createCoupon);
+router.get('/coupons', checkRole(['admin']), ctrl.listCoupons);
+router.put('/coupons/:id', checkRole(['admin']), ctrl.updateCoupon);
+
+module.exports = router;

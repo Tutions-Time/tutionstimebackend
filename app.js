@@ -83,6 +83,7 @@ app.use('/api/tutor-switch', require('./routes/tutorSwitch'));
 app.use("/api/regular", require("./routes/regularClassRoutes.js"));
 app.use("/api/progress", require("./routes/progressRoutes.js"));
 app.use("/api/group-batches", require("./routes/groupBatchRoutes"));
+app.use('/api/marketing', require('./routes/marketingRoutes'));
 
 
 const { autoCompletePastDemos } = require('./controllers/bookingController');

@@ -8,6 +8,51 @@ const { createAdminNotification } = require("../services/adminNotification");
 const walletService = require("../services/payments/walletService");
 const { default: mongoose } = require("mongoose");
 const GroupBatch = require("../models/GroupBatch");
+const Coupon = require("../models/Coupon");
+const CouponUse = require("../models/CouponUse");
+const ReferralCode = require("../models/ReferralCode");
+const ReferralUse = require("../models/ReferralUse");
+
+async function applyCouponIfValid({ code, type, amount, userId }) {
+  if (!code) return { discount: 0, coupon: null };
+  const c = await Coupon.findOne({ code });
+  if (!c || c.status !== "active") return { discount: 0, coupon: null };
+  const now = new Date();
+  if ((c.validFrom && now < c.validFrom) || (c.validTo && now > c.validTo)) return { discount: 0, coupon: null };
+  if (!c.applicableTo.includes(type)) return { discount: 0, coupon: null };
+  if (amount < c.minAmount) return { discount: 0, coupon: null };
+  const priorUses = await CouponUse.countDocuments({ couponId: c._id, userId });
+  if (priorUses >= (c.perUserLimit || 1)) return { discount: 0, coupon: null };
+  if ((c.redemptions || 0) >= (c.maxRedemptions || 0)) return { discount: 0, coupon: null };
+  const discount = c.type === "percent" ? Math.floor((amount * c.value) / 100) : Math.min(c.value, amount);
+  return { discount, coupon: c };
+}
+
+async function recordCouponUse({ coupon, userId, paymentId, amountDiscounted }) {
+  if (!coupon) return;
+  await CouponUse.create({ couponId: coupon._id, userId, paymentId, amountDiscounted });
+  coupon.redemptions = (coupon.redemptions || 0) + 1;
+  await coupon.save();
+}
+
+async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
+  try {
+    const User = require("../models/User");
+    const user = await User.findById(studentUserId);
+    if (!user || !user.referrerUserId || user.referralRewardGranted) return;
+    const rc = user.referralCodeUsed ? await ReferralCode.findOne({ code: user.referralCodeUsed }) : null;
+    const rewardAmount = rc?.rewardAmount || 100;
+    if (rc && rc.maxUses && rc.usedCount >= rc.maxUses) return;
+    await walletService.creditWallet(user.referrerUserId, "tutor", rewardAmount, "Referral reward", paymentId);
+    await ReferralUse.create({ referralCodeId: rc?._id, referrerUserId: user.referrerUserId, referredUserId: user._id, paymentId, rewardGranted: true, amountGranted: rewardAmount });
+    user.referralRewardGranted = true;
+    await user.save();
+    if (rc) {
+      rc.usedCount = (rc.usedCount || 0) + 1;
+      await rc.save();
+    }
+  } catch (_) {}
+}
 
 /**
  * STUDENT: Create Razorpay ORDER for a regular class
@@ -20,7 +65,7 @@ const GroupBatch = require("../models/GroupBatch");
  */
 exports.createSubscriptionOrder = async (req, res) => {
   try {
-    const { regularClassId, billingType, numberOfClasses } = req.body;
+    const { regularClassId, billingType, numberOfClasses, couponCode } = req.body;
     const userId = req.user.id; // student userId
 
     if (!regularClassId || !billingType || !numberOfClasses) {
@@ -42,7 +87,9 @@ exports.createSubscriptionOrder = async (req, res) => {
 
     // 💰 Compute total amount: per-class rate * numberOfClasses
     // rc.amount is assumed "per class" or "base" price in INR
-    const totalAmountINR = rc.amount * Number(numberOfClasses);
+    let totalAmountINR = rc.amount * Number(numberOfClasses);
+    const { discount, coupon } = await applyCouponIfValid({ code: (couponCode || "").trim(), type: "subscription", amount: totalAmountINR, userId });
+    if (discount > 0) totalAmountINR = Math.max(0, totalAmountINR - discount);
     const amountInPaise = Math.round(totalAmountINR * 100);
 
     // 🧾 Create Razorpay order
@@ -54,6 +101,8 @@ exports.createSubscriptionOrder = async (req, res) => {
         regularClassId: regularClassId.toString(),
         billingType,
         numberOfClasses: String(numberOfClasses),
+        coupon: couponCode || "",
+        discount: String(discount || 0),
       },
     });
 
@@ -72,7 +121,7 @@ exports.createSubscriptionOrder = async (req, res) => {
         status: "created",
         periodStart: rc.currentPeriodStart,
         periodEnd: rc.currentPeriodEnd,
-        notes: `BillingType: ${billingType}, Classes: ${numberOfClasses}`,
+        notes: `BillingType: ${billingType}, Classes: ${numberOfClasses}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
       },
       { upsert: true, new: true }
     );
@@ -112,7 +161,7 @@ exports.createSubscriptionOrder = async (req, res) => {
  */
 exports.createGroupOrder = async (req, res) => {
   try {
-    const { batchId, reservationId } = req.body;
+    const { batchId, reservationId, couponCode } = req.body;
     const userId = req.user.id;
     const StudentProfile = require("../models/StudentProfile");
     const TutorProfile = require("../models/TutorProfile");
@@ -134,13 +183,16 @@ exports.createGroupOrder = async (req, res) => {
     );
     if (!hold) return res.status(409).json({ success: false, message: "Seat reservation expired or missing" });
 
-    const amountInPaise = Math.round(Number(gb.pricePerStudent || 0) * 100);
+    let amountINR = Number(gb.pricePerStudent || 0);
+    const { discount } = await applyCouponIfValid({ code: (couponCode || "").trim(), type: "group", amount: amountINR, userId });
+    if (discount > 0) amountINR = Math.max(0, amountINR - discount);
+    const amountInPaise = Math.round(amountINR * 100);
     const safeReceipt = `gb_${Math.random().toString(36).substring(2, 10)}`;
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: "INR",
       receipt: safeReceipt,
-      notes: { batchId: batchId.toString().slice(-8), studentId: sp._id.toString().slice(-8) },
+      notes: { batchId: batchId.toString().slice(-8), studentId: sp._id.toString().slice(-8), coupon: couponCode || "", discount: String(discount || 0) },
     });
 
     const paymentDoc = await Payment.create({
@@ -148,12 +200,12 @@ exports.createGroupOrder = async (req, res) => {
       groupBatchId: gb._id,
       studentId: sp._id,
       tutorId: gb.tutorId,
-      amount: Number(gb.pricePerStudent || 0),
+      amount: amountINR,
       currency: "INR",
       gateway: "razorpay",
       gatewayOrderId: order.id,
       status: "created",
-      notes: `Group batch checkout for ${batchId}`,
+      notes: `Group batch checkout for ${batchId}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
     });
 
     // Link orderId to the student's active seat hold for traceability
@@ -185,7 +237,7 @@ exports.createGroupOrder = async (req, res) => {
 
 exports.createNoteOrder = async (req, res) => {
   try {
-    const { noteId } = req.body;
+    const { noteId, couponCode } = req.body;
     const userId = req.user.id;
     const StudentProfile = require("../models/StudentProfile");
     const sp = await StudentProfile.findOne({ userId }).select("_id");
@@ -221,7 +273,10 @@ exports.createNoteOrder = async (req, res) => {
       return res.json({ success: true, free: true });
     }
 
-    const amountInPaise = Math.round(Number(note.price) * 100);
+    let amountINR = Number(note.price);
+    const { discount } = await applyCouponIfValid({ code: (couponCode || "").trim(), type: "note", amount: amountINR, userId });
+    if (discount > 0) amountINR = Math.max(0, amountINR - discount);
+    const amountInPaise = Math.round(amountINR * 100);
 
     if (!process.env.RAZORPAY_KEY_ID) {
       return res.status(500).json({ success: false, message: "Razorpay key not configured" });
@@ -235,6 +290,8 @@ exports.createNoteOrder = async (req, res) => {
       notes: {
         n: noteId.toString().slice(-8),
         t: note.tutorId.toString().slice(-8),
+        coupon: couponCode || "",
+        discount: String(discount || 0),
       },
     });
 
@@ -243,7 +300,7 @@ exports.createNoteOrder = async (req, res) => {
       noteId: note._id,
       studentId,
       tutorId: note.tutorId,
-      amount: Number(note.price),
+      amount: amountINR,
       currency: "INR",
       gateway: "razorpay",
       gatewayOrderId: order.id,
@@ -377,6 +434,17 @@ exports.razorpayWebhook = async (req, res) => {
         } catch (walletErr) {
           console.error("Wallet update error:", walletErr.message);
         }
+
+        // Record coupon usage and grant referral after successful capture
+        try {
+          const couponCode = notes && notes.coupon;
+          const discountVal = Number(notes && notes.discount ? notes.discount : 0) || 0;
+          if (couponCode) {
+            const coupon = await Coupon.findOne({ code: couponCode });
+            await recordCouponUse({ coupon, userId: studentUserId, paymentId: payment._id, amountDiscounted: discountVal });
+          }
+          await grantReferralIfEligible({ studentUserId, paymentId: payment._id, amount });
+        } catch (_) {}
       }
 
       await createAdminNotification(
@@ -436,6 +504,22 @@ exports.razorpayWebhook = async (req, res) => {
             payment.walletProcessed = true;
             await payment.save();
           }
+
+          try {
+            const couponCode = notes && notes.coupon;
+            const discountVal = Number(notes && notes.discount ? notes.discount : 0) || 0;
+            if (couponCode) {
+              const coupon = await Coupon.findOne({ code: couponCode });
+              const StudentProfile = require("../models/StudentProfile");
+              const sp2 = await StudentProfile.findById(payment.studentId).select("userId");
+              const studentUserId2 = sp2?.userId || payment.studentId;
+              await recordCouponUse({ coupon, userId: studentUserId2, paymentId: payment._id, amountDiscounted: discountVal });
+            }
+            const StudentProfile = require("../models/StudentProfile");
+            const sp3 = await StudentProfile.findById(payment.studentId).select("userId");
+            const studentUserId3 = sp3?.userId || payment.studentId;
+            await grantReferralIfEligible({ studentUserId: studentUserId3, paymentId: payment._id, amount: amt });
+          } catch (_) {}
 
           await createAdminNotification(
             "Note payment received",
@@ -608,6 +692,23 @@ exports.verifyPayment = async (req, res) => {
       } catch (walletErr) {
         console.error("Wallet update error:", walletErr.message);
       }
+
+      // Coupon/referral recording for subscription (client verify)
+      try {
+        const StudentProfile = require("../models/StudentProfile");
+        const sp3 = await StudentProfile.findById(payment.studentId).select("userId");
+        const studentUserIdX = sp3?.userId || payment.studentId;
+        const noteStr = String(payment.notes || "");
+        const cMatch = noteStr.match(/Coupon:([^,]*)/);
+        const dMatch = noteStr.match(/Discount:(\d+)/);
+        const code = cMatch && cMatch[1] ? cMatch[1].trim() : "";
+        const disc = dMatch && dMatch[1] ? Number(dMatch[1]) : 0;
+        if (code) {
+          const coupon = await Coupon.findOne({ code });
+          await recordCouponUse({ coupon, userId: studentUserIdX, paymentId: payment._id, amountDiscounted: disc });
+        }
+        await grantReferralIfEligible({ studentUserId: studentUserIdX, paymentId: payment._id, amount });
+      } catch (_) {}
     }
 
     // Notes processing (idempotent and independent of rcId)
@@ -798,6 +899,20 @@ exports.verifyGroupPayment = async (req, res) => {
         payment.walletProcessed = true;
         await payment.save();
       }
+      // Record coupon and grant referral
+      try {
+        const studentUserIdX = sp2?.userId || sp._id;
+        const noteStr = String(payment.notes || "");
+        const cMatch = noteStr.match(/Coupon:([^,]*)/);
+        const dMatch = noteStr.match(/Discount:(\d+)/);
+        const code = cMatch && cMatch[1] ? cMatch[1].trim() : "";
+        const disc = dMatch && dMatch[1] ? Number(dMatch[1]) : 0;
+        if (code) {
+          const coupon = await Coupon.findOne({ code });
+          await recordCouponUse({ coupon, userId: studentUserIdX, paymentId: payment._id, amountDiscounted: disc });
+        }
+        await grantReferralIfEligible({ studentUserId: studentUserIdX, paymentId: payment._id, amount });
+      } catch (_) {}
     } catch (walletErr) {
       console.error("Wallet update error:", walletErr.message);
     }

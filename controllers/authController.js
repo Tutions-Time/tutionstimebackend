@@ -181,6 +181,19 @@ const verifyOTP = async (req, res) => {
         });
         await walletService.ensureWallet(user._id, user.role);
 
+        // Optional referral code capture
+        if (req.body && typeof req.body.referralCode === 'string') {
+          try {
+            const ReferralCode = require('../models/ReferralCode');
+            const rc = await ReferralCode.findOne({ code: req.body.referralCode.trim() });
+            if (rc && rc.status === 'active') {
+              user.referrerUserId = rc.ownerUserId;
+              user.referralCodeUsed = rc.code;
+              await user.save();
+            }
+          } catch (_) {}
+        }
+
         // console.log('User created successfully:', {
         //   id: user._id,
         //   phone: user.phone,

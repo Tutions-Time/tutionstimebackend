@@ -39,7 +39,11 @@ const userSchema = new mongoose.Schema({
   lastLogin: {
     type: Date,
     default: Date.now
-  }
+  },
+  // Referral fields
+  referrerUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  referralCodeUsed: { type: String, default: null },
+  referralRewardGranted: { type: Boolean, default: false }
 }, {
   timestamps: true
 });
