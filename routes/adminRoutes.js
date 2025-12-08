@@ -35,4 +35,7 @@ router.put('/tutors/:id/kyc',  adminTutorController.updateKycStatus);
 router.put('/tutors/:id/status',  adminTutorController.updateTutorStatus);
 router.get('/bookings/:id', getBookingByIdForAdmin);
 
+router.get('/dashboard/stats', adminController.getDashboardStats);
+router.get('/sessions', adminController.listAdminSessions);
+
 module.exports = router;

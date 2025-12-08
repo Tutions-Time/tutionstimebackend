@@ -1154,6 +1154,92 @@ exports.listTutorPayouts = async (req, res) => {
   }
 };
 
+exports.createRefundRequest = async (req, res) => {
+  try {
+    const { paymentId, amount, reason } = req.body;
+    const userId = req.user.id;
+    if (!paymentId || !amount) {
+      return res.status(400).json({ success: false, message: "paymentId and amount are required" });
+    }
+    const payment = await Payment.findById(paymentId);
+    if (!payment) {
+      return res.status(404).json({ success: false, message: "Payment not found" });
+    }
+    if (!['subscription', 'note', 'group'].includes(payment.type) || payment.status !== 'paid') {
+      return res.status(400).json({ success: false, message: "Refunds allowed for paid subscription/note/group payments" });
+    }
+    const RefundRequest = require("../models/RefundRequest");
+    const rr = await RefundRequest.create({ paymentId, userId, amount: Number(amount), reason: reason || "" });
+    return res.status(201).json({ success: true, data: rr });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.listRefundRequests = async (req, res) => {
+  try {
+    const { status, from, to } = req.query;
+    const RefundRequest = require("../models/RefundRequest");
+    const filter = {};
+    if (status) filter.status = status;
+    if (from || to) {
+      filter.createdAt = {};
+      if (from) filter.createdAt.$gte = new Date(from);
+      if (to) filter.createdAt.$lte = new Date(to);
+    }
+    const items = await RefundRequest.find(filter).sort({ createdAt: -1 }).lean();
+    return res.json({ success: true, data: items });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.updateRefundRequestStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const RefundRequest = require("../models/RefundRequest");
+    const rr = await RefundRequest.findById(id);
+    if (!rr) return res.status(404).json({ success: false, message: "Refund request not found" });
+    if (!['approved', 'rejected', 'processed'].includes(status)) {
+      return res.status(400).json({ success: false, message: "Invalid status" });
+    }
+    if (status === 'approved') {
+      rr.status = 'approved';
+      await rr.save();
+      return res.json({ success: true, data: rr });
+    }
+    if (status === 'rejected') {
+      rr.status = 'rejected';
+      await rr.save();
+      return res.json({ success: true, data: rr });
+    }
+    if (status === 'processed') {
+      if (rr.status !== 'approved') {
+        return res.status(400).json({ success: false, message: "Only approved requests can be processed" });
+      }
+      const amount = Number(rr.amount || 0);
+      const adminWalletService = require("../services/payments/walletService");
+      await adminWalletService.adminDebit(amount, "Refund processed", { type: "refund", id: rr._id });
+      const userId = rr.userId;
+      const Wallet = require("../models/Wallet");
+      const User = require("../models/User");
+      const user = await User.findById(userId);
+      if (user) {
+        const wallet = await adminWalletService.ensureWallet(userId, user.role);
+        wallet.balance += amount;
+        await wallet.save();
+        await adminWalletService.addTransaction({ userId, type: "credit", amount, description: "Refund credit", reference: { type: "refund", id: rr._id }, status: "completed" });
+      }
+      rr.status = 'processed';
+      await rr.save();
+      return res.json({ success: true, data: rr });
+    }
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
 /**
  * Admin: list subscription payments (student → admin)
  * GET /api/payments/admin/history?status=paid&from=YYYY-MM-DD&to=YYYY-MM-DD
