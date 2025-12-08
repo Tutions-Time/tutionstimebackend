@@ -21,7 +21,7 @@ exports.creditWallet = async (userId, role, amount, description, referenceId) =>
     type: "credit",
     amount,
     description,
-    reference: { type: "booking", id: referenceId },
+    reference: (referenceId && typeof referenceId === 'object') ? referenceId : { type: "booking", id: referenceId },
     status: "completed",
   });
 
@@ -39,7 +39,7 @@ exports.debitWallet = async (userId, role, amount, description, referenceId) => 
     type: "debit",
     amount,
     description,
-    reference: { type: "booking", id: referenceId },
+    reference: (referenceId && typeof referenceId === 'object') ? referenceId : { type: "booking", id: referenceId },
     status: "completed",
   });
 

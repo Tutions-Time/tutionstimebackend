@@ -23,7 +23,7 @@ const transactionSchema = new mongoose.Schema({
   reference: {
     type: {
       type: String,
-      enum: ['booking', 'note', 'payout', 'refund', 'group']
+      enum: ['booking', 'note', 'payout', 'refund', 'group', 'referral']
     },
     id: {
       type: mongoose.Schema.Types.ObjectId

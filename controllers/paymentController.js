@@ -43,7 +43,7 @@ async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
     const rc = user.referralCodeUsed ? await ReferralCode.findOne({ code: user.referralCodeUsed }) : null;
     const rewardAmount = rc?.rewardAmount || 100;
     if (rc && rc.maxUses && rc.usedCount >= rc.maxUses) return;
-    await walletService.creditWallet(user.referrerUserId, "tutor", rewardAmount, "Referral reward", paymentId);
+    await walletService.creditWallet(user.referrerUserId, "tutor", rewardAmount, "Referral reward", { type: "referral", id: paymentId });
     await ReferralUse.create({ referralCodeId: rc?._id, referrerUserId: user.referrerUserId, referredUserId: user._id, paymentId, rewardGranted: true, amountGranted: rewardAmount });
     user.referralRewardGranted = true;
     await user.save();
@@ -413,11 +413,14 @@ exports.razorpayWebhook = async (req, res) => {
             );
 
             // Student wallet history (virtual debit)
+            const couponCode = notes && notes.coupon;
+            const discountVal = Number(notes && notes.discount ? notes.discount : 0) || 0;
+            const descExtra = discountVal > 0 && couponCode ? ` (Coupon ${couponCode} -₹${discountVal})` : "";
             await walletService.addTransaction({
               userId: studentUserId,
               type: "debit",
               amount,
-              description: `Payment for regular class — Tutor: ${tp?.name || "Tutor"}`,
+              description: `Payment for regular class — Tutor: ${tp?.name || "Tutor"}${descExtra}`,
               reference: { type: "booking", id: payment.regularClassId },
               status: "completed",
               regularClassId: payment.regularClassId,
@@ -488,11 +491,14 @@ exports.razorpayWebhook = async (req, res) => {
               `Payment received for note (locked) — Student: ${sp?.name || "Student"}`,
               { type: "note", id: nId }
             );
+            const cn = (notes && notes.coupon) || "";
+            const dn = Number(notes && notes.discount ? notes.discount : 0) || 0;
+            const descExtraNote = dn > 0 && cn ? ` (Coupon ${cn} -₹${dn})` : "";
             await walletService.addTransaction({
               userId: studentUserId,
               type: "debit",
               amount: amt,
-              description: `Payment for note — Tutor: ${tp?.name || "Tutor"}`,
+              description: `Payment for note — Tutor: ${tp?.name || "Tutor"}${descExtraNote}`,
               reference: { type: "note", id: nId },
               status: "completed",
               paymentId: payment._id,
@@ -671,11 +677,17 @@ exports.verifyPayment = async (req, res) => {
             );
 
             // Student wallet history
+            const noteStr = String(payment.notes || "");
+            const cm = noteStr.match(/Coupon:([^,]*)/);
+            const dm = noteStr.match(/Discount:(\d+)/);
+            const code = cm && cm[1] ? cm[1].trim() : "";
+            const disc = dm && dm[1] ? Number(dm[1]) : 0;
+            const descExtra = disc > 0 && code ? ` (Coupon ${code} -₹${disc})` : "";
             await walletService.addTransaction({
               userId: studentUserId,
               type: "debit",
               amount,
-              description: `Payment for regular class — Tutor: ${tp?.name || "Tutor"}`,
+              description: `Payment for regular class — Tutor: ${tp?.name || "Tutor"}${descExtra}`,
               reference: { type: "booking", id: payment.regularClassId },
               status: "completed",
               regularClassId: payment.regularClassId,
@@ -883,11 +895,17 @@ exports.verifyGroupPayment = async (req, res) => {
           `Payment received for group batch (locked) — Student: ${sp2?.name || "Student"}`,
           { type: "group", id: gb._id }
         );
+        const noteStr2 = String(payment.notes || "");
+        const cm2 = noteStr2.match(/Coupon:([^,]*)/);
+        const dm2 = noteStr2.match(/Discount:(\d+)/);
+        const code2 = cm2 && cm2[1] ? cm2[1].trim() : "";
+        const disc2 = dm2 && dm2[1] ? Number(dm2[1]) : 0;
+        const descExtraGroup = disc2 > 0 && code2 ? ` (Coupon ${code2} -₹${disc2})` : "";
         await walletService.addTransaction({
           userId: studentUserId,
           type: "debit",
           amount,
-          description: `Payment for group batch — Tutor: ${tp2?.name || "Tutor"}`,
+          description: `Payment for group batch — Tutor: ${tp2?.name || "Tutor"}${descExtraGroup}`,
           reference: { type: "group", id: gb._id },
           status: "completed",
           paymentId: payment._id,
@@ -1158,6 +1176,22 @@ exports.listAllPaymentsHistory = async (req, res) => {
           .lean()
       : [];
 
+    const allPayments = [...subs, ...notes, ...groups];
+    const allIds = allPayments.map((p) => p._id);
+    const CouponUse = require("../models/CouponUse");
+    const ReferralUse = require("../models/ReferralUse");
+    const coupons = allIds.length ? await CouponUse.find({ paymentId: { $in: allIds } }).populate({ path: "couponId", select: "code value type" }).lean() : [];
+    const referrals = allIds.length ? await ReferralUse.find({ paymentId: { $in: allIds } }).populate({ path: "referralCodeId", select: "code" }).lean() : [];
+    const cuMap = coupons.reduce((acc, c) => { acc[String(c.paymentId)] = c; return acc; }, {});
+    const ruMap = referrals.reduce((acc, r) => { acc[String(r.paymentId)] = r; return acc; }, {});
+
+    const parseNotes = (n) => {
+      const s = String(n || "");
+      const cm = s.match(/Coupon:([^,]*)/);
+      const dm = s.match(/Discount:(\d+)/);
+      return { couponCode: cm && cm[1] ? cm[1].trim() : "", couponDiscount: dm && dm[1] ? Number(dm[1]) : 0 };
+    };
+
     const toRow = (p, extra = {}) => ({
       _id: p._id,
       type: p.type,
@@ -1170,6 +1204,11 @@ exports.listAllPaymentsHistory = async (req, res) => {
       createdAt: p.createdAt,
       studentName: p.studentId?.name || "Student",
       tutorName: p.tutorId?.name || "Tutor",
+      couponCode: (cuMap[String(p._id)]?.couponId?.code) || parseNotes(p.notes).couponCode || "",
+      couponDiscount: (cuMap[String(p._id)]?.amountDiscounted) ?? parseNotes(p.notes).couponDiscount ?? 0,
+      referralCode: ruMap[String(p._id)]?.referralCodeId?.code || "",
+      referralAmount: ruMap[String(p._id)]?.amountGranted || 0,
+      referralRewardGranted: Boolean(ruMap[String(p._id)]?.rewardGranted),
       ...extra,
     });
 
