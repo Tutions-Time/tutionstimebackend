@@ -44,5 +44,23 @@ router.get(
   progressController.getStudentWeeklySummary
 );
 
+router.get(
+  "/student/time-spent",
+  checkRole(["student"]),
+  progressController.getStudentTimeSpentSummary
+);
+
+router.get(
+  "/tutor/rating-trend",
+  checkRole(["tutor"]),
+  progressController.getTutorRatingTrend
+);
+
+router.get(
+  "/tutor/retention",
+  checkRole(["tutor"]),
+  progressController.getTutorRetention
+);
+
 module.exports = router;
 

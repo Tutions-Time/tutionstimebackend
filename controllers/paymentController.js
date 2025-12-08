@@ -1347,6 +1347,53 @@ exports.getTutorEarningsSummary = async (req, res) => {
   }
 };
 
+exports.getAdminRevenueTimeseries = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const start = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const end = to ? new Date(to) : new Date();
+    const matchBase = { status: "paid", createdAt: { $gte: start, $lte: end } };
+    const bucketFmt = { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } };
+    const subs = await Payment.aggregate([
+      { $match: { ...matchBase, type: "subscription" } },
+      { $group: { _id: bucketFmt, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ]);
+    const notes = await Payment.aggregate([
+      { $match: { ...matchBase, type: "note" } },
+      { $group: { _id: bucketFmt, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ]);
+    const seriesDates = new Set([...
+      subs.map((x) => x._id), ...notes.map((x) => x._id)
+    ]);
+    const commissionPercent = 25;
+    const merged = Array.from(seriesDates).sort().map((d) => {
+      const s = subs.find((x) => x._id === d);
+      const n = notes.find((x) => x._id === d);
+      const subTotal = s?.total || 0;
+      const noteTotal = n?.total || 0;
+      const commissionTotal = Math.round((subTotal * commissionPercent) / 100);
+      return {
+        date: d,
+        subscriptionTotal: subTotal,
+        subscriptionCount: s?.count || 0,
+        noteTotal,
+        noteCount: n?.count || 0,
+        commissionTotal,
+      };
+    });
+    const totals = {
+      subscriptionTotal: merged.reduce((sum, x) => sum + x.subscriptionTotal, 0),
+      noteTotal: merged.reduce((sum, x) => sum + x.noteTotal, 0),
+      commissionTotal: merged.reduce((sum, x) => sum + x.commissionTotal, 0),
+    };
+    return res.json({ success: true, data: { series: merged, totals, period: { from: start, to: end } } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
 exports.requestTutorPayout = async (req, res) => {
   try {
     const { amount } = req.body;

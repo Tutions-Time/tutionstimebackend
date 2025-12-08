@@ -93,6 +93,13 @@ router.get(
 );
 
 router.get(
+  "/admin/revenue-timeseries",
+  authenticate,
+  checkRole(["admin"]),
+  paymentController.getAdminRevenueTimeseries
+);
+
+router.get(
   "/tutor/note-revenue",
   authenticate,
   checkRole(["tutor"]),
