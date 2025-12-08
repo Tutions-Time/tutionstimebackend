@@ -261,18 +261,20 @@ const listAdminSessions = async (req, res) => {
       const rcFilter = { scheduleStatus: 'not-scheduled' };
       if (student) {
         if (mongoose.isValidObjectId(student)) {
-          rcFilter.studentId = new mongoose.Types.ObjectId(String(student));
+          const sp = await StudentProfile.findById(student).select('userId').lean();
+          rcFilter.studentId = sp?.userId || new mongoose.Types.ObjectId(String(student));
         } else {
-          const sps = await StudentProfile.find({ name: new RegExp(String(student), 'i') }).select('_id').lean();
-          rcFilter.studentId = { $in: sps.map((x) => x._id) };
+          const sps = await StudentProfile.find({ name: new RegExp(String(student), 'i') }).select('userId').lean();
+          rcFilter.studentId = { $in: sps.map((x) => x.userId).filter(Boolean) };
         }
       }
       if (tutor) {
         if (mongoose.isValidObjectId(tutor)) {
-          rcFilter.tutorId = new mongoose.Types.ObjectId(String(tutor));
+          const tp = await TutorProfile.findById(tutor).select('userId').lean();
+          rcFilter.tutorId = tp?.userId || new mongoose.Types.ObjectId(String(tutor));
         } else {
-          const tps = await TutorProfile.find({ name: new RegExp(String(tutor), 'i') }).select('_id').lean();
-          rcFilter.tutorId = { $in: tps.map((x) => x._id) };
+          const tps = await TutorProfile.find({ name: new RegExp(String(tutor), 'i') }).select('userId').lean();
+          rcFilter.tutorId = { $in: tps.map((x) => x.userId).filter(Boolean) };
         }
       }
 
@@ -286,11 +288,11 @@ const listAdminSessions = async (req, res) => {
       const studentIds = classes.map((c) => c.studentId).filter(Boolean);
       const tutorIds = classes.map((c) => c.tutorId).filter(Boolean);
       const [spList, tpList] = await Promise.all([
-        StudentProfile.find({ _id: { $in: studentIds } }).select('name photoUrl').lean(),
-        TutorProfile.find({ _id: { $in: tutorIds } }).select('name photoUrl').lean(),
+        StudentProfile.find({ userId: { $in: studentIds } }).select('name photoUrl userId').lean(),
+        TutorProfile.find({ userId: { $in: tutorIds } }).select('name photoUrl userId').lean(),
       ]);
-      const spMap = new Map(spList.map((s) => [String(s._id), s]));
-      const tpMap = new Map(tpList.map((t) => [String(t._id), t]));
+      const spMap = new Map(spList.map((s) => [String(s.userId), s]));
+      const tpMap = new Map(tpList.map((t) => [String(t.userId), t]));
 
       const data = classes.map((c) => ({
         kind: 'regularClass',
@@ -307,29 +309,45 @@ const listAdminSessions = async (req, res) => {
       return res.status(200).json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) } });
     }
 
-    const filter = {};
-    if (status) filter.status = status;
+    const andClauses = [];
+    if (status) andClauses.push({ status });
     if (from || to) {
-      filter.startDateTime = {};
-      if (from) filter.startDateTime.$gte = new Date(from);
-      if (to) filter.startDateTime.$lte = new Date(to);
+      const range = {};
+      if (from) range.$gte = new Date(from);
+      if (to) range.$lte = new Date(to);
+      andClauses.push({ startDateTime: range });
     }
     if (student) {
       if (mongoose.isValidObjectId(student)) {
-        filter.studentId = new mongoose.Types.ObjectId(String(student));
+        const sp = await StudentProfile.findById(student).select('_id userId').lean();
+        const or = [];
+        if (sp?._id) or.push({ studentId: sp._id });
+        or.push({ studentId: new mongoose.Types.ObjectId(String(student)) });
+        if (sp?.userId) or.push({ studentId: sp.userId });
+        andClauses.push({ $or: or });
       } else {
-        const sps = await StudentProfile.find({ name: new RegExp(String(student), 'i') }).select('_id').lean();
-        filter.studentId = { $in: sps.map((x) => x._id) };
+        const sps = await StudentProfile.find({ name: new RegExp(String(student), 'i') }).select('_id userId').lean();
+        const ids = sps.map((x) => x._id);
+        const userIds = sps.map((x) => x.userId).filter(Boolean);
+        andClauses.push({ $or: [ { studentId: { $in: ids } }, { studentId: { $in: userIds } } ] });
       }
     }
     if (tutor) {
       if (mongoose.isValidObjectId(tutor)) {
-        filter.tutorId = new mongoose.Types.ObjectId(String(tutor));
+        const tp = await TutorProfile.findById(tutor).select('_id userId').lean();
+        const or = [];
+        if (tp?._id) or.push({ tutorId: tp._id });
+        or.push({ tutorId: new mongoose.Types.ObjectId(String(tutor)) });
+        if (tp?.userId) or.push({ tutorId: tp.userId });
+        andClauses.push({ $or: or });
       } else {
-        const tps = await TutorProfile.find({ name: new RegExp(String(tutor), 'i') }).select('_id').lean();
-        filter.tutorId = { $in: tps.map((x) => x._id) };
+        const tps = await TutorProfile.find({ name: new RegExp(String(tutor), 'i') }).select('_id userId').lean();
+        const ids = tps.map((x) => x._id);
+        const userIds = tps.map((x) => x.userId).filter(Boolean);
+        andClauses.push({ $or: [ { tutorId: { $in: ids } }, { tutorId: { $in: userIds } } ] });
       }
     }
+    const filter = andClauses.length ? { $and: andClauses } : {};
 
     const total = await Session.countDocuments(filter);
     const sessions = await Session.find(filter)
