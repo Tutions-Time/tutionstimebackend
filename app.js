@@ -46,6 +46,12 @@ app.post(
   paymentController.razorpayWebhook
 );
 
+app.post(
+  "/api/payouts/razorpayx/webhook",
+  express.raw({ type: "application/json" }),
+  paymentController.razorpayxWebhook
+);
+
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

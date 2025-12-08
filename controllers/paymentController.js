@@ -455,6 +455,55 @@ exports.razorpayWebhook = async (req, res) => {
   }
 };
 
+exports.razorpayxWebhook = async (req, res) => {
+  try {
+    const webhookSecret = process.env.RAZORPAYX_WEBHOOK_SECRET;
+    const signature = req.headers["x-razorpay-signature"] || req.headers["X-Razorpay-Signature"];
+    if (!signature || !webhookSecret) {
+      return res.status(400).json({ received: false });
+    }
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
+    const expected = require("crypto").createHmac("sha256", webhookSecret).update(rawBody).digest("hex");
+    if (expected !== signature) {
+      return res.status(400).json({ received: false });
+    }
+    const event = JSON.parse(rawBody.toString("utf8"));
+    const type = event.event;
+    const payoutEntity = event.payload && event.payload.payout && event.payload.payout.entity;
+    const payoutId = payoutEntity && payoutEntity.id;
+    const status = payoutEntity && payoutEntity.status;
+    if (!payoutId) return res.status(200).json({ received: true });
+
+    const Payment = require("../models/Payment");
+    const p = await Payment.findOne({ type: "payout", gatewayPaymentId: payoutId });
+    if (!p) return res.status(200).json({ received: true });
+
+    if (status === "processed") {
+      p.status = "settled";
+      await p.save();
+    } else if (status === "reversed" || status === "rejected" || status === "cancelled") {
+      p.status = "failed";
+      await p.save();
+      const TutorProfile = require("../models/TutorProfile");
+      const tp = await TutorProfile.findById(p.tutorId).select("userId");
+      const userId = tp?.userId || null;
+      if (userId) {
+        const Wallet = require("../models/Wallet");
+        const w = await Wallet.findOne({ userId });
+        if (w) {
+          w.balance += Number(p.tutorNetAmount || p.amount || 0);
+          await w.save();
+        }
+        const walletService = require("../services/payments/walletService");
+        await walletService.addTransaction({ userId, type: "credit", amount: Number(p.tutorNetAmount || p.amount || 0), description: "Payout reversal", reference: { type: "payout", id: p._id }, status: "completed", paymentId: p._id });
+      }
+    }
+    res.status(200).json({ received: true });
+  } catch (err) {
+    res.status(500).json({ received: false });
+  }
+};
+
 
 /**
  * POST /api/payments/verify
@@ -1077,7 +1126,7 @@ exports.listTutorPayouts = async (req, res) => {
 
     const payouts = await Payment.find(filter)
       .sort({ createdAt: -1 })
-      .populate({ path: "tutorId", select: "name" })
+      .populate({ path: "tutorId", select: "name upiId accountHolderName bankAccountNumber ifsc" })
       .lean();
 
     const data = payouts.map((p) => ({
@@ -1090,6 +1139,12 @@ exports.listTutorPayouts = async (req, res) => {
       periodStart: p.periodStart,
       periodEnd: p.periodEnd,
       status: p.status,
+      upi: p.tutorId?.upiId || null,
+      bank: p.tutorId?.bankAccountNumber ? {
+        accountHolderName: p.tutorId?.accountHolderName || null,
+        bankAccountNumber: p.tutorId?.bankAccountNumber || null,
+        ifsc: p.tutorId?.ifsc || null,
+      } : null,
     }));
 
     res.json({ success: true, data });
@@ -1147,6 +1202,145 @@ exports.listSubscriptionPayments = async (req, res) => {
     res.json({ success: true, data });
   } catch (err) {
     console.error("listSubscriptionPayments error:", err);
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.getTutorEarningsSummary = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const userId = req.user.id;
+    const Transaction = require("../models/Transaction");
+    const Wallet = require("../models/Wallet");
+
+    const wallet = await Wallet.findOne({ userId });
+    const filter = { userId, type: "credit" };
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) filter.createdAt.$gte = new Date(startDate);
+      if (endDate) filter.createdAt.$lte = new Date(endDate);
+    }
+
+    const credits = await Transaction.find(filter).lean();
+    const totalCredits = credits.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const bySource = credits.reduce((acc, t) => {
+      const src = t.reference?.type || "unknown";
+      acc[src] = (acc[src] || 0) + Number(t.amount || 0);
+      return acc;
+    }, {});
+
+    res.json({
+      success: true,
+      data: {
+        availableBalance: Number(wallet?.balance || 0),
+        pendingBalance: Number(wallet?.pendingBalance || 0),
+        totalCredits,
+        bySource,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.requestTutorPayout = async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const userId = req.user.id;
+    const MIN_PAYOUT = 10; // INR
+
+    if (!amount || Number(amount) <= 0) {
+      return res.status(400).json({ success: false, message: "Invalid amount" });
+    }
+    if (Number(amount) < MIN_PAYOUT) {
+      return res.status(400).json({ success: false, message: `Minimum payout is ₹${MIN_PAYOUT}` });
+    }
+
+    const TutorProfile = require("../models/TutorProfile");
+    const tp = await TutorProfile.findOne({ userId }).lean();
+    if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
+    if (tp.kycStatus !== "approved") {
+      return res.status(403).json({ success: false, message: "KYC not approved" });
+    }
+    const hasUPI = tp.upiId && tp.upiId.trim().length > 0;
+    const hasBank = tp.bankAccountNumber && tp.ifsc && tp.accountHolderName;
+    if (!hasUPI && !hasBank) {
+      return res.status(400).json({ success: false, message: "No payout method (UPI/Bank) set" });
+    }
+
+    const Payment = require("../models/Payment");
+    const walletService = require("../services/payments/walletService");
+    const { ensureContactAndFundAccount, createPayout } = require("../services/payments/payoutProvider");
+
+    const payout = await Payment.create({
+      tutorId: tp._id,
+      type: "payout",
+      amount: Number(amount),
+      currency: "INR",
+      commissionPercent: 0,
+      commissionAmount: 0,
+      tutorNetAmount: Number(amount),
+      status: "created",
+      notes: hasUPI ? `Tutor withdrawal request (UPI)` : `Tutor withdrawal request (Bank)`,
+    });
+
+    await walletService.debitWalletGeneric(
+      userId,
+      "tutor",
+      Number(amount),
+      "Payout requested",
+      { type: "payout", id: payout._id }
+    );
+
+    const TutorProfileModel = require("../models/TutorProfile");
+    const { contactId, fundAccountId, useUPI } = await ensureContactAndFundAccount(tp);
+    await TutorProfileModel.updateOne({ _id: tp._id }, { razorpayxContactId: contactId, razorpayxFundAccountId: fundAccountId });
+
+    const mode = useUPI ? "UPI" : "IMPS";
+    try {
+      const rzpPayout = await createPayout(fundAccountId, Number(amount), mode, String(payout._id));
+      payout.gatewayPaymentId = rzpPayout.id;
+      if (rzpPayout.status === "processed" || rzpPayout.status === "queued" || rzpPayout.status === "pending") {
+        const adminWalletService = require("../services/payments/walletService");
+        await adminWalletService.adminDebit(Number(amount), "Tutor payout", { type: "payout", id: payout._id });
+        if (rzpPayout.status === "processed") {
+          payout.status = "settled";
+        }
+        await payout.save();
+      } else {
+        payout.status = "failed";
+        await payout.save();
+        const Wallet = require("../models/Wallet");
+        const w = await Wallet.findOne({ userId });
+        if (w) {
+          w.balance += Number(amount);
+          await w.save();
+        }
+        await walletService.addTransaction({ userId, type: "credit", amount: Number(amount), description: "Payout reversal", reference: { type: "payout", id: payout._id }, status: "completed", paymentId: payout._id });
+        return res.status(500).json({ success: false, message: "Payout failed" });
+      }
+    } catch (err) {
+      payout.status = "failed";
+      await payout.save();
+      const Wallet = require("../models/Wallet");
+      const w = await Wallet.findOne({ userId });
+      if (w) {
+        w.balance += Number(amount);
+        await w.save();
+      }
+      await walletService.addTransaction({ userId, type: "credit", amount: Number(amount), description: "Payout reversal", reference: { type: "payout", id: payout._id }, status: "completed", paymentId: payout._id });
+      return res.status(500).json({ success: false, message: "Provider error", error: err.message });
+    }
+
+    const { createAdminNotification } = require("../services/adminNotification");
+    await createAdminNotification(
+      "Tutor payout requested",
+      `Payout ${payout._id} requested by tutor ${tp.name || tp._id}`,
+      { payoutId: payout._id, tutorId: tp._id, amount: Number(amount), upi: tp.upiId || null }
+    );
+
+    res.json({ success: true, data: { payoutId: payout._id } });
+  } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };

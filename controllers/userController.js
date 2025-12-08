@@ -339,6 +339,10 @@ const updateTutorProfile = async (req, res) => {
       city,
       state,
       pincode,
+      upiId,
+      accountHolderName,
+      bankAccountNumber,
+      ifsc,
     } = req.body;
 
     if (!name || !email || !gender || !qualification || !subjects || !hourlyRate || !bio) {
@@ -400,6 +404,10 @@ const updateTutorProfile = async (req, res) => {
       ...(photoUrl && { photoUrl }),
       ...(demoVideoUrl && { demoVideoUrl }),
       ...(resumeUrl && { resumeUrl }),
+      ...(upiId && { upiId }),
+      ...(accountHolderName && { accountHolderName }),
+      ...(bankAccountNumber && { bankAccountNumber }),
+      ...(ifsc && { ifsc }),
     };
 
     const profile = await TutorProfile.findOneAndUpdate(

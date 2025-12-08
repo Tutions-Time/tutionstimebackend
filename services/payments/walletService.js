@@ -130,3 +130,21 @@ exports.releasePendingToAvailable = async (userId, role, amount, description, re
 exports.addTransaction = async ({ userId, type, amount, description, reference, status, regularClassId, paymentId }) => {
   return Transaction.create({ userId, type, amount, description, reference, status, regularClassId, paymentId });
 };
+
+exports.debitWalletGeneric = async (userId, role, amount, description, reference) => {
+  const wallet = await this.ensureWallet(userId, role);
+  if (wallet.balance < amount) throw new Error("Insufficient balance");
+  wallet.balance -= amount;
+  await wallet.save();
+
+  await Transaction.create({
+    userId,
+    type: "debit",
+    amount,
+    description,
+    reference,
+    status: "pending",
+  });
+
+  return wallet;
+};
