@@ -989,41 +989,61 @@ exports.getTutorNoteHistory = async (req, res) => {
   }
 };
 
-// Admin: combined payment history (subscription + note + group)
+// Admin: combined payment history (subscription + note + group + payout) with pagination & filters
 exports.listAllPaymentsHistory = async (req, res) => {
   try {
-    const { from, to } = req.query;
-    const range = (q = {}) => {
+    const { from, to, status, type, page = 1, limit = 50, student, tutor } = req.query;
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Number(limit));
+
+    const baseRange = (q = {}) => {
       if (from || to) {
         q.createdAt = {};
         if (from) q.createdAt.$gte = new Date(from);
         if (to) q.createdAt.$lte = new Date(to);
       }
+      if (status) q.status = status;
       return q;
     };
 
-    const subs = await Payment.find(range({ type: "subscription" }))
-      .sort({ createdAt: -1 })
-      .populate({ path: "studentId", select: "name" })
-      .populate({ path: "tutorId", select: "name" })
-      .populate({ path: "regularClassId", select: "subject planType classCount" })
-      .lean();
+    const include = (t) => !type || type === t;
 
-    const notes = await Payment.find(range({ type: "note" }))
-      .sort({ createdAt: -1 })
-      .populate({ path: "studentId", select: "name" })
-      .populate({ path: "tutorId", select: "name" })
-      .populate({ path: "noteId", select: "title" })
-      .lean();
+    const subs = include("subscription")
+      ? await Payment.find(baseRange({ type: "subscription" }))
+          .sort({ createdAt: -1 })
+          .populate({ path: "studentId", select: "name" })
+          .populate({ path: "tutorId", select: "name" })
+          .populate({ path: "regularClassId", select: "subject planType classCount" })
+          .lean()
+      : [];
 
-    const groups = await Payment.find(range({ type: "group" }))
-      .sort({ createdAt: -1 })
-      .populate({ path: "studentId", select: "name" })
-      .populate({ path: "tutorId", select: "name" })
-      .populate({ path: "groupBatchId", select: "subject level" })
-      .lean();
+    const notes = include("note")
+      ? await Payment.find(baseRange({ type: "note" }))
+          .sort({ createdAt: -1 })
+          .populate({ path: "studentId", select: "name" })
+          .populate({ path: "tutorId", select: "name" })
+          .populate({ path: "noteId", select: "title" })
+          .lean()
+      : [];
 
-    const mapSub = subs.map((p) => ({
+    const groups = include("group")
+      ? await Payment.find(baseRange({ type: "group" }))
+          .sort({ createdAt: -1 })
+          .populate({ path: "studentId", select: "name" })
+          .populate({ path: "tutorId", select: "name" })
+          .populate({ path: "groupBatchId", select: "subject level" })
+          .lean()
+      : [];
+
+    const payouts = include("payout")
+      ? await Payment.find(baseRange({ type: "payout" }))
+          .sort({ createdAt: -1 })
+          .populate({ path: "studentId", select: "name" })
+          .populate({ path: "tutorId", select: "name upiId" })
+          .lean()
+      : [];
+
+    const toRow = (p, extra = {}) => ({
       _id: p._id,
       type: p.type,
       amount: p.amount,
@@ -1035,43 +1055,41 @@ exports.listAllPaymentsHistory = async (req, res) => {
       createdAt: p.createdAt,
       studentName: p.studentId?.name || "Student",
       tutorName: p.tutorId?.name || "Tutor",
+      ...extra,
+    });
+
+    let mapSub = subs.map((p) => toRow(p, {
       subject: p.regularClassId?.subject || "",
       planType: p.regularClassId?.planType || "",
       classCount: p.regularClassId?.classCount || null,
     }));
-
-    const mapNote = notes.map((p) => ({
-      _id: p._id,
-      type: p.type,
-      amount: p.amount,
-      currency: p.currency,
-      status: p.status,
-      gateway: p.gateway,
-      gatewayOrderId: p.gatewayOrderId,
-      gatewayPaymentId: p.gatewayPaymentId,
-      createdAt: p.createdAt,
-      studentName: p.studentId?.name || "Student",
-      tutorName: p.tutorId?.name || "Tutor",
-      noteTitle: p.noteId?.title || "",
+    let mapNote = notes.map((p) => toRow(p, { noteTitle: p.noteId?.title || "" }));
+    let mapGroup = groups.map((p) => toRow(p, { subject: p.groupBatchId?.subject || "" }));
+    let mapPayout = payouts.map((p) => toRow(p, {
+      amount: p.tutorNetAmount ?? Math.max(0, Number(p.amount || 0) - Number(p.commissionAmount || 0)),
+      payoutUpi: p.tutorId?.upiId || null,
     }));
 
-    const mapGroup = groups.map((p) => ({
-      _id: p._id,
-      type: p.type,
-      amount: p.amount,
-      currency: p.currency,
-      status: p.status,
-      gateway: p.gateway,
-      gatewayOrderId: p.gatewayOrderId,
-      gatewayPaymentId: p.gatewayPaymentId,
-      createdAt: p.createdAt,
-      studentName: p.studentId?.name || "Student",
-      tutorName: p.tutorId?.name || "Tutor",
-      subject: p.groupBatchId?.subject || "",
-    }));
+    const nameMatch = (n, q) => (q ? String(n || "").toLowerCase().includes(String(q).toLowerCase()) : true);
+    if (student) {
+      mapSub = mapSub.filter((r) => nameMatch(r.studentName, student));
+      mapNote = mapNote.filter((r) => nameMatch(r.studentName, student));
+      mapGroup = mapGroup.filter((r) => nameMatch(r.studentName, student));
+      mapPayout = mapPayout.filter((r) => nameMatch(r.studentName, student));
+    }
+    if (tutor) {
+      mapSub = mapSub.filter((r) => nameMatch(r.tutorName, tutor));
+      mapNote = mapNote.filter((r) => nameMatch(r.tutorName, tutor));
+      mapGroup = mapGroup.filter((r) => nameMatch(r.tutorName, tutor));
+      mapPayout = mapPayout.filter((r) => nameMatch(r.tutorName, tutor));
+    }
 
-    const combined = [...mapSub, ...mapNote, ...mapGroup].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    res.json({ success: true, data: combined });
+    const combinedAll = [...mapSub, ...mapNote, ...mapGroup, ...mapPayout].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const total = combinedAll.length;
+    const start = (pageNum - 1) * limitNum;
+    const data = combinedAll.slice(start, start + limitNum);
+
+    res.json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) } });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
