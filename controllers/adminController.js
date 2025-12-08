@@ -4,6 +4,8 @@ const TutorProfile = require('../models/TutorProfile');
 const Session = require('../models/Session');
 const Payment = require('../models/Payment');
 const AdminWallet = require('../models/AdminWallet');
+const RegularClass = require('../models/RegularClass');
+const mongoose = require('mongoose');
 
 // Get all users with pagination
 const getAllUsers = async (req, res) => {
@@ -250,7 +252,61 @@ const getDashboardStats = async (req, res) => {
 
 const listAdminSessions = async (req, res) => {
   try {
-    const { status, from, to, page = 1, limit = 50 } = req.query;
+    const { status, from, to, page = 1, limit = 50, student, tutor } = req.query;
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Number(limit));
+    const skip = Math.max(0, (pageNum - 1) * limitNum);
+
+    if (status === 'not-scheduled') {
+      const rcFilter = { scheduleStatus: 'not-scheduled' };
+      if (student) {
+        if (mongoose.isValidObjectId(student)) {
+          rcFilter.studentId = new mongoose.Types.ObjectId(String(student));
+        } else {
+          const sps = await StudentProfile.find({ name: new RegExp(String(student), 'i') }).select('_id').lean();
+          rcFilter.studentId = { $in: sps.map((x) => x._id) };
+        }
+      }
+      if (tutor) {
+        if (mongoose.isValidObjectId(tutor)) {
+          rcFilter.tutorId = new mongoose.Types.ObjectId(String(tutor));
+        } else {
+          const tps = await TutorProfile.find({ name: new RegExp(String(tutor), 'i') }).select('_id').lean();
+          rcFilter.tutorId = { $in: tps.map((x) => x._id) };
+        }
+      }
+
+      const total = await RegularClass.countDocuments(rcFilter);
+      const classes = await RegularClass.find(rcFilter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean();
+
+      const studentIds = classes.map((c) => c.studentId).filter(Boolean);
+      const tutorIds = classes.map((c) => c.tutorId).filter(Boolean);
+      const [spList, tpList] = await Promise.all([
+        StudentProfile.find({ _id: { $in: studentIds } }).select('name photoUrl').lean(),
+        TutorProfile.find({ _id: { $in: tutorIds } }).select('name photoUrl').lean(),
+      ]);
+      const spMap = new Map(spList.map((s) => [String(s._id), s]));
+      const tpMap = new Map(tpList.map((t) => [String(t._id), t]));
+
+      const data = classes.map((c) => ({
+        kind: 'regularClass',
+        _id: c._id,
+        status: 'not-scheduled',
+        attendance: 'not-marked',
+        startDateTime: c.startDate,
+        subject: c.subject,
+        regularClassId: { subject: c.subject },
+        studentId: spMap.get(String(c.studentId)) || null,
+        tutorId: tpMap.get(String(c.tutorId)) || null,
+      }));
+
+      return res.status(200).json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) } });
+    }
+
     const filter = {};
     if (status) filter.status = status;
     if (from || to) {
@@ -258,17 +314,36 @@ const listAdminSessions = async (req, res) => {
       if (from) filter.startDateTime.$gte = new Date(from);
       if (to) filter.startDateTime.$lte = new Date(to);
     }
-    const skip = Math.max(0, (Number(page) - 1) * Number(limit));
+    if (student) {
+      if (mongoose.isValidObjectId(student)) {
+        filter.studentId = new mongoose.Types.ObjectId(String(student));
+      } else {
+        const sps = await StudentProfile.find({ name: new RegExp(String(student), 'i') }).select('_id').lean();
+        filter.studentId = { $in: sps.map((x) => x._id) };
+      }
+    }
+    if (tutor) {
+      if (mongoose.isValidObjectId(tutor)) {
+        filter.tutorId = new mongoose.Types.ObjectId(String(tutor));
+      } else {
+        const tps = await TutorProfile.find({ name: new RegExp(String(tutor), 'i') }).select('_id').lean();
+        filter.tutorId = { $in: tps.map((x) => x._id) };
+      }
+    }
+
+    const total = await Session.countDocuments(filter);
     const sessions = await Session.find(filter)
       .sort({ startDateTime: -1 })
       .skip(skip)
-      .limit(Number(limit))
-      .populate({ path: 'regularClassId', select: 'subject planType studentId tutorId' })
+      .limit(limitNum)
+      .populate({ path: 'regularClassId', select: 'subject planType studentId tutorId scheduleStatus startDate' })
+      .populate({ path: 'studentId', select: 'name photoUrl' })
+      .populate({ path: 'tutorId', select: 'name photoUrl' })
       .lean();
 
-    res.status(200).json({ success: true, data: sessions });
+    return res.status(200).json({ success: true, data: sessions, pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) } });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+    return res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
