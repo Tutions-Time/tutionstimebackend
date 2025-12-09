@@ -95,7 +95,11 @@ exports.applyReferralOnSignup = async (req, res) => {
 exports.getReferralSettings = async (_req, res) => {
   try {
     const settings = await ReferralSettings.findOne().lean();
-    res.json({ success: true, data: settings || { studentRewardAmount: 100, tutorRewardAmount: 100, referredUserBonusAmount: 0, status: 'active' } });
+    if (!settings) {
+      return res.json({ success: true, data: { studentRewardAmount: 100, tutorRewardAmount: 100, status: 'active' } });
+    }
+    const { studentRewardAmount, tutorRewardAmount, status } = settings;
+    res.json({ success: true, data: { studentRewardAmount, tutorRewardAmount, status } });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Server error' });
   }
@@ -104,22 +108,65 @@ exports.getReferralSettings = async (_req, res) => {
 // Update referral settings (admin)
 exports.updateReferralSettings = async (req, res) => {
   try {
-    const { studentRewardAmount, tutorRewardAmount, referredUserBonusAmount, status } = req.body;
+    const { studentRewardAmount, tutorRewardAmount, status } = req.body;
     const settings = await ReferralSettings.findOneAndUpdate(
       {},
       {
         $set: {
           ...(studentRewardAmount !== undefined ? { studentRewardAmount } : {}),
           ...(tutorRewardAmount !== undefined ? { tutorRewardAmount } : {}),
-          ...(referredUserBonusAmount !== undefined ? { referredUserBonusAmount } : {}),
           ...(status ? { status } : {}),
         },
       },
       { upsert: true, new: true }
     );
-    res.json({ success: true, data: settings });
+    const { studentRewardAmount: sr, tutorRewardAmount: tr, status: st } = settings;
+    res.json({ success: true, data: { studentRewardAmount: sr, tutorRewardAmount: tr, status: st } });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.applyReferralSettingsToCodes = async (_req, res) => {
+  try {
+    const settings = await ReferralSettings.findOne().lean();
+    const tutorAmount = settings?.tutorRewardAmount ?? 100;
+    const studentAmount = settings?.studentRewardAmount ?? 100;
+    const tutorIds = await User.find({ role: 'tutor' }).select('_id').lean();
+    const studentIds = await User.find({ role: 'student' }).select('_id').lean();
+    const tIds = tutorIds.map((x) => x._id);
+    const sIds = studentIds.map((x) => x._id);
+    await ReferralCode.updateMany({ ownerUserId: { $in: tIds } }, { $set: { rewardType: 'fixed', rewardAmount: tutorAmount } });
+    await ReferralCode.updateMany({ ownerUserId: { $in: sIds } }, { $set: { rewardType: 'fixed', rewardAmount: studentAmount } });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+exports.applyReferralSettingsToStudentCodes = async (_req, res) => {
+  try {
+    const settings = await ReferralSettings.findOne().lean();
+    const amount = settings?.studentRewardAmount ?? 100;
+    const studentIds = await User.find({ role: 'student' }).select('_id').lean();
+    const sIds = studentIds.map((x) => x._id);
+    await ReferralCode.updateMany({ ownerUserId: { $in: sIds } }, { $set: { rewardType: 'fixed', rewardAmount: amount } });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+exports.applyReferralSettingsToTutorCodes = async (_req, res) => {
+  try {
+    const settings = await ReferralSettings.findOne().lean();
+    const amount = settings?.tutorRewardAmount ?? 100;
+    const tutorIds = await User.find({ role: 'tutor' }).select('_id').lean();
+    const tIds = tutorIds.map((x) => x._id);
+    await ReferralCode.updateMany({ ownerUserId: { $in: tIds } }, { $set: { rewardType: 'fixed', rewardAmount: amount } });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
