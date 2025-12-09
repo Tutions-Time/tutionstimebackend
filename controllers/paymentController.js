@@ -101,6 +101,79 @@ exports.createSubscriptionOrder = async (req, res) => {
     if (discount > 0) totalAmountINR = Math.max(0, totalAmountINR - discount);
     const amountInPaise = Math.round(totalAmountINR * 100);
 
+    // If student wallet can fully cover, pay via wallet (no Razorpay)
+    try {
+      const wallet = await walletService.getWallet(userId);
+      if (Number(wallet?.balance || 0) >= Number(totalAmountINR)) {
+        const StudentProfile = require("../models/StudentProfile");
+        const TutorProfile = require("../models/TutorProfile");
+        const sp = await StudentProfile.findById(rc.studentId).select("userId name");
+        const tp = await TutorProfile.findById(rc.tutorId).select("userId name");
+
+        const commissionPercent = 25;
+        const commissionAmount = (totalAmountINR * commissionPercent) / 100;
+        const tutorNetAmount = totalAmountINR - commissionAmount;
+
+        const paymentDoc = await Payment.findOneAndUpdate(
+          { regularClassId },
+          {
+            regularClassId,
+            type: "subscription",
+            amount: totalAmountINR,
+            currency: "INR",
+            gateway: "wallet",
+            status: "paid",
+            periodStart: rc.currentPeriodStart,
+            periodEnd: rc.currentPeriodEnd,
+            notes: `BillingType: ${billingType}, Classes: ${numberOfClasses}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
+            commissionPercent,
+            commissionAmount,
+            tutorNetAmount,
+          },
+          { upsert: true, new: true }
+        );
+
+        await walletService.debitWallet(
+          sp?.userId || userId,
+          "student",
+          Number(totalAmountINR),
+          `Payment for regular class — Tutor: ${tp?.name || "Tutor"}${discount > 0 && (couponCode || "").trim() ? ` (Coupon ${(couponCode || "").trim()} -₹${discount})` : ""}`,
+          { type: "booking", id: paymentDoc.regularClassId }
+        );
+
+        await walletService.adminIncreaseHold(tutorNetAmount);
+        await walletService.creditPending(
+          tp?.userId || rc.tutorId,
+          "tutor",
+          tutorNetAmount,
+          `Payment received for class (locked) — Student: ${sp?.name || "Student"}`,
+          { type: "booking", id: paymentDoc.regularClassId }
+        );
+
+        try {
+          if ((couponCode || "").trim()) {
+            const coupon = await Coupon.findOne({ code: (couponCode || "").trim() });
+            await recordCouponUse({ coupon, userId: sp?.userId || userId, paymentId: paymentDoc._id, amountDiscounted: discount });
+          }
+          await grantReferralIfEligible({ studentUserId: sp?.userId || userId, paymentId: paymentDoc._id, amount: totalAmountINR });
+        } catch (_) {}
+
+        const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
+        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+        paymentDoc.releaseAt = releaseAt;
+        paymentDoc.walletProcessed = true;
+        await paymentDoc.save();
+
+        await createAdminNotification(
+          "Subscription paid via wallet",
+          `Regular class ${regularClassId} paid from wallet`,
+          { regularClassId, paymentId: paymentDoc._id, amount: totalAmountINR }
+        );
+
+        return res.json({ success: true, walletPaid: true, paymentId: paymentDoc._id });
+      }
+    } catch (_) {}
+
     // 🧾 Create Razorpay order
     const order = await razorpay.orders.create({
       amount: amountInPaise,
@@ -196,6 +269,62 @@ exports.createGroupOrder = async (req, res) => {
     const { discount } = await applyCouponIfValid({ code: (couponCode || "").trim(), type: "group", amount: amountINR, userId });
     if (discount > 0) amountINR = Math.max(0, amountINR - discount);
     const amountInPaise = Math.round(amountINR * 100);
+    // Wallet-only payment if balance suffices
+    try {
+      const wallet = await walletService.getWallet(userId);
+      if (Number(wallet?.balance || 0) >= Number(amountINR)) {
+        const paymentDoc = await Payment.create({
+          type: "group",
+          groupBatchId: gb._id,
+          studentId: sp._id,
+          tutorId: gb.tutorId,
+          amount: amountINR,
+          currency: "INR",
+          gateway: "wallet",
+          status: "paid",
+          notes: `Group batch checkout for ${batchId}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
+        });
+
+        const tp = await TutorProfile.findById(gb.tutorId).select("userId name");
+        const commissionPercent = 25;
+        const commissionAmount = (amountINR * commissionPercent) / 100;
+        const tutorNetAmount = amountINR - commissionAmount;
+
+        await walletService.debitWallet(
+          userId,
+          "student",
+          Number(amountINR),
+          `Payment for group batch — Tutor: ${tp?.name || "Tutor"}${discount > 0 && (couponCode || "").trim() ? ` (Coupon ${(couponCode || "").trim()} -₹${discount})` : ""}`,
+          { type: "group", id: paymentDoc.groupBatchId }
+        );
+
+        await walletService.adminIncreaseHold(tutorNetAmount);
+        await walletService.creditPending(
+          tp?.userId || gb.tutorId,
+          "tutor",
+          tutorNetAmount,
+          `Payment received for group batch (locked) — Student: ${sp?._id || "Student"}`,
+          { type: "group", id: paymentDoc.groupBatchId }
+        );
+
+        try {
+          if ((couponCode || "").trim()) {
+            const coupon = await Coupon.findOne({ code: (couponCode || "").trim() });
+            await recordCouponUse({ coupon, userId, paymentId: paymentDoc._id, amountDiscounted: discount });
+          }
+          await grantReferralIfEligible({ studentUserId: userId, paymentId: paymentDoc._id, amount: amountINR });
+        } catch (_) {}
+
+        await createAdminNotification(
+          "Group batch paid via wallet",
+          `Batch ${batchId} paid from wallet`,
+          { batchId, paymentId: paymentDoc._id, amount: amountINR }
+        );
+
+        return res.json({ success: true, walletPaid: true, paymentId: paymentDoc._id });
+      }
+    } catch (_) {}
+
     const safeReceipt = `gb_${Math.random().toString(36).substring(2, 10)}`;
     const order = await razorpay.orders.create({
       amount: amountInPaise,
@@ -286,6 +415,67 @@ exports.createNoteOrder = async (req, res) => {
     const { discount } = await applyCouponIfValid({ code: (couponCode || "").trim(), type: "note", amount: amountINR, userId });
     if (discount > 0) amountINR = Math.max(0, amountINR - discount);
     const amountInPaise = Math.round(amountINR * 100);
+
+    // Wallet-only payment path
+    try {
+      const wallet = await walletService.getWallet(userId);
+      if (Number(wallet?.balance || 0) >= Number(amountINR)) {
+        const paymentDoc = await Payment.create({
+          type: "note",
+          noteId: note._id,
+          studentId,
+          tutorId: note.tutorId,
+          amount: amountINR,
+          currency: "INR",
+          gateway: "wallet",
+          status: "paid",
+        });
+
+        const TutorProfile = require("../models/TutorProfile");
+        const StudentProfile = require("../models/StudentProfile");
+        const tp = await TutorProfile.findById(note.tutorId).select("userId name");
+        const sp2 = await StudentProfile.findById(studentId).select("userId name");
+        const tutorUserId = tp?.userId || note.tutorId;
+        const studentUserId = sp2?.userId || studentId;
+
+        const commissionPercent = 25;
+        const commissionAmount = (amountINR * commissionPercent) / 100;
+        const tutorNetAmount = amountINR - commissionAmount;
+
+        await walletService.debitWallet(
+          studentUserId,
+          "student",
+          Number(amountINR),
+          `Payment for note — Tutor: ${tp?.name || "Tutor"}${discount > 0 && (couponCode || "").trim() ? ` (Coupon ${(couponCode || "").trim()} -₹${discount})` : ""}`,
+          { type: "note", id: note._id }
+        );
+
+        await walletService.adminIncreaseHold(tutorNetAmount);
+        await walletService.creditPending(
+          tutorUserId,
+          "tutor",
+          tutorNetAmount,
+          `Payment received for note (locked) — Student: ${sp2?.name || "Student"}`,
+          { type: "note", id: note._id }
+        );
+
+        try {
+          if ((couponCode || "").trim()) {
+            const coupon = await Coupon.findOne({ code: (couponCode || "").trim() });
+            await recordCouponUse({ coupon, userId: studentUserId, paymentId: paymentDoc._id, amountDiscounted: discount });
+          }
+          await grantReferralIfEligible({ studentUserId, paymentId: paymentDoc._id, amount: amountINR });
+        } catch (_) {}
+
+        await createAdminNotification(
+          "Note purchase paid via wallet",
+          `Note ${note._id} paid from wallet`,
+          { noteId: note._id, paymentId: paymentDoc._id, amount: amountINR }
+        );
+
+        return res.json({ success: true, walletPaid: true, paymentId: paymentDoc._id });
+      }
+    } catch (_) {}
 
     if (!process.env.RAZORPAY_KEY_ID) {
       return res.status(500).json({ success: false, message: "Razorpay key not configured" });
@@ -526,14 +716,18 @@ exports.razorpayWebhook = async (req, res) => {
             if (couponCode) {
               const coupon = await Coupon.findOne({ code: couponCode });
               const StudentProfile = require("../models/StudentProfile");
-              const sp2 = await StudentProfile.findById(payment.studentId).select("userId");
-              const studentUserId2 = sp2?.userId || payment.studentId;
+            const sp2 = await StudentProfile.findById(payment.studentId).select("userId");
+            const studentUserId2 = sp2?.userId;
+            if (studentUserId2) {
               await recordCouponUse({ coupon, userId: studentUserId2, paymentId: payment._id, amountDiscounted: discountVal });
+            }
             }
             const StudentProfile = require("../models/StudentProfile");
             const sp3 = await StudentProfile.findById(payment.studentId).select("userId");
-            const studentUserId3 = sp3?.userId || payment.studentId;
-            await grantReferralIfEligible({ studentUserId: studentUserId3, paymentId: payment._id, amount: amt });
+            const studentUserId3 = sp3?.userId;
+            if (studentUserId3) {
+              await grantReferralIfEligible({ studentUserId: studentUserId3, paymentId: payment._id, amount: amt });
+            }
           } catch (_) {}
 
           await createAdminNotification(
@@ -718,17 +912,19 @@ exports.verifyPayment = async (req, res) => {
       try {
         const StudentProfile = require("../models/StudentProfile");
         const sp3 = await StudentProfile.findById(payment.studentId).select("userId");
-        const studentUserIdX = sp3?.userId || payment.studentId;
+        const studentUserIdX = sp3?.userId;
         const noteStr = String(payment.notes || "");
         const cMatch = noteStr.match(/Coupon:([^,]*)/);
         const dMatch = noteStr.match(/Discount:(\d+)/);
         const code = cMatch && cMatch[1] ? cMatch[1].trim() : "";
         const disc = dMatch && dMatch[1] ? Number(dMatch[1]) : 0;
-        if (code) {
+        if (code && studentUserIdX) {
           const coupon = await Coupon.findOne({ code });
           await recordCouponUse({ coupon, userId: studentUserIdX, paymentId: payment._id, amountDiscounted: disc });
         }
-        await grantReferralIfEligible({ studentUserId: studentUserIdX, paymentId: payment._id, amount });
+        if (studentUserIdX) {
+          await grantReferralIfEligible({ studentUserId: studentUserIdX, paymentId: payment._id, amount });
+        }
       } catch (_) {}
     }
 
@@ -896,7 +1092,7 @@ exports.verifyGroupPayment = async (req, res) => {
         const tp2 = await TutorProfile.findById(gb.tutorId).select("userId name");
         const sp2 = await StudentProfile.findById(sp._id).select("userId name");
         const tutorUserId = tp2?.userId || gb.tutorId;
-        const studentUserId = sp2?.userId || sp._id;
+        const studentUserId = sp2?.userId;
         await walletService.creditPending(
           tutorUserId,
           "tutor",
@@ -928,17 +1124,19 @@ exports.verifyGroupPayment = async (req, res) => {
       }
       // Record coupon and grant referral
       try {
-        const studentUserIdX = sp2?.userId || sp._id;
+        const studentUserIdX = sp2?.userId;
         const noteStr = String(payment.notes || "");
         const cMatch = noteStr.match(/Coupon:([^,]*)/);
         const dMatch = noteStr.match(/Discount:(\d+)/);
         const code = cMatch && cMatch[1] ? cMatch[1].trim() : "";
         const disc = dMatch && dMatch[1] ? Number(dMatch[1]) : 0;
-        if (code) {
+        if (code && studentUserIdX) {
           const coupon = await Coupon.findOne({ code });
           await recordCouponUse({ coupon, userId: studentUserIdX, paymentId: payment._id, amountDiscounted: disc });
         }
-        await grantReferralIfEligible({ studentUserId: studentUserIdX, paymentId: payment._id, amount });
+        if (studentUserIdX) {
+          await grantReferralIfEligible({ studentUserId: studentUserIdX, paymentId: payment._id, amount });
+        }
       } catch (_) {}
     } catch (walletErr) {
       console.error("Wallet update error:", walletErr.message);
