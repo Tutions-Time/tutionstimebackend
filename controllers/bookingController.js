@@ -613,6 +613,21 @@ exports.updateDemoStatus = async (req, res) => {
         );
       }
 
+      try {
+        await notificationService.notifyUser(
+          booking.studentId,
+          "Demo Confirmed",
+          `Your demo with ${tutorName} is confirmed for ${displayDate}${displayTime ? ` at ${displayTime}` : ''}.`,
+          { meetingLink: booking.meetingLink, bookingId: booking._id }
+        );
+        await notificationService.notifyUser(
+          booking.tutorId,
+          "Demo Confirmed",
+          `${tutorName} demo confirmed`,
+          { meetingLink: booking.meetingLink, bookingId: booking._id }
+        );
+      } catch (_) {}
+
       await createAdminNotification(
         "Demo Confirmed",
         `Demo confirmed for ${booking.subject} by ${tutorName} on ${displayDate}${
@@ -668,6 +683,15 @@ exports.updateDemoStatus = async (req, res) => {
           { tutorId: booking.tutorId, bookingId: booking._id }
         );
       }
+
+      try {
+        await notificationService.notifyUser(
+          booking.studentId,
+          "Demo Cancelled",
+          `Your demo with ${tutorName} was cancelled.`,
+          { tutorId: booking.tutorId, bookingId: booking._id }
+        );
+      } catch (_) {}
 
       await createAdminNotification(
         "Demo Cancelled",

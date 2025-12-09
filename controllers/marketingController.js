@@ -52,6 +52,23 @@ exports.testGrantReferral = async (req, res) => {
     const adminWallet = await walletService.getAdminWallet();
     const refWallet = await walletService.getWallet(user.referrerUserId);
     const stuWallet = await walletService.getWallet(user._id);
+    try {
+      const notificationService = require('../services/notificationService');
+      await notificationService.notifyUser(
+        user.referrerUserId,
+        'Referral Reward Granted',
+        'A referral reward was credited',
+        { amountGranted: rewardAmount }
+      );
+      if (bonus > 0) {
+        await notificationService.notifyUser(
+          user._id,
+          'Referral Bonus Applied',
+          'A signup bonus was credited',
+          { bonusAmount: bonus }
+        );
+      }
+    } catch (_) {}
     res.json({ success: true, data: { adminWallet, refWallet, stuWallet, rewardAmount, bonus } });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });

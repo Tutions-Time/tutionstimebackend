@@ -84,12 +84,15 @@ app.use("/api/regular", require("./routes/regularClassRoutes.js"));
 app.use("/api/progress", require("./routes/progressRoutes.js"));
 app.use("/api/group-batches", require("./routes/groupBatchRoutes"));
 app.use('/api/marketing', require('./routes/marketingRoutes'));
+app.use('/api/notifications', require('./routes/notificationRoutes'));
+app.use('/api/devices', require('./routes/deviceRoutes'));
 
 
 const { autoCompletePastDemos } = require('./controllers/bookingController');
 const { autoCompletePastSessions } = require('./controllers/sessionController');
 const payoutScheduler = require('./services/cron/payoutScheduler');
 const weeklyReportScheduler = require('./services/cron/weeklyReportScheduler');
+const sessionReminderScheduler = require('./services/cron/sessionReminderScheduler');
 
 app.use("/api/sessions", require("./routes/sessionRoutes"));
 
@@ -100,6 +103,7 @@ setInterval(() => {
 payoutScheduler.start();
 payoutScheduler.start();
 weeklyReportScheduler.start();
+sessionReminderScheduler.start();
 
 
 app.get("/", (req, res) =>

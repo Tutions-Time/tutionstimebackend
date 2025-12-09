@@ -75,6 +75,21 @@ async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
       rc.usedCount = (rc.usedCount || 0) + 1;
       await rc.save();
     }
+    try {
+      const notificationService = require("../services/notificationService");
+      await notificationService.notifyUser(
+        user.referrerUserId,
+        "Referral Reward Granted",
+        `A referral reward was credited`,
+        { paymentId, amountGranted: rewardAmount }
+      );
+      await notificationService.notifyUser(
+        user._id,
+        "Referral Bonus Applied",
+        bonus > 0 ? `A signup bonus was credited` : `Referral applied`,
+        { paymentId, bonusAmount: bonus }
+      );
+    } catch (_) {}
   } catch (_) {}
 }
 
@@ -917,6 +932,22 @@ exports.verifyPayment = async (req, res) => {
             payment.releaseAt = releaseAt;
             payment.walletProcessed = true;
             await payment.save();
+
+            try {
+              const notificationService = require("../services/notificationService");
+              await notificationService.notifyUser(
+                studentUserId,
+                "Payment Verified",
+                `Payment verified for your classes with ${tp?.name || "Tutor"}`,
+                { paymentId: payment._id, regularClassId: payment.regularClassId }
+              );
+              await notificationService.notifyUser(
+                tutorUserId,
+                "Payment Locked",
+                `A class payment was received and locked for release`,
+                { paymentId: payment._id, regularClassId: payment.regularClassId }
+              );
+            } catch (_) {}
           }
         }
       } catch (walletErr) {
@@ -991,6 +1022,22 @@ exports.verifyPayment = async (req, res) => {
           payment.releaseAt = releaseAt;
           payment.walletProcessed = true;
           await payment.save();
+
+          try {
+            const notificationService = require("../services/notificationService");
+            await notificationService.notifyUser(
+              studentUserId,
+              "Payment Verified",
+              `Payment verified for your note purchase`,
+              { paymentId: payment._id, noteId: nId }
+            );
+            await notificationService.notifyUser(
+              tutorUserId,
+              "Payment Locked",
+              `A note payment was received and locked for release`,
+              { paymentId: payment._id, noteId: nId }
+            );
+          } catch (_) {}
         }
       } catch (walletErr) {
         console.error("Wallet update error:", walletErr.message);
@@ -1136,6 +1183,22 @@ exports.verifyGroupPayment = async (req, res) => {
         payment.releaseAt = releaseAt;
         payment.walletProcessed = true;
         await payment.save();
+
+        try {
+          const notificationService = require("../services/notificationService");
+          await notificationService.notifyUser(
+            studentUserId,
+            "Payment Verified",
+            `Payment verified for your group batch enrolment`,
+            { paymentId: payment._id, groupBatchId: gb._id }
+          );
+          await notificationService.notifyUser(
+            tutorUserId,
+            "Payment Locked",
+            `A group batch payment was received and locked for release`,
+            { paymentId: payment._id, groupBatchId: gb._id }
+          );
+        } catch (_) {}
       }
       // Record coupon and grant referral
       try {
