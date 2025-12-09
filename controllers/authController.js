@@ -181,6 +181,32 @@ const verifyOTP = async (req, res) => {
         });
         await walletService.ensureWallet(user._id, user.role);
 
+        // Auto-create referral code for this user
+        try {
+          const ReferralCode = require('../models/ReferralCode');
+          const genCode = async () => {
+            const base = `TT${(user.role || 'U').charAt(0).toUpperCase()}`;
+            const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+            return `${base}${random}`;
+          };
+          let code = await genCode();
+          // Ensure uniqueness
+          for (let i = 0; i < 5; i++) {
+            const exists = await ReferralCode.findOne({ code });
+            if (!exists) break;
+            code = await genCode();
+          }
+          await ReferralCode.create({
+            code,
+            ownerUserId: user._id,
+            rewardType: 'fixed',
+            rewardAmount: 0,
+            maxUses: 1000000,
+            allowedRoles: ['student', 'tutor'],
+            status: 'active',
+          });
+        } catch (_) {}
+
         // Optional referral code capture
         if (req.body && typeof req.body.referralCode === 'string') {
           try {

@@ -3,6 +3,7 @@ const ReferralUse = require('../models/ReferralUse');
 const Coupon = require('../models/Coupon');
 const CouponUse = require('../models/CouponUse');
 const User = require('../models/User');
+const ReferralSettings = require('../models/ReferralSettings');
 
 exports.createReferralCode = async (req, res) => {
   try {
@@ -77,12 +78,48 @@ exports.applyReferralOnSignup = async (req, res) => {
     if (!rc || rc.status !== 'active') return res.status(404).json({ success: false, message: 'Invalid referral code' });
     const user = await User.findOne({ phone });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    // Optional role applicability check
+    if (Array.isArray(rc.allowedRoles) && rc.allowedRoles.length && !rc.allowedRoles.includes(user.role)) {
+      return res.status(400).json({ success: false, message: 'Referral code not applicable for this role' });
+    }
     user.referrerUserId = rc.ownerUserId;
     user.referralCodeUsed = referralCode;
     await user.save();
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// Get referral settings (admin)
+exports.getReferralSettings = async (_req, res) => {
+  try {
+    const settings = await ReferralSettings.findOne().lean();
+    res.json({ success: true, data: settings || { studentRewardAmount: 100, tutorRewardAmount: 100, referredUserBonusAmount: 0, status: 'active' } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// Update referral settings (admin)
+exports.updateReferralSettings = async (req, res) => {
+  try {
+    const { studentRewardAmount, tutorRewardAmount, referredUserBonusAmount, status } = req.body;
+    const settings = await ReferralSettings.findOneAndUpdate(
+      {},
+      {
+        $set: {
+          ...(studentRewardAmount !== undefined ? { studentRewardAmount } : {}),
+          ...(tutorRewardAmount !== undefined ? { tutorRewardAmount } : {}),
+          ...(referredUserBonusAmount !== undefined ? { referredUserBonusAmount } : {}),
+          ...(status ? { status } : {}),
+        },
+      },
+      { upsert: true, new: true }
+    );
+    res.json({ success: true, data: settings });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
   }
 };
 

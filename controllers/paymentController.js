@@ -38,12 +38,25 @@ async function recordCouponUse({ coupon, userId, paymentId, amountDiscounted }) 
 async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
   try {
     const User = require("../models/User");
+    const ReferralSettings = require("../models/ReferralSettings");
     const user = await User.findById(studentUserId);
     if (!user || !user.referrerUserId || user.referralRewardGranted) return;
     const rc = user.referralCodeUsed ? await ReferralCode.findOne({ code: user.referralCodeUsed }) : null;
-    const rewardAmount = rc?.rewardAmount || 100;
+    // Determine referrer role and reward amount from global settings
+    const referrer = await User.findById(user.referrerUserId).select("role");
+    const settings = await ReferralSettings.findOne();
+    const defaultStudent = 100;
+    const defaultTutor = 100;
+    const rewardAmount = (referrer?.role === "tutor"
+      ? (settings?.tutorRewardAmount ?? defaultTutor)
+      : (settings?.studentRewardAmount ?? defaultStudent));
     if (rc && rc.maxUses && rc.usedCount >= rc.maxUses) return;
-    await walletService.creditWallet(user.referrerUserId, "tutor", rewardAmount, "Referral reward", { type: "referral", id: paymentId });
+    const refRole = referrer?.role === "student" ? "student" : "tutor";
+    await walletService.creditWallet(user.referrerUserId, refRole, rewardAmount, "Referral reward", { type: "referral", id: paymentId });
+    const bonus = settings?.referredUserBonusAmount ?? 0;
+    if (bonus > 0) {
+      await walletService.creditWallet(user._id, "student", bonus, "Referral signup bonus", { type: "referral", id: paymentId });
+    }
     await ReferralUse.create({ referralCodeId: rc?._id, referrerUserId: user.referrerUserId, referredUserId: user._id, paymentId, rewardGranted: true, amountGranted: rewardAmount });
     user.referralRewardGranted = true;
     await user.save();

@@ -14,6 +14,13 @@ const getUserProfile = async (req, res) => {
 
     let profile = null;
     let roleDetails = {};
+    let referralCodeStr = null;
+
+    try {
+      const ReferralCode = require("../models/ReferralCode");
+      const mine = await ReferralCode.findOne({ ownerUserId: userId }).lean();
+      referralCodeStr = mine?.code || null;
+    } catch (_) {}
 
     if (user.role === "student") {
       profile = await StudentProfile.findOne({ userId }).lean();
@@ -44,6 +51,7 @@ const getUserProfile = async (req, res) => {
           updatedAt: user.updatedAt,
         },
         profile: profile || null,
+        referralCode: referralCodeStr,
         roleDetails,
       },
     });

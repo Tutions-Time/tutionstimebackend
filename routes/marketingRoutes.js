@@ -17,4 +17,8 @@ router.post('/coupons', checkRole(['admin']), ctrl.createCoupon);
 router.get('/coupons', checkRole(['admin']), ctrl.listCoupons);
 router.put('/coupons/:id', checkRole(['admin']), ctrl.updateCoupon);
 
+// Referral settings (admin)
+router.get('/referral-settings', checkRole(['admin']), ctrl.getReferralSettings);
+router.put('/referral-settings', checkRole(['admin']), ctrl.updateReferralSettings);
+
 module.exports = router;
