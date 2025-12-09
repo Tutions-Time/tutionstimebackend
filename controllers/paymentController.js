@@ -59,10 +59,18 @@ async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
       : (settings?.studentRewardAmount ?? defaultStudent));
     if (rc && rc.maxUses && rc.usedCount >= rc.maxUses) return;
     const refRole = referrer?.role === "student" ? "student" : "tutor";
+    const aw1 = await walletService.getAdminWallet();
+    if ((aw1?.balance || 0) < rewardAmount) {
+      await walletService.adminCredit(rewardAmount, "Referral fund top-up", { type: "referral", id: paymentId });
+    }
     await walletService.adminDebit(rewardAmount, "Referral reward", { type: "referral", id: paymentId });
     await walletService.creditWallet(user.referrerUserId, refRole, rewardAmount, "Referral reward", { type: "referral", id: paymentId });
     const bonus = settings?.referredUserBonusAmount ?? 0;
     if (bonus > 0) {
+      const aw2 = await walletService.getAdminWallet();
+      if ((aw2?.balance || 0) < bonus) {
+        await walletService.adminCredit(bonus, "Referral fund top-up", { type: "referral", id: paymentId });
+      }
       await walletService.adminDebit(bonus, "Referral signup bonus", { type: "referral", id: paymentId });
       await walletService.creditWallet(user._id, "student", bonus, "Referral signup bonus", { type: "referral", id: paymentId });
     }

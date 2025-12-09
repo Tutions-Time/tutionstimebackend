@@ -35,10 +35,18 @@ exports.testGrantReferral = async (req, res) => {
     const rc = user.referralCodeUsed ? await ReferralCode.findOne({ code: user.referralCodeUsed }) : null;
     if (rc && rc.maxUses && rc.usedCount >= rc.maxUses) return res.status(400).json({ success: false, message: 'Referral code usage limit reached' });
     const refRole = referrer?.role === 'student' ? 'student' : 'tutor';
+    const aw1 = await walletService.getAdminWallet();
+    if ((aw1?.balance || 0) < rewardAmount) {
+      await walletService.adminCredit(rewardAmount, 'Referral fund top-up', { type: 'referral', id: null });
+    }
     await walletService.adminDebit(rewardAmount, 'Referral reward', { type: 'referral', id: null });
     await walletService.creditWallet(user.referrerUserId, refRole, rewardAmount, 'Referral reward', { type: 'referral', id: null });
     const bonus = settings?.referredUserBonusAmount ?? 0;
     if (bonus > 0) {
+      const aw2 = await walletService.getAdminWallet();
+      if ((aw2?.balance || 0) < bonus) {
+        await walletService.adminCredit(bonus, 'Referral fund top-up', { type: 'referral', id: null });
+      }
       await walletService.adminDebit(bonus, 'Referral signup bonus', { type: 'referral', id: null });
       await walletService.creditWallet(user._id, 'student', bonus, 'Referral signup bonus', { type: 'referral', id: null });
     }
