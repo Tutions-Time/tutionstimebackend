@@ -7,39 +7,99 @@ const AdminWallet = require('../models/AdminWallet');
 const RegularClass = require('../models/RegularClass');
 const mongoose = require('mongoose');
 
-// Get all users with pagination
+// Get all users with pagination + filters + search + referral fields
 const getAllUsers = async (req, res) => {
   try {
-    // Fetch all users (no passwords or refresh tokens)
-    const users = await User.find().select('-password -refreshToken').lean();
+    const { page = 1, limit = 20, role, status, q, sort = 'createdAt_desc' } = req.query;
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Math.min(200, Number(limit)));
+    const skip = Math.max(0, (pageNum - 1) * limitNum);
 
-    // Fetch student and tutor profiles
-    const studentProfiles = await StudentProfile.find().lean();
-    const tutorProfiles = await TutorProfile.find().lean();
+    const andClauses = [];
+    if (role && ['student', 'tutor', 'admin'].includes(String(role))) andClauses.push({ role: role });
+    if (status && ['active', 'inactive', 'suspended'].includes(String(status))) andClauses.push({ status: status });
 
-    // Create maps for quick lookup
+    if (q && String(q).trim()) {
+      const regex = new RegExp(String(q).trim(), 'i');
+      const sp = await StudentProfile.find({ $or: [{ name: regex }, { email: regex }] }).select('userId').lean();
+      const tp = await TutorProfile.find({ $or: [{ name: regex }, { email: regex }] }).select('userId').lean();
+      const profileUserIds = [
+        ...sp.map((x) => x.userId).filter(Boolean),
+        ...tp.map((x) => x.userId).filter(Boolean),
+      ].map((id) => new mongoose.Types.ObjectId(String(id)));
+      const orClauses = [];
+      if (profileUserIds.length) orClauses.push({ _id: { $in: profileUserIds } });
+      orClauses.push({ phone: regex });
+      orClauses.push({ email: regex });
+      andClauses.push({ $or: orClauses });
+    }
+
+    const filter = andClauses.length ? { $and: andClauses } : {};
+
+    let sortSpec = { createdAt: -1 };
+    if (sort === 'createdAt_asc') sortSpec = { createdAt: 1 };
+    else if (sort === 'lastActive_desc') sortSpec = { lastLogin: -1 };
+    else if (sort === 'lastActive_asc') sortSpec = { lastLogin: 1 };
+
+    const total = await User.countDocuments(filter);
+    const users = await User.find(filter)
+      .select('-password -refreshToken')
+      .sort(sortSpec)
+      .skip(skip)
+      .limit(limitNum)
+      .lean();
+
+    const userIds = users.map((u) => u._id);
+    const [studentProfiles, tutorProfiles] = await Promise.all([
+      StudentProfile.find({ userId: { $in: userIds } }).lean(),
+      TutorProfile.find({ userId: { $in: userIds } }).lean(),
+    ]);
     const studentMap = new Map(studentProfiles.map((p) => [p.userId.toString(), p]));
     const tutorMap = new Map(tutorProfiles.map((p) => [p.userId.toString(), p]));
 
-    // Merge user data with corresponding profile data
+    // Referral: own code and used code
+    let codeMap = new Map();
+    try {
+      const ReferralCode = require('../models/ReferralCode');
+      const codes = await ReferralCode.find({ ownerUserId: { $in: userIds } }).select('ownerUserId code').lean();
+      codeMap = new Map(codes.map((c) => [c.ownerUserId.toString(), c.code]));
+    } catch (_) {}
+
+    // Referrer resolution for display
+    const referrerIds = users.map((u) => u.referrerUserId).filter(Boolean).map((id) => id.toString());
+    let refRoleMap = new Map();
+    let refTutorNameMap = new Map();
+    let refStudentNameMap = new Map();
+    if (referrerIds.length) {
+      const refUsers = await User.find({ _id: { $in: referrerIds } }).select('_id role').lean();
+      refRoleMap = new Map(refUsers.map((ru) => [ru._id.toString(), ru.role]));
+      const refTutorProfiles = await TutorProfile.find({ userId: { $in: referrerIds } }).select('userId name').lean();
+      refTutorNameMap = new Map(refTutorProfiles.map((p) => [p.userId.toString(), p.name]));
+      const StudentProfile = require('../models/StudentProfile');
+      const refStudentProfiles = await StudentProfile.find({ userId: { $in: referrerIds } }).select('userId name').lean();
+      refStudentNameMap = new Map(refStudentProfiles.map((p) => [p.userId.toString(), p.name]));
+    }
+
+    const baseUrl = (process.env.BASE_URL || '').replace(/\/$/, '');
     const mergedUsers = users.map((u) => {
       let profile = null;
       let name = null;
       let email = null;
       let photoUrl = null;
-
       if (u.role === 'student' && studentMap.has(u._id.toString())) {
         profile = studentMap.get(u._id.toString());
-        name = profile.name || null;
-        email = profile.email || null;
-        photoUrl = profile.photoUrl || null;
       } else if (u.role === 'tutor' && tutorMap.has(u._id.toString())) {
         profile = tutorMap.get(u._id.toString());
+      }
+      if (profile) {
         name = profile.name || null;
         email = profile.email || null;
-        photoUrl = profile.photoUrl || null;
+        if (profile.photoUrl) {
+          photoUrl = /^https?:\/\//i.test(profile.photoUrl)
+            ? profile.photoUrl
+            : (baseUrl ? `${baseUrl}/${String(profile.photoUrl).replace(/^\//, '')}` : String(profile.photoUrl));
+        }
       }
-
       return {
         _id: u._id,
         name,
@@ -51,6 +111,12 @@ const getAllUsers = async (req, res) => {
         lastLogin: u.lastLogin,
         createdAt: u.createdAt,
         profilePhoto: photoUrl,
+        referralCode: codeMap.get(u._id.toString()) || null,
+        referralCodeUsed: u.referralCodeUsed || null,
+        referrerUserId: u.referrerUserId || null,
+        referrerName:
+          (u.referrerUserId && (refTutorNameMap.get(u.referrerUserId.toString()) || refStudentNameMap.get(u.referrerUserId.toString()))) || null,
+        referrerRole: (u.referrerUserId && refRoleMap.get(u.referrerUserId.toString())) || null,
       };
     });
 
@@ -58,21 +124,12 @@ const getAllUsers = async (req, res) => {
       success: true,
       data: {
         users: mergedUsers,
-        pagination: {
-          total: mergedUsers.length,
-          page: 1,
-          limit: mergedUsers.length,
-          pages: 1,
-        },
+        pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) },
       },
     });
   } catch (error) {
     console.error('Get All Users Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
