@@ -16,6 +16,48 @@ exports.createReferralCode = async (req, res) => {
   }
 };
 
+exports.testGrantReferral = async (req, res) => {
+  try {
+    const { studentUserId } = req.body;
+    if (!studentUserId) return res.status(400).json({ success: false, message: 'studentUserId required' });
+    const User = require('../models/User');
+    const ReferralCode = require('../models/ReferralCode');
+    const ReferralUse = require('../models/ReferralUse');
+    const walletService = require('../services/payments/walletService');
+    const settings = await ReferralSettings.findOne();
+    const user = await User.findById(studentUserId);
+    if (!user || !user.referrerUserId) return res.status(404).json({ success: false, message: 'No referrer recorded' });
+    if (user.referralRewardGranted) return res.json({ success: true, message: 'Already granted' });
+    const referrer = await User.findById(user.referrerUserId).select('role');
+    const defaultStudent = 100;
+    const defaultTutor = 100;
+    const rewardAmount = (referrer?.role === 'tutor' ? (settings?.tutorRewardAmount ?? defaultTutor) : (settings?.studentRewardAmount ?? defaultStudent));
+    const rc = user.referralCodeUsed ? await ReferralCode.findOne({ code: user.referralCodeUsed }) : null;
+    if (rc && rc.maxUses && rc.usedCount >= rc.maxUses) return res.status(400).json({ success: false, message: 'Referral code usage limit reached' });
+    const refRole = referrer?.role === 'student' ? 'student' : 'tutor';
+    await walletService.adminDebit(rewardAmount, 'Referral reward', { type: 'referral', id: null });
+    await walletService.creditWallet(user.referrerUserId, refRole, rewardAmount, 'Referral reward', { type: 'referral', id: null });
+    const bonus = settings?.referredUserBonusAmount ?? 0;
+    if (bonus > 0) {
+      await walletService.adminDebit(bonus, 'Referral signup bonus', { type: 'referral', id: null });
+      await walletService.creditWallet(user._id, 'student', bonus, 'Referral signup bonus', { type: 'referral', id: null });
+    }
+    if (rc) {
+      await ReferralUse.create({ referralCodeId: rc._id, referrerUserId: user.referrerUserId, referredUserId: user._id, paymentId: null, rewardGranted: true, amountGranted: rewardAmount });
+      rc.usedCount = (rc.usedCount || 0) + 1;
+      await rc.save();
+    }
+    user.referralRewardGranted = true;
+    await user.save();
+    const adminWallet = await walletService.getAdminWallet();
+    const refWallet = await walletService.getWallet(user.referrerUserId);
+    const stuWallet = await walletService.getWallet(user._id);
+    res.json({ success: true, data: { adminWallet, refWallet, stuWallet, rewardAmount, bonus } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Server error', error: err.message });
+  }
+};
+
 exports.listReferralCodes = async (req, res) => {
   const list = await ReferralCode.find().sort({ createdAt: -1 }).lean();
   res.json({ success: true, data: list });

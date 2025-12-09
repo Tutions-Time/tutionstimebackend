@@ -39,7 +39,14 @@ async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
   try {
     const User = require("../models/User");
     const ReferralSettings = require("../models/ReferralSettings");
-    const user = await User.findById(studentUserId);
+    let user = await User.findById(studentUserId);
+    if (!user) {
+      const StudentProfile = require("../models/StudentProfile");
+      const sp = await StudentProfile.findById(studentUserId).select("userId");
+      if (sp?.userId) {
+        user = await User.findById(sp.userId);
+      }
+    }
     if (!user || !user.referrerUserId || user.referralRewardGranted) return;
     const rc = user.referralCodeUsed ? await ReferralCode.findOne({ code: user.referralCodeUsed }) : null;
     // Determine referrer role and reward amount from global settings
@@ -52,8 +59,16 @@ async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
       : (settings?.studentRewardAmount ?? defaultStudent));
     if (rc && rc.maxUses && rc.usedCount >= rc.maxUses) return;
     const refRole = referrer?.role === "student" ? "student" : "tutor";
+    await walletService.adminDebit(rewardAmount, "Referral reward", { type: "referral", id: paymentId });
     await walletService.creditWallet(user.referrerUserId, refRole, rewardAmount, "Referral reward", { type: "referral", id: paymentId });
-    await ReferralUse.create({ referralCodeId: rc?._id, referrerUserId: user.referrerUserId, referredUserId: user._id, paymentId, rewardGranted: true, amountGranted: rewardAmount });
+    const bonus = settings?.referredUserBonusAmount ?? 0;
+    if (bonus > 0) {
+      await walletService.adminDebit(bonus, "Referral signup bonus", { type: "referral", id: paymentId });
+      await walletService.creditWallet(user._id, "student", bonus, "Referral signup bonus", { type: "referral", id: paymentId });
+    }
+    if (rc) {
+      await ReferralUse.create({ referralCodeId: rc._id, referrerUserId: user.referrerUserId, referredUserId: user._id, paymentId, rewardGranted: true, amountGranted: rewardAmount });
+    }
     user.referralRewardGranted = true;
     await user.save();
     if (rc) {

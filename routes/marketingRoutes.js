@@ -12,6 +12,7 @@ router.use(authenticate);
 router.post('/referrals', checkRole(['admin']), ctrl.createReferralCode);
 router.get('/referrals', checkRole(['admin']), ctrl.listReferralCodes);
 router.put('/referrals/:id', checkRole(['admin']), ctrl.updateReferralCode);
+router.post('/referrals/test-grant', checkRole(['admin']), ctrl.testGrantReferral);
 router.post('/referrals/apply-settings', checkRole(['admin']), ctrl.applyReferralSettingsToCodes);
 router.post('/referrals/apply-settings/student', checkRole(['admin']), ctrl.applyReferralSettingsToStudentCodes);
 router.post('/referrals/apply-settings/tutor', checkRole(['admin']), ctrl.applyReferralSettingsToTutorCodes);
