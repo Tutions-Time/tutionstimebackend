@@ -1361,6 +1361,7 @@ exports.listNotePayments = async (req, res) => {
 
     res.json({ success: true, data });
   } catch (err) {
+    console.error('listAllPaymentsHistory error:', err);
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
@@ -1469,12 +1470,39 @@ exports.listAllPaymentsHistory = async (req, res) => {
           .lean()
       : [];
 
+    // Referral transactions (credits to referrer or referred student)
+    const Transaction = require("../models/Transaction");
+    const refTxs = include("referral")
+      ? await Transaction.find(baseRange({ 'reference.type': 'referral' }))
+          .sort({ createdAt: -1 })
+          .populate({ path: 'userId', select: 'role' })
+          .lean()
+      : [];
+
+    // Names for referral rows
+    const userIds = refTxs.map(t => String(t.userId?._id || t.userId));
+    const StudentProfile = require("../models/StudentProfile");
+    const TutorProfile = require("../models/TutorProfile");
+    const sps = userIds.length ? await StudentProfile.find({ userId: { $in: userIds } }).select("userId name").lean() : [];
+    const tps = userIds.length ? await TutorProfile.find({ userId: { $in: userIds } }).select("userId name").lean() : [];
+    const spName = sps.reduce((acc, s) => { acc[String(s.userId)] = s.name || 'Student'; return acc; }, {});
+    const tpName = tps.reduce((acc, t) => { acc[String(t.userId)] = t.name || 'Tutor'; return acc; }, {});
+
+    // Referral code enrichment (if available)
+    const ReferralUseModel = require("../models/ReferralUse");
+    const refUses = userIds.length
+      ? await ReferralUseModel.find(from || to ? { createdAt: { ...(from ? { $gte: new Date(from) } : {}), ...(to ? { $lte: new Date(to) } : {}) } } : {})
+          .populate({ path: 'referralCodeId', select: 'code' })
+          .lean()
+      : [];
+    const byReferrer = refUses.reduce((acc, ru) => { acc[String(ru.referrerUserId)] = ru; return acc; }, {});
+    const byReferred = refUses.reduce((acc, ru) => { acc[String(ru.referredUserId)] = ru; return acc; }, {});
+
     const allPayments = [...subs, ...notes, ...groups];
     const allIds = allPayments.map((p) => p._id);
     const CouponUse = require("../models/CouponUse");
-    const ReferralUse = require("../models/ReferralUse");
     const coupons = allIds.length ? await CouponUse.find({ paymentId: { $in: allIds } }).populate({ path: "couponId", select: "code value type" }).lean() : [];
-    const referrals = allIds.length ? await ReferralUse.find({ paymentId: { $in: allIds } }).populate({ path: "referralCodeId", select: "code" }).lean() : [];
+    const referrals = allIds.length ? await ReferralUseModel.find({ paymentId: { $in: allIds } }).populate({ path: "referralCodeId", select: "code" }).lean() : [];
     const cuMap = coupons.reduce((acc, c) => { acc[String(c.paymentId)] = c; return acc; }, {});
     const ruMap = referrals.reduce((acc, r) => { acc[String(r.paymentId)] = r; return acc; }, {});
 
@@ -1517,21 +1545,46 @@ exports.listAllPaymentsHistory = async (req, res) => {
       payoutUpi: p.tutorId?.upiId || null,
     }));
 
+    // Build referral rows
+    let mapReferral = refTxs.map((t) => ({
+      _id: t._id,
+      type: 'referral',
+      amount: t.amount,
+      currency: 'INR',
+      status: t.status,
+      gateway: '',
+      gatewayOrderId: '',
+      gatewayPaymentId: '',
+      createdAt: t.createdAt,
+      studentName: (t.userId?.role === 'student') ? (spName[String(t.userId?._id || t.userId)] || 'Student') : '—',
+      tutorName: (t.userId?.role === 'tutor') ? (tpName[String(t.userId?._id || t.userId)] || 'Tutor') : '—',
+      couponCode: '',
+      couponDiscount: 0,
+      referralCode: (byReferrer[String(t.userId?._id || t.userId)]?.referralCodeId?.code) || (byReferred[String(t.userId?._id || t.userId)]?.referralCodeId?.code) || '',
+      referralAmount: t.amount,
+      referralRewardGranted: t.status === 'completed',
+    }));
+
     const nameMatch = (n, q) => (q ? String(n || "").toLowerCase().includes(String(q).toLowerCase()) : true);
     if (student) {
       mapSub = mapSub.filter((r) => nameMatch(r.studentName, student));
       mapNote = mapNote.filter((r) => nameMatch(r.studentName, student));
       mapGroup = mapGroup.filter((r) => nameMatch(r.studentName, student));
       mapPayout = mapPayout.filter((r) => nameMatch(r.studentName, student));
+      mapReferral = mapReferral.filter((r) => nameMatch(r.studentName, student));
     }
     if (tutor) {
       mapSub = mapSub.filter((r) => nameMatch(r.tutorName, tutor));
       mapNote = mapNote.filter((r) => nameMatch(r.tutorName, tutor));
       mapGroup = mapGroup.filter((r) => nameMatch(r.tutorName, tutor));
       mapPayout = mapPayout.filter((r) => nameMatch(r.tutorName, tutor));
+      mapReferral = mapReferral.filter((r) => nameMatch(r.tutorName, tutor));
     }
 
-    const combinedAll = [...mapSub, ...mapNote, ...mapGroup, ...mapPayout].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const combinedAll = [...mapSub, ...mapNote, ...mapGroup, ...mapPayout, ...mapReferral].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    if (type === 'referral') {
+      console.log('Admin history referral count:', mapReferral.length, 'from', refTxs.length);
+    }
     const total = combinedAll.length;
     const start = (pageNum - 1) * limitNum;
     const data = combinedAll.slice(start, start + limitNum);
@@ -1811,8 +1864,15 @@ exports.getAdminRevenueTimeseries = async (req, res) => {
       { $group: { _id: bucketFmt, total: { $sum: "$amount" }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } },
     ]);
+    // Referral totals from wallet transactions (credits for referral rewards/bonuses)
+    const Transaction = require("../models/Transaction");
+    const refs = await Transaction.aggregate([
+      { $match: { status: { $in: ["completed", "locked"] }, createdAt: { $gte: start, $lte: end }, 'reference.type': 'referral' } },
+      { $group: { _id: bucketFmt, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ]);
     const seriesDates = new Set([...
-      subs.map((x) => x._id), ...notes.map((x) => x._id)
+      subs.map((x) => x._id), ...notes.map((x) => x._id), ...refs.map((x) => x._id)
     ]);
     const commissionPercent = 25;
     const merged = Array.from(seriesDates).sort().map((d) => {
@@ -1820,6 +1880,7 @@ exports.getAdminRevenueTimeseries = async (req, res) => {
       const n = notes.find((x) => x._id === d);
       const subTotal = s?.total || 0;
       const noteTotal = n?.total || 0;
+      const refTotal = (refs.find((x) => x._id === d)?.total) || 0;
       const commissionTotal = Math.round((subTotal * commissionPercent) / 100);
       return {
         date: d,
@@ -1827,12 +1888,15 @@ exports.getAdminRevenueTimeseries = async (req, res) => {
         subscriptionCount: s?.count || 0,
         noteTotal,
         noteCount: n?.count || 0,
+        referralTotal: refTotal,
+        referralCount: (refs.find((x) => x._id === d)?.count) || 0,
         commissionTotal,
       };
     });
     const totals = {
       subscriptionTotal: merged.reduce((sum, x) => sum + x.subscriptionTotal, 0),
       noteTotal: merged.reduce((sum, x) => sum + x.noteTotal, 0),
+      referralTotal: merged.reduce((sum, x) => sum + (x.referralTotal || 0), 0),
       commissionTotal: merged.reduce((sum, x) => sum + x.commissionTotal, 0),
     };
     return res.json({ success: true, data: { series: merged, totals, period: { from: start, to: end } } });
