@@ -37,5 +37,6 @@ router.get('/bookings/:id', getBookingByIdForAdmin);
 
 router.get('/dashboard/stats', adminController.getDashboardStats);
 router.get('/sessions', adminController.listAdminSessions);
+router.post('/uploads/migrate-to-s3', adminController.migrateUploadsToS3);
 
 module.exports = router;
