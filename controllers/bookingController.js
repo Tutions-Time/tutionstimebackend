@@ -399,12 +399,36 @@ exports.getStudentBookings = async (req, res) => {
   try {
     const { type } = req.query;
 
-    const filter = {
-      studentId: req.user.id,
-    };
+    let filter;
 
-    if (type && ["demo", "regular"].includes(type)) {
-      filter.type = type;
+    if (type === "demo") {
+      filter = {
+        studentId: req.user.id,
+        type: "demo",
+        $or: [
+          { "demoFeedback.likedTutor": { $ne: false } },
+          { demoFeedback: { $exists: false } },
+        ],
+      };
+    } else if (type === "regular") {
+      filter = {
+        studentId: req.user.id,
+        type: "regular",
+      };
+    } else {
+      filter = {
+        studentId: req.user.id,
+        $or: [
+          { type: "regular" },
+          {
+            type: "demo",
+            $or: [
+              { "demoFeedback.likedTutor": { $ne: false } },
+              { demoFeedback: { $exists: false } },
+            ],
+          },
+        ],
+      };
     }
 
     const bookings = await Booking.find(filter).sort({ createdAt: -1 }).lean();
