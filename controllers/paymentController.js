@@ -36,7 +36,10 @@ async function recordCouponUse({ coupon, userId, paymentId, amountDiscounted }) 
 }
 
 async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
+  // Entry: attempt referral grant for the given student and payment context
+  console.log("getreffer", studentUserId, paymentId, amount);
   try {
+    // Resolve user (supports both User._id and StudentProfile._id inputs)
     const User = require("../models/User");
     const ReferralSettings = require("../models/ReferralSettings");
     let user = await User.findById(studentUserId);
@@ -47,9 +50,10 @@ async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
         user = await User.findById(sp.userId);
       }
     }
-    if (!user || !user.referrerUserId || user.referralRewardGranted) return;
+    // Guard: must have a linked referrer
+    if (!user || !user.referrerUserId) { console.log("referral:skip-no-user-or-referrer", { userPresent: !!user, referrer: user?.referrerUserId }); return; }
+    // Load referral code and referrer role for reward computation
     const rc = user.referralCodeUsed ? await ReferralCode.findOne({ code: user.referralCodeUsed }) : null;
-    // Determine referrer role and reward amount from global settings
     const referrer = await User.findById(user.referrerUserId).select("role");
     const settings = await ReferralSettings.findOne();
     const defaultStudent = 100;
@@ -57,32 +61,69 @@ async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
     const rewardAmount = (referrer?.role === "tutor"
       ? (settings?.tutorRewardAmount ?? defaultTutor)
       : (settings?.studentRewardAmount ?? defaultStudent));
-    if (rc && rc.maxUses && rc.usedCount >= rc.maxUses) return;
+    // Guard: respect code max usage
+    if (rc && rc.maxUses && rc.usedCount >= rc.maxUses) { console.log("referral:skip-code-limit", { code: rc.code, usedCount: rc.usedCount, maxUses: rc.maxUses }); return; }
     const refRole = referrer?.role === "student" ? "student" : "tutor";
-    const aw1 = await walletService.getAdminWallet();
-    if ((aw1?.balance || 0) < rewardAmount) {
-      await walletService.adminCredit(rewardAmount, "Referral fund top-up", { type: "referral", id: paymentId });
+
+    let changed = false;
+
+    // 1) Credit referrer if not already granted
+    if (!user.referralRewardGranted) {
+      const aw1 = await walletService.getAdminWallet();
+      if ((aw1?.balance || 0) < rewardAmount) {
+        await walletService.adminCredit(rewardAmount, "Referral fund top-up", { type: "referral", id: paymentId });
+      }
+      await walletService.adminDebit(rewardAmount, "Referral reward", { type: "referral", id: paymentId });
+      await walletService.creditWallet(user.referrerUserId, refRole, rewardAmount, "Referral reward", { type: "referral", id: paymentId });
+      user.referralRewardGranted = true;
+      console.log("referral:granted-referrer", { referrerUserId: user.referrerUserId, amount: rewardAmount, paymentId });
+      changed = true;
     }
-    await walletService.adminDebit(rewardAmount, "Referral reward", { type: "referral", id: paymentId });
-    await walletService.creditWallet(user.referrerUserId, refRole, rewardAmount, "Referral reward", { type: "referral", id: paymentId });
+
+    // 2) Credit student signup bonus if configured and not yet granted
     const bonus = settings?.referredUserBonusAmount ?? 0;
-    if (bonus > 0) {
+    if (bonus > 0 && !user.referralSignupBonusGranted) {
       const aw2 = await walletService.getAdminWallet();
       if ((aw2?.balance || 0) < bonus) {
         await walletService.adminCredit(bonus, "Referral fund top-up", { type: "referral", id: paymentId });
       }
       await walletService.adminDebit(bonus, "Referral signup bonus", { type: "referral", id: paymentId });
       await walletService.creditWallet(user._id, "student", bonus, "Referral signup bonus", { type: "referral", id: paymentId });
+      user.referralSignupBonusGranted = true;
+      console.log("referral:granted-student-bonus", { studentUserId: user._id, bonus, paymentId });
+      changed = true;
     }
+
+    // 3) Credit student referral reward (full) if not yet granted
+    if (!user.referralStudentRewardGranted) {
+      const aw3 = await walletService.getAdminWallet();
+      if ((aw3?.balance || 0) < rewardAmount) {
+        await walletService.adminCredit(rewardAmount, "Referral fund top-up", { type: "referral", id: paymentId });
+      }
+      await walletService.adminDebit(rewardAmount, "Referral student reward", { type: "referral", id: paymentId });
+      await walletService.creditWallet(user._id, "student", rewardAmount, "Referral student reward", { type: "referral", id: paymentId });
+      user.referralStudentRewardGranted = true;
+      console.log("referral:granted-student-reward", { studentUserId: user._id, amount: rewardAmount, paymentId });
+      changed = true;
+    }
+
+    // 4) Record referral usage and attach paymentId idempotently
     if (rc) {
-      await ReferralUse.create({ referralCodeId: rc._id, referrerUserId: user.referrerUserId, referredUserId: user._id, paymentId, rewardGranted: true, amountGranted: rewardAmount });
+      const existing = await ReferralUse.findOne({ referralCodeId: rc._id, referredUserId: user._id });
+      if (!existing) {
+        await ReferralUse.create({ referralCodeId: rc._id, referrerUserId: user.referrerUserId, referredUserId: user._id, paymentId, rewardGranted: true, amountGranted: rewardAmount });
+        rc.usedCount = (rc.usedCount || 0) + 1;
+        await rc.save();
+      } else if (paymentId && !existing.paymentId) {
+        existing.paymentId = paymentId;
+        await existing.save();
+      }
     }
-    user.referralRewardGranted = true;
-    await user.save();
-    if (rc) {
-      rc.usedCount = (rc.usedCount || 0) + 1;
-      await rc.save();
-    }
+
+    // 5) Persist flags if any grants occurred
+    if (changed) await user.save();
+
+    // 6) Notifications (best-effort)
     try {
       const notificationService = require("../services/notificationService");
       await notificationService.notifyUser(
@@ -997,6 +1038,7 @@ exports.verifyPayment = async (req, res) => {
           const commissionAmount = (amount * commissionPercent) / 100;
           const tutorNetAmount = amount - commissionAmount;
 
+          // 1) Admin receives amount and holds tutor share
           await walletService.adminCredit(amount, "Note purchase verified", { type: "note", id: nId });
           await walletService.adminIncreaseHold(tutorNetAmount);
 
@@ -1007,6 +1049,7 @@ exports.verifyPayment = async (req, res) => {
           const tutorUserId = tutorProfile?.userId || payment.tutorId;
           const studentUserId = studentProfile?.userId || payment.studentId;
 
+          // 2) Tutor gets locked pending credit
           await walletService.creditPending(
             tutorUserId,
             "tutor",
@@ -1015,6 +1058,7 @@ exports.verifyPayment = async (req, res) => {
             { type: "note", id: nId }
           );
 
+          // 3) Student wallet history debit (virtual)
           await walletService.addTransaction({
             userId: studentUserId,
             type: "debit",
@@ -1025,12 +1069,14 @@ exports.verifyPayment = async (req, res) => {
             paymentId: payment._id,
           });
 
+          // 4) Schedule release and mark processed
           const baseDate = new Date();
           const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
           payment.releaseAt = releaseAt;
           payment.walletProcessed = true;
           await payment.save();
 
+          // 5) Notify parties (best-effort)
           try {
             const notificationService = require("../services/notificationService");
             await notificationService.notifyUser(
@@ -1047,6 +1093,15 @@ exports.verifyPayment = async (req, res) => {
             );
           } catch (_) {}
         }
+        // 6) Referral grant (client verify path): link student and award if eligible
+        try {
+          const StudentProfile = require("../models/StudentProfile");
+          const sp4 = await StudentProfile.findById(payment.studentId).select("userId");
+          const studentUserIdY = sp4?.userId || req.user?.id;
+          if (studentUserIdY) {
+            await grantReferralIfEligible({ studentUserId: studentUserIdY, paymentId: payment._id, amount: payment.amount || Number(note.price) || 0 });
+          }
+        } catch (_) {}
       } catch (walletErr) {
         console.error("Wallet update error:", walletErr.message);
       }
@@ -1210,7 +1265,7 @@ exports.verifyGroupPayment = async (req, res) => {
       }
       // Record coupon and grant referral
       try {
-        const studentUserIdX = sp2?.userId;
+        const studentUserIdX = sp2?.userId || req.user?.id;
         const noteStr = String(payment.notes || "");
         const cMatch = noteStr.match(/Coupon:([^,]*)/);
         const dMatch = noteStr.match(/Discount:(\d+)/);
