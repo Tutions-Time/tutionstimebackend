@@ -56,6 +56,27 @@ router.get(
   paymentController.listTutorPayouts
 );
 
+router.post(
+  "/refunds/request",
+  authenticate,
+  checkRole(["student"]),
+  paymentController.createRefundRequest
+);
+
+router.get(
+  "/admin/refunds",
+  authenticate,
+  checkRole(["admin"]),
+  paymentController.listRefundRequests
+);
+
+router.patch(
+  "/admin/refunds/:id",
+  authenticate,
+  checkRole(["admin"]),
+  paymentController.updateRefundRequestStatus
+);
+
 router.get(
   "/admin/note-history",
   authenticate,
@@ -69,6 +90,13 @@ router.get(
   authenticate,
   checkRole(["admin"]),
   paymentController.listAllPaymentsHistory
+);
+
+router.get(
+  "/admin/revenue-timeseries",
+  authenticate,
+  checkRole(["admin"]),
+  paymentController.getAdminRevenueTimeseries
 );
 
 router.get(

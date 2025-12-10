@@ -395,3 +395,124 @@ exports.getStudentWeeklySummary = async (req, res) => {
   }
 };
 
+exports.getStudentTimeSpentSummary = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const now = new Date();
+    const to = addDays(startOfDay(now), 1);
+    const days = Number(req.query.days || 7);
+    const from = addDays(startOfDay(now), -Math.max(1, days));
+    const classes = await getStudentClasses(userId);
+    const classIds = classes.map((c) => c._id);
+    const subjectByClass = new Map(classes.map((c) => [String(c._id), c.subject]));
+    const sessions = classIds.length ? await getSessionsForClasses(classIds, from, to) : [];
+    let totalMinutes = 0;
+    const bySubject = new Map();
+    for (const s of sessions) {
+      const start = s.studentJoinTime ? new Date(s.studentJoinTime).getTime() : null;
+      const end = s.studentLeaveTime ? new Date(s.studentLeaveTime).getTime() : null;
+      const dur = start && end && end > start ? Math.round((end - start) / 60000) : 0;
+      totalMinutes += dur;
+      const subject = subjectByClass.get(String(s.regularClassId)) || "Unknown";
+      const v = bySubject.get(subject) || 0;
+      bySubject.set(subject, v + dur);
+    }
+    const data = Array.from(bySubject.entries()).map(([subject, minutes]) => ({ subject, minutes }));
+    return res.json({ success: true, data: { totalMinutes, bySubject: data, period: { from, to }, days } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+exports.getTutorRatingTrend = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const weeks = Math.max(1, Number(req.query.weeks || 8));
+    const now = new Date();
+    const from = addDays(startOfDay(now), -(weeks * 7));
+    const to = addDays(startOfDay(now), 1);
+    const classes = await getTutorClasses(userId);
+    const classIds = classes.map((c) => c._id);
+    const regularSessions = classIds.length ? await getSessionsForClasses(classIds, from, to) : [];
+    const hasScore = (x) => x && typeof x === "number";
+    const dataPoints = [];
+    for (const s of regularSessions) {
+      const when = s.sessionFeedback && s.sessionFeedback.createdAt ? new Date(s.sessionFeedback.createdAt) : s.startDateTime ? new Date(s.startDateTime) : null;
+      const score = s.sessionFeedback ? s.sessionFeedback.overall : null;
+      if (!when || !hasScore(score)) continue;
+      const d = new Date(when);
+      const day = d.getDay();
+      const diff = (day + 6) % 7;
+      const weekStart = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      weekStart.setUTCDate(weekStart.getUTCDate() - diff);
+      weekStart.setUTCHours(0, 0, 0, 0);
+      dataPoints.push({ key: weekStart.toISOString().slice(0, 10), val: score });
+    }
+    const Booking = require("../models/Booking");
+    const demoBookings = await Booking.find({ tutorId: userId, "demoFeedback.createdAt": { $gte: from, $lt: to } }).select("demoFeedback createdAt").lean();
+    for (const b of demoBookings) {
+      const when = b.demoFeedback && b.demoFeedback.createdAt ? new Date(b.demoFeedback.createdAt) : new Date(b.createdAt);
+      const score = b.demoFeedback ? b.demoFeedback.overall : null;
+      if (!hasScore(score)) continue;
+      const d = new Date(when);
+      const day = d.getDay();
+      const diff = (day + 6) % 7;
+      const weekStart = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+      weekStart.setUTCDate(weekStart.getUTCDate() - diff);
+      weekStart.setUTCHours(0, 0, 0, 0);
+      dataPoints.push({ key: weekStart.toISOString().slice(0, 10), val: score });
+    }
+    const grouped = new Map();
+    for (const p of dataPoints) {
+      const g = grouped.get(p.key) || { sum: 0, count: 0 };
+      g.sum += Number(p.val || 0);
+      g.count += 1;
+      grouped.set(p.key, g);
+    }
+    const series = Array.from(grouped.entries())
+      .map(([k, v]) => ({ weekStart: k, avgOverall: v.count ? Math.round((v.sum / v.count) * 100) / 100 : 0, count: v.count }))
+      .sort((a, b) => new Date(a.weekStart).getTime() - new Date(b.weekStart).getTime());
+    return res.json({ success: true, data: { series, period: { from, to } } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+exports.getTutorRetention = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const now = new Date();
+    const from30 = addDays(startOfDay(now), -30);
+    const from60 = addDays(startOfDay(now), -60);
+    const from90 = addDays(startOfDay(now), -90);
+    const to = addDays(startOfDay(now), 1);
+    const Booking = require("../models/Booking");
+    const RegularClass = require("../models/RegularClass");
+    const Session = require("../models/Session");
+    const conversions30 = await Booking.countDocuments({ tutorId: userId, type: "demo", regularClassId: { $ne: null }, createdAt: { $gte: from30, $lt: to } });
+    const conversions90 = await Booking.countDocuments({ tutorId: userId, type: "demo", regularClassId: { $ne: null }, createdAt: { $gte: from90, $lt: to } });
+    const tpClasses = await RegularClass.find({ tutorId: userId, status: "active", paymentStatus: "paid" }).select("_id").lean();
+    const classIds = tpClasses.map((c) => c._id);
+    const sess30 = classIds.length ? await Session.find({ regularClassId: { $in: classIds }, startDateTime: { $gte: from30, $lt: to } }).select("studentId").lean() : [];
+    const byStudent30 = new Map();
+    for (const s of sess30) {
+      if (!s.studentId) continue;
+      const k = String(s.studentId);
+      byStudent30.set(k, (byStudent30.get(k) || 0) + 1);
+    }
+    const repeatStudents30 = Array.from(byStudent30.values()).filter((n) => n >= 2).length;
+    const prev30 = classIds.length ? await Session.find({ regularClassId: { $in: classIds }, startDateTime: { $gte: from60, $lt: from30 } }).select("studentId").lean() : [];
+    const prevSet = new Set(prev30.filter((x) => x.studentId).map((x) => String(x.studentId)));
+    const lastSet = new Set(sess30.filter((x) => x.studentId).map((x) => String(x.studentId)));
+    const base = prevSet.size || 1;
+    let returning = 0;
+    for (const id of prevSet) {
+      if (lastSet.has(id)) returning += 1;
+    }
+    const retention30 = Math.round((returning / base) * 100);
+    return res.json({ success: true, data: { conversion30d: conversions30, conversion90d: conversions90, repeatStudents30d: repeatStudents30, retention30d: retention30 } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+

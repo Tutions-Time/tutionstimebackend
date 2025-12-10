@@ -181,6 +181,103 @@ const verifyOTP = async (req, res) => {
         });
         await walletService.ensureWallet(user._id, user.role);
 
+        // Auto-create referral code for this user
+        try {
+          const ReferralCode = require('../models/ReferralCode');
+          const genCode = async () => {
+            const base = `TT${(user.role || 'U').charAt(0).toUpperCase()}`;
+            const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+            return `${base}${random}`;
+          };
+          let code = await genCode();
+          // Ensure uniqueness
+          for (let i = 0; i < 5; i++) {
+            const exists = await ReferralCode.findOne({ code });
+            if (!exists) break;
+            code = await genCode();
+          }
+          await ReferralCode.create({
+            code,
+            ownerUserId: user._id,
+            rewardType: 'fixed',
+            rewardAmount: 0,
+            maxUses: 1000000,
+            allowedRoles: ['student', 'tutor'],
+            status: 'active',
+          });
+        } catch (_) {}
+
+        // Optional referral code capture
+        if (req.body && typeof req.body.referralCode === 'string') {
+          try {
+            const ReferralCode = require('../models/ReferralCode');
+            const rc = await ReferralCode.findOne({ code: req.body.referralCode.trim() });
+          if (rc && rc.status === 'active') {
+            user.referrerUserId = rc.ownerUserId;
+            user.referralCodeUsed = rc.code;
+            await user.save();
+          }
+        } catch (_) {}
+      }
+
+      try {
+        if (user.role === 'student' && user.referrerUserId && !user.referralRewardGranted) {
+          const ReferralSettings = require('../models/ReferralSettings');
+          const ReferralCode = require('../models/ReferralCode');
+          const ReferralUse = require('../models/ReferralUse');
+          const { notifyUser } = require('../services/notificationService');
+          const referrer = await User.findById(user.referrerUserId).select('role');
+          const settings = await ReferralSettings.findOne();
+          const rc = user.referralCodeUsed ? await ReferralCode.findOne({ code: user.referralCodeUsed }) : null;
+          if (rc && rc.maxUses && rc.usedCount >= rc.maxUses) {
+          } else {
+            const defaultStudent = 100;
+            const defaultTutor = 100;
+            const rewardAmount = (referrer?.role === 'tutor' ? (settings?.tutorRewardAmount ?? defaultTutor) : (settings?.studentRewardAmount ?? defaultStudent));
+            const refRole = referrer?.role === 'student' ? 'student' : 'tutor';
+            const aw1 = await walletService.getAdminWallet();
+            if ((aw1?.balance || 0) < rewardAmount) {
+              await walletService.adminCredit(rewardAmount, 'Referral fund top-up', { type: 'referral' });
+            }
+            await walletService.adminDebit(rewardAmount, 'Referral reward', { type: 'referral' });
+            await walletService.creditWallet(user.referrerUserId, refRole, rewardAmount, 'Referral reward', { type: 'referral' });
+            if (!user.referralStudentRewardGranted) {
+              const aw2 = await walletService.getAdminWallet();
+              if ((aw2?.balance || 0) < rewardAmount) {
+                await walletService.adminCredit(rewardAmount, 'Referral fund top-up', { type: 'referral' });
+              }
+              await walletService.adminDebit(rewardAmount, 'Referral student reward', { type: 'referral' });
+              await walletService.creditWallet(user._id, 'student', rewardAmount, 'Referral student reward', { type: 'referral' });
+              user.referralStudentRewardGranted = true;
+            }
+            const bonus = settings?.referredUserBonusAmount ?? 0;
+            if (bonus > 0 && !user.referralSignupBonusGranted) {
+              const aw3 = await walletService.getAdminWallet();
+              if ((aw3?.balance || 0) < bonus) {
+                await walletService.adminCredit(bonus, 'Referral fund top-up', { type: 'referral' });
+              }
+              await walletService.adminDebit(bonus, 'Referral signup bonus', { type: 'referral' });
+              await walletService.creditWallet(user._id, 'student', bonus, 'Referral signup bonus', { type: 'referral' });
+              user.referralSignupBonusGranted = true;
+            }
+            if (rc) {
+              await ReferralUse.create({ referralCodeId: rc._id, referrerUserId: user.referrerUserId, referredUserId: user._id, paymentId: null, rewardGranted: true, amountGranted: rewardAmount });
+              rc.usedCount = (rc.usedCount || 0) + 1;
+              await rc.save();
+            }
+            user.referralRewardGranted = true;
+            await user.save();
+            if (typeof notifyUser === 'function') {
+              await notifyUser(user.referrerUserId, 'Referral reward', `You earned ₹${rewardAmount} for referring a signup`, { referredUserId: user._id });
+              await notifyUser(user._id, 'Referral reward', `You received ₹${rewardAmount} for using a referral`, { referrerUserId: user.referrerUserId });
+              if (bonus > 0) {
+                await notifyUser(user._id, 'Referral signup bonus', `You received ₹${bonus} signup bonus`, { referrerUserId: user.referrerUserId });
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
         // console.log('User created successfully:', {
         //   id: user._id,
         //   phone: user.phone,

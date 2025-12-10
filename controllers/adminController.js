@@ -1,40 +1,105 @@
 const User = require('../models/User');
 const StudentProfile = require('../models/StudentProfile');
 const TutorProfile = require('../models/TutorProfile');
+const Session = require('../models/Session');
+const Payment = require('../models/Payment');
+const AdminWallet = require('../models/AdminWallet');
+const RegularClass = require('../models/RegularClass');
+const mongoose = require('mongoose');
 
-// Get all users with pagination
+// Get all users with pagination + filters + search + referral fields
 const getAllUsers = async (req, res) => {
   try {
-    // Fetch all users (no passwords or refresh tokens)
-    const users = await User.find().select('-password -refreshToken').lean();
+    const { page = 1, limit = 20, role, status, q, sort = 'createdAt_desc' } = req.query;
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Math.min(200, Number(limit)));
+    const skip = Math.max(0, (pageNum - 1) * limitNum);
 
-    // Fetch student and tutor profiles
-    const studentProfiles = await StudentProfile.find().lean();
-    const tutorProfiles = await TutorProfile.find().lean();
+    const andClauses = [];
+    if (role && ['student', 'tutor', 'admin'].includes(String(role))) andClauses.push({ role: role });
+    if (status && ['active', 'inactive', 'suspended'].includes(String(status))) andClauses.push({ status: status });
 
-    // Create maps for quick lookup
+    if (q && String(q).trim()) {
+      const regex = new RegExp(String(q).trim(), 'i');
+      const sp = await StudentProfile.find({ $or: [{ name: regex }, { email: regex }] }).select('userId').lean();
+      const tp = await TutorProfile.find({ $or: [{ name: regex }, { email: regex }] }).select('userId').lean();
+      const profileUserIds = [
+        ...sp.map((x) => x.userId).filter(Boolean),
+        ...tp.map((x) => x.userId).filter(Boolean),
+      ].map((id) => new mongoose.Types.ObjectId(String(id)));
+      const orClauses = [];
+      if (profileUserIds.length) orClauses.push({ _id: { $in: profileUserIds } });
+      orClauses.push({ phone: regex });
+      orClauses.push({ email: regex });
+      andClauses.push({ $or: orClauses });
+    }
+
+    const filter = andClauses.length ? { $and: andClauses } : {};
+
+    let sortSpec = { createdAt: -1 };
+    if (sort === 'createdAt_asc') sortSpec = { createdAt: 1 };
+    else if (sort === 'lastActive_desc') sortSpec = { lastLogin: -1 };
+    else if (sort === 'lastActive_asc') sortSpec = { lastLogin: 1 };
+
+    const total = await User.countDocuments(filter);
+    const users = await User.find(filter)
+      .select('-password -refreshToken')
+      .sort(sortSpec)
+      .skip(skip)
+      .limit(limitNum)
+      .lean();
+
+    const userIds = users.map((u) => u._id);
+    const [studentProfiles, tutorProfiles] = await Promise.all([
+      StudentProfile.find({ userId: { $in: userIds } }).lean(),
+      TutorProfile.find({ userId: { $in: userIds } }).lean(),
+    ]);
     const studentMap = new Map(studentProfiles.map((p) => [p.userId.toString(), p]));
     const tutorMap = new Map(tutorProfiles.map((p) => [p.userId.toString(), p]));
 
-    // Merge user data with corresponding profile data
+    // Referral: own code and used code
+    let codeMap = new Map();
+    try {
+      const ReferralCode = require('../models/ReferralCode');
+      const codes = await ReferralCode.find({ ownerUserId: { $in: userIds } }).select('ownerUserId code').lean();
+      codeMap = new Map(codes.map((c) => [c.ownerUserId.toString(), c.code]));
+    } catch (_) {}
+
+    // Referrer resolution for display
+    const referrerIds = users.map((u) => u.referrerUserId).filter(Boolean).map((id) => id.toString());
+    let refRoleMap = new Map();
+    let refTutorNameMap = new Map();
+    let refStudentNameMap = new Map();
+    if (referrerIds.length) {
+      const refUsers = await User.find({ _id: { $in: referrerIds } }).select('_id role').lean();
+      refRoleMap = new Map(refUsers.map((ru) => [ru._id.toString(), ru.role]));
+      const refTutorProfiles = await TutorProfile.find({ userId: { $in: referrerIds } }).select('userId name').lean();
+      refTutorNameMap = new Map(refTutorProfiles.map((p) => [p.userId.toString(), p.name]));
+      const StudentProfile = require('../models/StudentProfile');
+      const refStudentProfiles = await StudentProfile.find({ userId: { $in: referrerIds } }).select('userId name').lean();
+      refStudentNameMap = new Map(refStudentProfiles.map((p) => [p.userId.toString(), p.name]));
+    }
+
+    const baseUrl = (process.env.BASE_URL || '').replace(/\/$/, '');
     const mergedUsers = users.map((u) => {
       let profile = null;
       let name = null;
       let email = null;
       let photoUrl = null;
-
       if (u.role === 'student' && studentMap.has(u._id.toString())) {
         profile = studentMap.get(u._id.toString());
-        name = profile.name || null;
-        email = profile.email || null;
-        photoUrl = profile.photoUrl || null;
       } else if (u.role === 'tutor' && tutorMap.has(u._id.toString())) {
         profile = tutorMap.get(u._id.toString());
+      }
+      if (profile) {
         name = profile.name || null;
         email = profile.email || null;
-        photoUrl = profile.photoUrl || null;
+        if (profile.photoUrl) {
+          photoUrl = /^https?:\/\//i.test(profile.photoUrl)
+            ? profile.photoUrl
+            : (baseUrl ? `${baseUrl}/${String(profile.photoUrl).replace(/^\//, '')}` : String(profile.photoUrl));
+        }
       }
-
       return {
         _id: u._id,
         name,
@@ -46,6 +111,12 @@ const getAllUsers = async (req, res) => {
         lastLogin: u.lastLogin,
         createdAt: u.createdAt,
         profilePhoto: photoUrl,
+        referralCode: codeMap.get(u._id.toString()) || null,
+        referralCodeUsed: u.referralCodeUsed || null,
+        referrerUserId: u.referrerUserId || null,
+        referrerName:
+          (u.referrerUserId && (refTutorNameMap.get(u.referrerUserId.toString()) || refStudentNameMap.get(u.referrerUserId.toString()))) || null,
+        referrerRole: (u.referrerUserId && refRoleMap.get(u.referrerUserId.toString())) || null,
       };
     });
 
@@ -53,21 +124,12 @@ const getAllUsers = async (req, res) => {
       success: true,
       data: {
         users: mergedUsers,
-        pagination: {
-          total: mergedUsers.length,
-          page: 1,
-          limit: mergedUsers.length,
-          pages: 1,
-        },
+        pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) },
       },
     });
   } catch (error) {
     console.error('Get All Users Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message,
-    });
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
@@ -194,10 +256,178 @@ const updateUserStatus = async (req, res) => {
   }
 };
 
+const getDashboardStats = async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const students = await User.countDocuments({ role: 'student' });
+    const tutors = await User.countDocuments({ role: 'tutor' });
+    const admins = await User.countDocuments({ role: 'admin' });
+
+    const activeUsers = await User.countDocuments({ status: 'active' });
+    const inactiveUsers = await User.countDocuments({ status: 'inactive' });
+
+    const kycApproved = await TutorProfile.countDocuments({ kycStatus: 'approved' });
+    const kycPending = await TutorProfile.countDocuments({ kycStatus: 'pending' });
+    const kycRejected = await TutorProfile.countDocuments({ kycStatus: 'rejected' });
+
+    const sessionsScheduled = await Session.countDocuments({ status: 'scheduled' });
+    const sessionsCompleted = await Session.countDocuments({ status: 'completed' });
+    const upcoming7d = await Session.countDocuments({ startDateTime: { $gte: new Date(), $lte: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) } });
+
+    const subsPaidAgg = await Payment.aggregate([
+      { $match: { type: 'subscription', status: 'paid' } },
+      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+    ]);
+    const notesPaidAgg = await Payment.aggregate([
+      { $match: { type: 'note', status: 'paid' } },
+      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+    ]);
+    const payoutsAgg = await Payment.aggregate([
+      { $match: { type: 'payout' } },
+      { $group: { _id: null, created: { $sum: { $cond: [{ $eq: ['$status', 'created'] }, 1, 0] } }, settled: { $sum: { $cond: [{ $eq: ['$status', 'settled'] }, 1, 0] } }, commissionTotal: { $sum: '$commissionAmount' }, amountTotal: { $sum: '$amount' } } }
+    ]);
+
+    const adminWallet = await AdminWallet.findOne();
+
+    const stats = {
+      users: { total: totalUsers, students, tutors, admins, active: activeUsers, inactive: inactiveUsers },
+      kyc: { approved: kycApproved, pending: kycPending, rejected: kycRejected },
+      sessions: { scheduled: sessionsScheduled, completed: sessionsCompleted, upcoming7d },
+      payments: {
+        subscriptions: { totalAmount: subsPaidAgg[0]?.total || 0, count: subsPaidAgg[0]?.count || 0 },
+        notes: { totalAmount: notesPaidAgg[0]?.total || 0, count: notesPaidAgg[0]?.count || 0 },
+        payouts: { created: payoutsAgg[0]?.created || 0, settled: payoutsAgg[0]?.settled || 0, commissionTotal: payoutsAgg[0]?.commissionTotal || 0, amountTotal: payoutsAgg[0]?.amountTotal || 0 }
+      },
+      adminWallet: adminWallet ? { balance: adminWallet.balance || 0, holdAmount: adminWallet.holdAmount || 0 } : { balance: 0, holdAmount: 0 }
+    };
+
+    res.status(200).json({ success: true, stats });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
+const listAdminSessions = async (req, res) => {
+  try {
+    const { status, from, to, page = 1, limit = 50, student, tutor } = req.query;
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Number(limit));
+    const skip = Math.max(0, (pageNum - 1) * limitNum);
+
+    if (status === 'not-scheduled') {
+      const rcFilter = { scheduleStatus: 'not-scheduled' };
+      if (student) {
+        if (mongoose.isValidObjectId(student)) {
+          const sp = await StudentProfile.findById(student).select('userId').lean();
+          rcFilter.studentId = sp?.userId || new mongoose.Types.ObjectId(String(student));
+        } else {
+          const sps = await StudentProfile.find({ name: new RegExp(String(student), 'i') }).select('userId').lean();
+          rcFilter.studentId = { $in: sps.map((x) => x.userId).filter(Boolean) };
+        }
+      }
+      if (tutor) {
+        if (mongoose.isValidObjectId(tutor)) {
+          const tp = await TutorProfile.findById(tutor).select('userId').lean();
+          rcFilter.tutorId = tp?.userId || new mongoose.Types.ObjectId(String(tutor));
+        } else {
+          const tps = await TutorProfile.find({ name: new RegExp(String(tutor), 'i') }).select('userId').lean();
+          rcFilter.tutorId = { $in: tps.map((x) => x.userId).filter(Boolean) };
+        }
+      }
+
+      const total = await RegularClass.countDocuments(rcFilter);
+      const classes = await RegularClass.find(rcFilter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean();
+
+      const studentIds = classes.map((c) => c.studentId).filter(Boolean);
+      const tutorIds = classes.map((c) => c.tutorId).filter(Boolean);
+      const [spList, tpList] = await Promise.all([
+        StudentProfile.find({ userId: { $in: studentIds } }).select('name photoUrl userId').lean(),
+        TutorProfile.find({ userId: { $in: tutorIds } }).select('name photoUrl userId').lean(),
+      ]);
+      const spMap = new Map(spList.map((s) => [String(s.userId), s]));
+      const tpMap = new Map(tpList.map((t) => [String(t.userId), t]));
+
+      const data = classes.map((c) => ({
+        kind: 'regularClass',
+        _id: c._id,
+        status: 'not-scheduled',
+        attendance: 'not-marked',
+        startDateTime: c.startDate,
+        subject: c.subject,
+        regularClassId: { subject: c.subject },
+        studentId: spMap.get(String(c.studentId)) || null,
+        tutorId: tpMap.get(String(c.tutorId)) || null,
+      }));
+
+      return res.status(200).json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) } });
+    }
+
+    const andClauses = [];
+    if (status) andClauses.push({ status });
+    if (from || to) {
+      const range = {};
+      if (from) range.$gte = new Date(from);
+      if (to) range.$lte = new Date(to);
+      andClauses.push({ startDateTime: range });
+    }
+    if (student) {
+      if (mongoose.isValidObjectId(student)) {
+        const sp = await StudentProfile.findById(student).select('_id userId').lean();
+        const or = [];
+        if (sp?._id) or.push({ studentId: sp._id });
+        or.push({ studentId: new mongoose.Types.ObjectId(String(student)) });
+        if (sp?.userId) or.push({ studentId: sp.userId });
+        andClauses.push({ $or: or });
+      } else {
+        const sps = await StudentProfile.find({ name: new RegExp(String(student), 'i') }).select('_id userId').lean();
+        const ids = sps.map((x) => x._id);
+        const userIds = sps.map((x) => x.userId).filter(Boolean);
+        andClauses.push({ $or: [ { studentId: { $in: ids } }, { studentId: { $in: userIds } } ] });
+      }
+    }
+    if (tutor) {
+      if (mongoose.isValidObjectId(tutor)) {
+        const tp = await TutorProfile.findById(tutor).select('_id userId').lean();
+        const or = [];
+        if (tp?._id) or.push({ tutorId: tp._id });
+        or.push({ tutorId: new mongoose.Types.ObjectId(String(tutor)) });
+        if (tp?.userId) or.push({ tutorId: tp.userId });
+        andClauses.push({ $or: or });
+      } else {
+        const tps = await TutorProfile.find({ name: new RegExp(String(tutor), 'i') }).select('_id userId').lean();
+        const ids = tps.map((x) => x._id);
+        const userIds = tps.map((x) => x.userId).filter(Boolean);
+        andClauses.push({ $or: [ { tutorId: { $in: ids } }, { tutorId: { $in: userIds } } ] });
+      }
+    }
+    const filter = andClauses.length ? { $and: andClauses } : {};
+
+    const total = await Session.countDocuments(filter);
+    const sessions = await Session.find(filter)
+      .sort({ startDateTime: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .populate({ path: 'regularClassId', select: 'subject planType studentId tutorId scheduleStatus startDate' })
+      .populate({ path: 'studentId', select: 'name photoUrl' })
+      .populate({ path: 'tutorId', select: 'name photoUrl' })
+      .lean();
+
+    return res.status(200).json({ success: true, data: sessions, pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) } });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
 module.exports = {
   getAllUsers,
   getUserById,
   updateUserStatus,
   verifyTutor,
-  updateUserStatus
+  updateUserStatus,
+  getDashboardStats
+  ,listAdminSessions
 };

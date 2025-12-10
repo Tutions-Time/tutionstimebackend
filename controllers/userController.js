@@ -14,6 +14,13 @@ const getUserProfile = async (req, res) => {
 
     let profile = null;
     let roleDetails = {};
+    let referralCodeStr = null;
+
+    try {
+      const ReferralCode = require("../models/ReferralCode");
+      const mine = await ReferralCode.findOne({ ownerUserId: userId }).lean();
+      referralCodeStr = mine?.code || null;
+    } catch (_) {}
 
     if (user.role === "student") {
       profile = await StudentProfile.findOne({ userId }).lean();
@@ -44,6 +51,7 @@ const getUserProfile = async (req, res) => {
           updatedAt: user.updatedAt,
         },
         profile: profile || null,
+        referralCode: referralCodeStr,
         roleDetails,
       },
     });
@@ -339,6 +347,10 @@ const updateTutorProfile = async (req, res) => {
       city,
       state,
       pincode,
+      upiId,
+      accountHolderName,
+      bankAccountNumber,
+      ifsc,
     } = req.body;
 
     if (!name || !email || !gender || !qualification || !subjects || !hourlyRate || !bio) {
@@ -400,6 +412,10 @@ const updateTutorProfile = async (req, res) => {
       ...(photoUrl && { photoUrl }),
       ...(demoVideoUrl && { demoVideoUrl }),
       ...(resumeUrl && { resumeUrl }),
+      ...(upiId && { upiId }),
+      ...(accountHolderName && { accountHolderName }),
+      ...(bankAccountNumber && { bankAccountNumber }),
+      ...(ifsc && { ifsc }),
     };
 
     const profile = await TutorProfile.findOneAndUpdate(

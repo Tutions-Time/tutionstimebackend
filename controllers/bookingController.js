@@ -399,12 +399,36 @@ exports.getStudentBookings = async (req, res) => {
   try {
     const { type } = req.query;
 
-    const filter = {
-      studentId: req.user.id,
-    };
+    let filter;
 
-    if (type && ["demo", "regular"].includes(type)) {
-      filter.type = type;
+    if (type === "demo") {
+      filter = {
+        studentId: req.user.id,
+        type: "demo",
+        $or: [
+          { "demoFeedback.likedTutor": { $ne: false } },
+          { demoFeedback: { $exists: false } },
+        ],
+      };
+    } else if (type === "regular") {
+      filter = {
+        studentId: req.user.id,
+        type: "regular",
+      };
+    } else {
+      filter = {
+        studentId: req.user.id,
+        $or: [
+          { type: "regular" },
+          {
+            type: "demo",
+            $or: [
+              { "demoFeedback.likedTutor": { $ne: false } },
+              { demoFeedback: { $exists: false } },
+            ],
+          },
+        ],
+      };
     }
 
     const bookings = await Booking.find(filter).sort({ createdAt: -1 }).lean();
@@ -613,6 +637,21 @@ exports.updateDemoStatus = async (req, res) => {
         );
       }
 
+      try {
+        await notificationService.notifyUser(
+          booking.studentId,
+          "Demo Confirmed",
+          `Your demo with ${tutorName} is confirmed for ${displayDate}${displayTime ? ` at ${displayTime}` : ''}.`,
+          { meetingLink: booking.meetingLink, bookingId: booking._id }
+        );
+        await notificationService.notifyUser(
+          booking.tutorId,
+          "Demo Confirmed",
+          `${tutorName} demo confirmed`,
+          { meetingLink: booking.meetingLink, bookingId: booking._id }
+        );
+      } catch (_) {}
+
       await createAdminNotification(
         "Demo Confirmed",
         `Demo confirmed for ${booking.subject} by ${tutorName} on ${displayDate}${
@@ -668,6 +707,15 @@ exports.updateDemoStatus = async (req, res) => {
           { tutorId: booking.tutorId, bookingId: booking._id }
         );
       }
+
+      try {
+        await notificationService.notifyUser(
+          booking.studentId,
+          "Demo Cancelled",
+          `Your demo with ${tutorName} was cancelled.`,
+          { tutorId: booking.tutorId, bookingId: booking._id }
+        );
+      } catch (_) {}
 
       await createAdminNotification(
         "Demo Cancelled",
