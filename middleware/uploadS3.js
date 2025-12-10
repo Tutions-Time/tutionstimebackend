@@ -58,7 +58,7 @@ async function uploadFileToS3(req, file) {
     Key: key,
     Body: file.buffer,
     ContentType: contentType,
-    ACL: "public-read",
+    // ACL: "public-read",
   }));
   const location = `https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com/${key}`;
   file.location = location;
