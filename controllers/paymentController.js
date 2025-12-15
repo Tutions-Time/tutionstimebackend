@@ -12,6 +12,7 @@ const Coupon = require("../models/Coupon");
 const CouponUse = require("../models/CouponUse");
 const ReferralCode = require("../models/ReferralCode");
 const ReferralUse = require("../models/ReferralUse");
+const { getReleaseAt } = require("../utils/releaseDelay");
 
 async function applyCouponIfValid({ code, type, amount, userId }) {
   if (!code) return { discount: 0, coupon: null };
@@ -238,10 +239,19 @@ exports.createSubscriptionOrder = async (req, res) => {
         } catch (_) {}
 
         const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
-        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-        paymentDoc.releaseAt = releaseAt;
+        paymentDoc.releaseAt = getReleaseAt(baseDate);
         paymentDoc.walletProcessed = true;
         await paymentDoc.save();
+
+        try {
+          rc.paymentStatus = "paid";
+          rc.tutorPaymentStatus = "locked";
+          if (rc.planType === "hourly") {
+            const purchased = Number(numberOfClasses || 0);
+            if (purchased > 0) rc.classCount = purchased;
+          }
+          await rc.save();
+        } catch (_) {}
 
         await createAdminNotification(
           "Subscription paid via wallet",
@@ -395,8 +405,7 @@ exports.createGroupOrder = async (req, res) => {
         } catch (_) {}
 
         const baseDate = new Date();
-        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-        paymentDoc.releaseAt = releaseAt;
+        paymentDoc.releaseAt = getReleaseAt(baseDate);
         paymentDoc.walletProcessed = true;
         await paymentDoc.save();
 
@@ -713,8 +722,7 @@ exports.razorpayWebhook = async (req, res) => {
 
             // Schedule release after 30 days of period end (or startDate)
             const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
-            const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-            payment.releaseAt = releaseAt;
+            payment.releaseAt = getReleaseAt(baseDate);
             payment.walletProcessed = true;
             await payment.save();
           }
@@ -789,8 +797,7 @@ exports.razorpayWebhook = async (req, res) => {
             });
 
             const baseDate = new Date();
-            const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-            payment.releaseAt = releaseAt;
+            payment.releaseAt = getReleaseAt(baseDate);
             payment.walletProcessed = true;
             await payment.save();
           }
@@ -983,8 +990,7 @@ exports.verifyPayment = async (req, res) => {
             });
 
             const baseDate = rc2.currentPeriodEnd || rc2.startDate || new Date();
-            const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-            payment.releaseAt = releaseAt;
+            payment.releaseAt = getReleaseAt(baseDate);
             payment.walletProcessed = true;
             await payment.save();
 
@@ -1077,8 +1083,7 @@ exports.verifyPayment = async (req, res) => {
 
           // 4) Schedule release and mark processed
           const baseDate = new Date();
-          const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-          payment.releaseAt = releaseAt;
+          payment.releaseAt = getReleaseAt(baseDate);
           payment.walletProcessed = true;
           await payment.save();
 
@@ -1248,8 +1253,7 @@ exports.verifyGroupPayment = async (req, res) => {
         });
 
         const baseDate = new Date();
-        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-        payment.releaseAt = releaseAt;
+        payment.releaseAt = getReleaseAt(baseDate);
         payment.walletProcessed = true;
         await payment.save();
 
