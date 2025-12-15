@@ -2052,16 +2052,40 @@ exports.requestTutorPayout = async (req, res) => {
     );
 
     const TutorProfileModel = require("../models/TutorProfile");
-    const { contactId, fundAccountId, useUPI } = await ensureContactAndFundAccount(tp);
-    await TutorProfileModel.updateOne({ _id: tp._id }, { razorpayxContactId: contactId, razorpayxFundAccountId: fundAccountId });
-
-    const mode = useUPI ? "UPI" : "IMPS";
+    const hasKeys =
+      process.env.RAZORPAYX_KEY_ID &&
+      process.env.RAZORPAYX_KEY_SECRET &&
+      process.env.RAZORPAYX_ACCOUNT_NUMBER;
     try {
-      const rzpPayout = await createPayout(fundAccountId, Number(amount), mode, String(payout._id));
+      if (!hasKeys) {
+        payout.status = "created";
+        await payout.save();
+        return res.json({ success: true, data: { payoutId: payout._id, mode: "offline" } });
+      }
+      const { contactId, fundAccountId, useUPI } = await ensureContactAndFundAccount(tp);
+      await TutorProfileModel.updateOne(
+        { _id: tp._id },
+        { razorpayxContactId: contactId, razorpayxFundAccountId: fundAccountId }
+      );
+
+      const mode = useUPI ? "UPI" : "IMPS";
+      const rzpPayout = await createPayout(
+        fundAccountId,
+        Number(amount),
+        mode,
+        String(payout._id)
+      );
       payout.gatewayPaymentId = rzpPayout.id;
-      if (rzpPayout.status === "processed" || rzpPayout.status === "queued" || rzpPayout.status === "pending") {
+      if (
+        rzpPayout.status === "processed" ||
+        rzpPayout.status === "queued" ||
+        rzpPayout.status === "pending"
+      ) {
         const adminWalletService = require("../services/payments/walletService");
-        await adminWalletService.adminDebit(Number(amount), "Tutor payout", { type: "payout", id: payout._id });
+        await adminWalletService.adminDebit(Number(amount), "Tutor payout", {
+          type: "payout",
+          id: payout._id,
+        });
         if (rzpPayout.status === "processed") {
           payout.status = "settled";
         }
@@ -2075,10 +2099,26 @@ exports.requestTutorPayout = async (req, res) => {
           w.balance += Number(amount);
           await w.save();
         }
-        await walletService.addTransaction({ userId, type: "credit", amount: Number(amount), description: "Payout reversal", reference: { type: "payout", id: payout._id }, status: "completed", paymentId: payout._id });
+        await walletService.addTransaction({
+          userId,
+          type: "credit",
+          amount: Number(amount),
+          description: "Payout reversal",
+          reference: { type: "payout", id: payout._id },
+          status: "completed",
+          paymentId: payout._id,
+        });
         return res.status(500).json({ success: false, message: "Payout failed" });
       }
     } catch (err) {
+      const isAuthErr =
+        (err && err.response && err.response.status === 401) ||
+        (err && err.response && err.response.status === 403);
+      if (isAuthErr) {
+        payout.status = "created";
+        await payout.save();
+        return res.json({ success: true, data: { payoutId: payout._id, mode: "offline" } });
+      }
       payout.status = "failed";
       await payout.save();
       const Wallet = require("../models/Wallet");
@@ -2087,7 +2127,15 @@ exports.requestTutorPayout = async (req, res) => {
         w.balance += Number(amount);
         await w.save();
       }
-      await walletService.addTransaction({ userId, type: "credit", amount: Number(amount), description: "Payout reversal", reference: { type: "payout", id: payout._id }, status: "completed", paymentId: payout._id });
+      await walletService.addTransaction({
+        userId,
+        type: "credit",
+        amount: Number(amount),
+        description: "Payout reversal",
+        reference: { type: "payout", id: payout._id },
+        status: "completed",
+        paymentId: payout._id,
+      });
       return res.status(500).json({ success: false, message: "Provider error", error: err.message });
     }
 
