@@ -394,6 +394,12 @@ exports.createGroupOrder = async (req, res) => {
           await grantReferralIfEligible({ studentUserId: userId, paymentId: paymentDoc._id, amount: amountINR });
         } catch (_) {}
 
+        const baseDate = new Date();
+        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+        paymentDoc.releaseAt = releaseAt;
+        paymentDoc.walletProcessed = true;
+        await paymentDoc.save();
+
         await createAdminNotification(
           "Group batch paid via wallet",
           `Batch ${batchId} paid from wallet`,
