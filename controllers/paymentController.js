@@ -156,11 +156,15 @@ exports.createSubscriptionOrder = async (req, res) => {
     const { regularClassId, billingType, numberOfClasses, couponCode } = req.body;
     const userId = req.user.id; // student userId
 
-    if (!regularClassId || !billingType || !numberOfClasses) {
-      return res.status(400).json({
-        success: false,
-        message: "regularClassId, billingType, numberOfClasses are required",
-      });
+    if (!regularClassId || !billingType) {
+      return res.status(400).json({ success: false, message: "regularClassId and billingType are required" });
+    }
+    if (!["hourly", "monthly"].includes(String(billingType))) {
+      return res.status(400).json({ success: false, message: "billingType must be 'hourly' or 'monthly'" });
+    }
+    const classes = billingType === "hourly" ? Number(numberOfClasses) : 1;
+    if (billingType === "hourly" && (!classes || classes <= 0)) {
+      return res.status(400).json({ success: false, message: "numberOfClasses must be > 0 for hourly billing" });
     }
 
     const rc = await RegularClass.findById(regularClassId);
@@ -173,12 +177,13 @@ exports.createSubscriptionOrder = async (req, res) => {
     // 🔐 Optional: ensure the logged-in student matches this regular class
     // You can map User -> StudentProfile here if needed
 
-    // 💰 Compute total amount: per-class rate * numberOfClasses
-    // rc.amount is assumed "per class" or "base" price in INR
-    let totalAmountINR = rc.amount * Number(numberOfClasses);
+    let totalAmountINR = billingType === "hourly" ? (Number(rc.amount) * classes) : Number(rc.amount);
     const { discount, coupon } = await applyCouponIfValid({ code: (couponCode || "").trim(), type: "subscription", amount: totalAmountINR, userId });
     if (discount > 0) totalAmountINR = Math.max(0, totalAmountINR - discount);
     const amountInPaise = Math.round(totalAmountINR * 100);
+    if (amountInPaise < 100) {
+      return res.status(400).json({ success: false, message: "Amount too low. Minimum ₹1 required." });
+    }
 
     // If student wallet can fully cover, pay via wallet (no Razorpay)
     try {
@@ -197,6 +202,8 @@ exports.createSubscriptionOrder = async (req, res) => {
           { regularClassId },
           {
             regularClassId,
+            studentId: rc.studentId,
+            tutorId: rc.tutorId,
             type: "subscription",
             amount: totalAmountINR,
             currency: "INR",
@@ -204,7 +211,7 @@ exports.createSubscriptionOrder = async (req, res) => {
             status: "paid",
             periodStart: rc.currentPeriodStart,
             periodEnd: rc.currentPeriodEnd,
-            notes: `BillingType: ${billingType}, Classes: ${numberOfClasses}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
+            notes: `BillingType: ${billingType}, Classes: ${classes}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
             commissionPercent,
             commissionAmount,
             tutorNetAmount,
@@ -253,19 +260,29 @@ exports.createSubscriptionOrder = async (req, res) => {
       }
     } catch (_) {}
 
-    // 🧾 Create Razorpay order
-    const order = await razorpay.orders.create({
-      amount: amountInPaise,
-      currency: "INR",
-      receipt: `rc_${regularClassId}_${Date.now()}`,
-      notes: {
-        regularClassId: regularClassId.toString(),
-        billingType,
-        numberOfClasses: String(numberOfClasses),
-        coupon: couponCode || "",
-        discount: String(discount || 0),
-      },
-    });
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+      return res.status(500).json({ success: false, message: "Razorpay not configured" });
+    }
+    const safeReceipt = `rc_${Math.random().toString(36).substring(2, 10)}`;
+    let order;
+    try {
+      order = await razorpay.orders.create({
+        amount: amountInPaise,
+        currency: "INR",
+        receipt: safeReceipt,
+        notes: {
+          rc: regularClassId.toString().slice(-8),
+          bt: billingType,
+          cls: String(classes),
+          coupon: couponCode || "",
+          discount: String(discount || 0),
+        },
+      });
+    } catch (e) {
+      const msg = (e && (e.error?.description || e.message)) || "Payment provider error";
+      console.error("Razorpay order create error:", msg);
+      return res.status(500).json({ success: false, message: msg });
+    }
 
     // 💾 Upsert Payment record for this regular class
     // type stays "subscription" because it's a recurring-tuition payment
@@ -273,7 +290,8 @@ exports.createSubscriptionOrder = async (req, res) => {
       { regularClassId },
       {
         regularClassId,
-        // You may want to store StudentProfile/TutorProfile ids instead of user ids
+        studentId: rc.studentId,
+        tutorId: rc.tutorId,
         type: "subscription",
         amount: totalAmountINR,
         currency: "INR",
@@ -282,7 +300,7 @@ exports.createSubscriptionOrder = async (req, res) => {
         status: "created",
         periodStart: rc.currentPeriodStart,
         periodEnd: rc.currentPeriodEnd,
-        notes: `BillingType: ${billingType}, Classes: ${numberOfClasses}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
+        notes: `BillingType: ${billingType}, Classes: ${classes}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
       },
       { upsert: true, new: true }
     );
@@ -1974,15 +1992,39 @@ exports.requestTutorPayout = async (req, res) => {
     }
 
     const TutorProfile = require("../models/TutorProfile");
-    const tp = await TutorProfile.findOne({ userId }).lean();
+    let tp = await TutorProfile.findOne({ userId }).lean();
     if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
     if (tp.kycStatus !== "approved") {
       return res.status(403).json({ success: false, message: "KYC not approved" });
     }
-    const hasUPI = tp.upiId && tp.upiId.trim().length > 0;
-    const hasBank = tp.bankAccountNumber && tp.ifsc && tp.accountHolderName;
+    let hasUPI = tp.upiId && tp.upiId.trim().length > 0;
+    let hasBank = tp.bankAccountNumber && tp.ifsc && tp.accountHolderName;
     if (!hasUPI && !hasBank) {
-      return res.status(400).json({ success: false, message: "No payout method (UPI/Bank) set" });
+      const { upiId, accountHolderName, bankAccountNumber, ifsc } = req.body || {};
+      const nextUpdate = {};
+      if (typeof upiId === "string" && upiId.trim().length > 0) {
+        nextUpdate.upiId = upiId.trim();
+      } else if (
+        typeof accountHolderName === "string" &&
+        accountHolderName.trim().length > 0 &&
+        typeof bankAccountNumber === "string" &&
+        bankAccountNumber.trim().length > 0 &&
+        typeof ifsc === "string" &&
+        ifsc.trim().length > 0
+      ) {
+        nextUpdate.accountHolderName = accountHolderName.trim();
+        nextUpdate.bankAccountNumber = bankAccountNumber.trim();
+        nextUpdate.ifsc = ifsc.trim();
+      }
+      if (Object.keys(nextUpdate).length > 0) {
+        await TutorProfile.updateOne({ _id: tp._id }, { $set: nextUpdate });
+        tp = await TutorProfile.findById(tp._id).lean();
+        hasUPI = tp.upiId && tp.upiId.trim().length > 0;
+        hasBank = tp.bankAccountNumber && tp.ifsc && tp.accountHolderName;
+      }
+      if (!hasUPI && !hasBank) {
+        return res.status(400).json({ success: false, message: "No payout method (UPI/Bank) set" });
+      }
     }
 
     const Payment = require("../models/Payment");
