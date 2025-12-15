@@ -1,10 +1,29 @@
 const Razorpay = require("razorpay");
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+function notConfigured() {
+  const err = new Error("Razorpay not configured");
+  err.code = "RAZORPAY_NOT_CONFIGURED";
+  throw err;
+}
 
-module.exports = razorpay;
+function buildStub() {
+  return {
+    orders: {
+      create: () => notConfigured(),
+    },
+    payments: {
+      refund: () => notConfigured(),
+    },
+  };
+}
+
+function buildClient() {
+  const key = process.env.RAZORPAY_KEY_ID;
+  const secret = process.env.RAZORPAY_KEY_SECRET;
+  if (!key || !secret) return buildStub();
+  return new Razorpay({ key_id: key, key_secret: secret });
+}
+
+module.exports = buildClient();
 
 

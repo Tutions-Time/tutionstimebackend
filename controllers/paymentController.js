@@ -12,6 +12,7 @@ const Coupon = require("../models/Coupon");
 const CouponUse = require("../models/CouponUse");
 const ReferralCode = require("../models/ReferralCode");
 const ReferralUse = require("../models/ReferralUse");
+const Session = require("../models/Session");
 
 async function applyCouponIfValid({ code, type, amount, userId }) {
   if (!code) return { discount: 0, coupon: null };
@@ -26,6 +27,46 @@ async function applyCouponIfValid({ code, type, amount, userId }) {
   if ((c.redemptions || 0) >= (c.maxRedemptions || 0)) return { discount: 0, coupon: null };
   const discount = c.type === "percent" ? Math.floor((amount * c.value) / 100) : Math.min(c.value, amount);
   return { discount, coupon: c };
+}
+
+async function computeRefundCap(payment) {
+  try {
+    if (payment.type === "subscription" && payment.regularClassId) {
+      const rc = await RegularClass.findById(payment.regularClassId).lean();
+      if (!rc) return Number(payment.amount || 0);
+      const totalSessions =
+        rc.planType === "hourly"
+          ? Number(rc.classCount || 0)
+          : await Session.countDocuments({
+              regularClassId: rc._id,
+              ...(payment.periodStart && payment.periodEnd
+                ? { startDateTime: { $gte: payment.periodStart, $lte: payment.periodEnd } }
+                : {}),
+            });
+      if (!totalSessions || totalSessions <= 0) return Number(payment.amount || 0);
+      const completedSessions = await Session.countDocuments({
+        regularClassId: rc._id,
+        status: "completed",
+        ...(payment.periodStart && payment.periodEnd
+          ? { startDateTime: { $gte: payment.periodStart, $lte: payment.periodEnd } }
+          : {}),
+      });
+      const remaining = Math.max(0, totalSessions - completedSessions);
+      const proportion = remaining / totalSessions;
+      return Math.max(0, Math.floor(Number(payment.amount || 0) * proportion));
+    }
+    if (payment.type === "group" && payment.groupBatchId) {
+      const totalSessions = await Session.countDocuments({ groupBatchId: payment.groupBatchId });
+      if (!totalSessions || totalSessions <= 0) return Number(payment.amount || 0);
+      const completedSessions = await Session.countDocuments({ groupBatchId: payment.groupBatchId, status: "completed" });
+      const remaining = Math.max(0, totalSessions - completedSessions);
+      const proportion = remaining / totalSessions;
+      return Math.max(0, Math.floor(Number(payment.amount || 0) * proportion));
+    }
+    return Math.max(0, Number(payment.amount || 0));
+  } catch (_) {
+    return Math.max(0, Number(payment.amount || 0));
+  }
 }
 
 async function recordCouponUse({ coupon, userId, paymentId, amountDiscounted }) {
@@ -647,7 +688,67 @@ exports.razorpayWebhook = async (req, res) => {
 
     const event = JSON.parse(rawBody.toString("utf8"));
 
-    if (event.event === "payment.captured") {
+    if (event.event && (event.event.includes("refund") || event.event === "refund.processed")) {
+      const RefundRequest = require("../models/RefundRequest");
+      const ref = (event.payload && event.payload.refund && event.payload.refund.entity) || null;
+      if (!ref || !ref.id) return res.status(200).json({ received: true });
+      const rr = await RefundRequest.findOne({ providerRefundId: ref.id });
+      if (!rr) return res.status(200).json({ received: true });
+      rr.providerStatus = ref.status || rr.providerStatus;
+      if ((ref.status || "").toLowerCase() === "processed") {
+        rr.status = "processed";
+        rr.processedAt = new Date();
+        await rr.save();
+        const payment = await Payment.findById(rr.paymentId);
+        if (payment) {
+          const amt = Math.round(Number(ref.amount || 0)) / 100;
+          payment.refundTotal = Math.max(0, Number(payment.refundTotal || 0) + Number(amt));
+          if (!Array.isArray(payment.refunds)) payment.refunds = [];
+          if (!payment.refunds.find((x) => String(x) === String(rr._id))) payment.refunds.push(rr._id);
+          await payment.save();
+          try {
+            const TutorProfile = require("../models/TutorProfile");
+            const StudentProfile = require("../models/StudentProfile");
+            const tp = await TutorProfile.findById(payment.tutorId).select("userId name");
+            const sp = await StudentProfile.findById(payment.studentId).select("userId name");
+            const tutorUserId = tp?.userId || payment.tutorId;
+            const studentUserId = sp?.userId || payment.studentId;
+            const commissionPercent = Number(payment.commissionPercent || 25);
+            const commissionAmount = (Number(amt) * commissionPercent) / 100;
+            const tutorNetAmount = Math.max(0, Number(amt) - commissionAmount);
+            const rc = payment.regularClassId ? await RegularClass.findById(payment.regularClassId) : null;
+            const locked = rc ? (rc.tutorPaymentStatus !== "released") : true;
+            if (locked) {
+              await walletService.adminDecreaseHold(tutorNetAmount);
+              await walletService.reversePending(tutorUserId, "tutor", tutorNetAmount, "Refund adjustment", { type: "refund", id: rr._id });
+            } else {
+              await walletService.debitOrRecordAdjustment(tutorUserId, "tutor", tutorNetAmount, "Refund adjustment", { type: "refund", id: rr._id });
+            }
+            try {
+              const notificationService = require("../services/notificationService");
+              await notificationService.notifyUser(studentUserId, "Refund Processed", "Your refund has been processed", { refundRequestId: rr._id, amount: amt });
+              await notificationService.notifyUser(tutorUserId, "Refund Adjustment", "A refund adjustment affected your earnings", { refundRequestId: rr._id, amount: tutorNetAmount });
+            } catch (_) {}
+            if (payment.type === "note" && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
+              await createAdminNotification("Note refund processed", "Access revoked after full refund", { refundRequestId: rr._id, paymentId: payment._id });
+            }
+            if (payment.type === "subscription" && rc && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
+              rc.status = "paused";
+              await rc.save();
+              try {
+                const Session = require("../models/Session");
+                await Session.deleteMany({ regularClassId: rc._id, status: "scheduled" });
+              } catch (_) {}
+            }
+          } catch (_) {}
+        }
+      } else {
+        await rr.save();
+      }
+      return res.status(200).json({ received: true });
+    }
+
+  if (event.event === "payment.captured") {
       const paymentId = event.payload.payment.entity.id;
       const orderId = event.payload.payment.entity.order_id;
       const amount = event.payload.payment.entity.amount / 100;
@@ -865,27 +966,83 @@ exports.razorpayxWebhook = async (req, res) => {
     if (!payoutId) return res.status(200).json({ received: true });
 
     const Payment = require("../models/Payment");
+    const RefundRequest = require("../models/RefundRequest");
     const p = await Payment.findOne({ type: "payout", gatewayPaymentId: payoutId });
-    if (!p) return res.status(200).json({ received: true });
+    const rr = p ? null : await RefundRequest.findOne({ providerRefundId: payoutId }) || (event.payload?.payout?.entity?.reference_id ? await RefundRequest.findById(event.payload.payout.entity.reference_id) : null);
+    if (!p && !rr) return res.status(200).json({ received: true });
 
-    if (status === "processed") {
-      p.status = "settled";
-      await p.save();
-    } else if (status === "reversed" || status === "rejected" || status === "cancelled") {
-      p.status = "failed";
-      await p.save();
-      const TutorProfile = require("../models/TutorProfile");
-      const tp = await TutorProfile.findById(p.tutorId).select("userId");
-      const userId = tp?.userId || null;
-      if (userId) {
-        const Wallet = require("../models/Wallet");
-        const w = await Wallet.findOne({ userId });
-        if (w) {
-          w.balance += Number(p.tutorNetAmount || p.amount || 0);
-          await w.save();
+    if (p) {
+      if (status === "processed") {
+        p.status = "settled";
+        await p.save();
+      } else if (status === "reversed" || status === "rejected" || status === "cancelled") {
+        p.status = "failed";
+        await p.save();
+        const TutorProfile = require("../models/TutorProfile");
+        const tp = await TutorProfile.findById(p.tutorId).select("userId");
+        const userId = tp?.userId || null;
+        if (userId) {
+          const Wallet = require("../models/Wallet");
+          const w = await Wallet.findOne({ userId });
+          if (w) {
+            w.balance += Number(p.tutorNetAmount || p.amount || 0);
+            await w.save();
+          }
+          const walletService = require("../services/payments/walletService");
+          await walletService.addTransaction({ userId, type: "credit", amount: Number(p.tutorNetAmount || p.amount || 0), description: "Payout reversal", reference: { type: "payout", id: p._id }, status: "completed", paymentId: p._id });
         }
-        const walletService = require("../services/payments/walletService");
-        await walletService.addTransaction({ userId, type: "credit", amount: Number(p.tutorNetAmount || p.amount || 0), description: "Payout reversal", reference: { type: "payout", id: p._id }, status: "completed", paymentId: p._id });
+      }
+    } else if (rr) {
+      rr.providerStatus = status;
+      if (status === "processed") {
+        rr.status = "processed";
+        rr.processedAt = new Date();
+        await rr.save();
+        const payment = await Payment.findById(rr.paymentId);
+        if (payment) {
+          const amt = Number(rr.amountApproved || rr.amount || 0);
+          payment.refundTotal = Math.max(0, Number(payment.refundTotal || 0) + Number(amt));
+          if (!Array.isArray(payment.refunds)) payment.refunds = [];
+          if (!payment.refunds.find((x) => String(x) === String(rr._id))) payment.refunds.push(rr._id);
+          await payment.save();
+          try {
+            const TutorProfile = require("../models/TutorProfile");
+            const StudentProfile = require("../models/StudentProfile");
+            const tp = await TutorProfile.findById(payment.tutorId).select("userId name");
+            const sp = await StudentProfile.findById(payment.studentId).select("userId name");
+            const tutorUserId = tp?.userId || payment.tutorId;
+            const studentUserId = sp?.userId || payment.studentId;
+            const commissionPercent = Number(payment.commissionPercent || 25);
+            const commissionAmount = (Number(amt) * commissionPercent) / 100;
+            const tutorNetAmount = Math.max(0, Number(amt) - commissionAmount);
+            const rc = payment.regularClassId ? await RegularClass.findById(payment.regularClassId) : null;
+            const locked = rc ? (rc.tutorPaymentStatus !== "released") : true;
+            if (locked) {
+              await walletService.adminDecreaseHold(tutorNetAmount);
+              await walletService.reversePending(tutorUserId, "tutor", tutorNetAmount, "Refund adjustment", { type: "refund", id: rr._id });
+            } else {
+              await walletService.debitOrRecordAdjustment(tutorUserId, "tutor", tutorNetAmount, "Refund adjustment", { type: "refund", id: rr._id });
+            }
+            try {
+              const notificationService = require("../services/notificationService");
+              await notificationService.notifyUser(studentUserId, "Refund Processed", "Your refund has been processed", { refundRequestId: rr._id, amount: amt });
+              await notificationService.notifyUser(tutorUserId, "Refund Adjustment", "A refund adjustment affected your earnings", { refundRequestId: rr._id, amount: tutorNetAmount });
+            } catch (_) {}
+            if (payment.type === "note" && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
+              await createAdminNotification("Note refund processed", "Access revoked after full refund", { refundRequestId: rr._id, paymentId: payment._id });
+            }
+            if (payment.type === "subscription" && rc && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
+              rc.status = "paused";
+              await rc.save();
+              try {
+                const Session = require("../models/Session");
+                await Session.deleteMany({ regularClassId: rc._id, status: "scheduled" });
+              } catch (_) {}
+            }
+          } catch (_) {}
+        }
+      } else {
+        await rr.save();
       }
     }
     res.status(200).json({ received: true });
@@ -1756,8 +1913,24 @@ exports.createRefundRequest = async (req, res) => {
     if (!payment) {
       return res.status(404).json({ success: false, message: "Payment not found" });
     }
+    try {
+      const StudentProfile = require("../models/StudentProfile");
+      const sp = await StudentProfile.findById(payment.studentId).select("userId");
+      if (!sp || String(sp.userId) !== String(userId)) {
+        return res.status(403).json({ success: false, message: "Not authorized for this payment" });
+      }
+    } catch (_) {}
     if (!['subscription', 'note', 'group'].includes(payment.type) || payment.status !== 'paid') {
       return res.status(400).json({ success: false, message: "Refunds allowed for paid subscription/note/group payments" });
+    }
+    const now = new Date();
+    if (payment.createdAt && (now.getTime() - new Date(payment.createdAt).getTime()) > 30 * 24 * 60 * 60 * 1000) {
+      return res.status(400).json({ success: false, message: "Refund window expired" });
+    }
+    const refundableCap = await computeRefundCap(payment);
+    const maxRemaining = Math.min(refundableCap, Math.max(0, Number(payment.amount || 0) - Number(payment.refundTotal || 0)));
+    if (Number(amount) > maxRemaining) {
+      return res.status(400).json({ success: false, message: "Requested amount exceeds refundable balance" });
     }
     const RefundRequest = require("../models/RefundRequest");
     const rr = await RefundRequest.create({ paymentId, userId, amount: Number(amount), reason: reason || "" });
@@ -1769,7 +1942,7 @@ exports.createRefundRequest = async (req, res) => {
 
 exports.listRefundRequests = async (req, res) => {
   try {
-    const { status, from, to } = req.query;
+    const { status, from, to, page = 1, limit = 50 } = req.query;
     const RefundRequest = require("../models/RefundRequest");
     const filter = {};
     if (status) filter.status = status;
@@ -1778,8 +1951,21 @@ exports.listRefundRequests = async (req, res) => {
       if (from) filter.createdAt.$gte = new Date(from);
       if (to) filter.createdAt.$lte = new Date(to);
     }
-    const items = await RefundRequest.find(filter).sort({ createdAt: -1 }).lean();
-    return res.json({ success: true, data: items });
+    const skip = Math.max(0, (Number(page) - 1) * Number(limit));
+    const items = await RefundRequest.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .populate({ path: "paymentId", select: "type amount currency gateway tutorId studentId" })
+      .populate({ path: "userId", select: "name role" })
+      .lean();
+    const data = items.map((r) => ({
+      ...r,
+      paymentType: r.paymentId?.type || null,
+      paymentAmount: r.paymentId?.amount || 0,
+      paymentGateway: r.paymentId?.gateway || null,
+    }));
+    return res.json({ success: true, data });
   } catch (err) {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
@@ -1788,17 +1974,85 @@ exports.listRefundRequests = async (req, res) => {
 exports.updateRefundRequestStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, amountApproved, method, upiId, bankAccountNumber, accountHolderName, ifsc } = req.body;
     const RefundRequest = require("../models/RefundRequest");
     const rr = await RefundRequest.findById(id);
     if (!rr) return res.status(404).json({ success: false, message: "Refund request not found" });
     if (!['approved', 'rejected', 'processed'].includes(status)) {
       return res.status(400).json({ success: false, message: "Invalid status" });
     }
-    if (status === 'approved') {
+  if (status === 'approved') {
+      const payment = await Payment.findById(rr.paymentId);
+      if (!payment) return res.status(404).json({ success: false, message: "Payment not found" });
+      if (!['subscription', 'note', 'group'].includes(payment.type) || payment.status !== 'paid') {
+        return res.status(400).json({ success: false, message: "Refunds allowed for paid subscription/note/group payments" });
+      }
+      const now = new Date();
+      const within30d = (payment.createdAt && ((now.getTime() - new Date(payment.createdAt).getTime()) <= 30 * 24 * 60 * 60 * 1000));
+      const refundableCap = await computeRefundCap(payment);
+      const maxRemaining = Math.min(refundableCap, Math.max(0, Number(payment.amount || 0) - Number(payment.refundTotal || 0)));
+      let approved = Number(amountApproved || rr.amount || 0);
+      if (!within30d) approved = Math.min(approved, maxRemaining);
+      approved = Math.min(approved, maxRemaining);
+      if (approved <= 0) {
+        return res.status(400).json({ success: false, message: "No refundable amount remaining" });
+      }
       rr.status = 'approved';
+      rr.amountApproved = approved;
+      rr.method = method || rr.method || (payment.gateway === 'wallet' ? 'payout' : 'provider');
+      rr.adminUserId = req.user.id;
       await rr.save();
-      return res.json({ success: true, data: rr });
+      try {
+        const notificationService = require("../services/notificationService");
+        await notificationService.notifyUser(rr.userId, "Refund Approved", "Your refund was approved", { refundRequestId: rr._id, amountApproved: rr.amountApproved, method: rr.method });
+      } catch (_) {}
+      if (rr.method === 'provider') {
+        if (payment.gateway !== 'razorpay') {
+          return res.status(400).json({ success: false, message: "Provider refund requires Razorpay payment" });
+        }
+        if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+          return res.status(500).json({ success: false, message: "Razorpay not configured" });
+        }
+        const amtPaise = Math.round(Number(rr.amountApproved) * 100);
+        const notes = { rr: String(rr._id) };
+        const r = await razorpay.payments.refund(payment.gatewayPaymentId, { amount: amtPaise, notes });
+        rr.providerRefundId = r.id;
+        rr.providerStatus = r.status || 'initiated';
+        await rr.save();
+        try {
+          await createAdminNotification("Provider refund initiated", "Refund to source via Razorpay", { refundRequestId: rr._id, paymentId: payment._id, amount: rr.amountApproved });
+        } catch (_) {}
+        return res.json({ success: true, data: rr });
+      } else if (rr.method === 'payout') {
+        if (!process.env.RAZORPAYX_KEY_ID || !process.env.RAZORPAYX_KEY_SECRET || !process.env.RAZORPAYX_ACCOUNT_NUMBER) {
+          return res.status(500).json({ success: false, message: "RazorpayX not configured" });
+        }
+        const StudentProfile = require("../models/StudentProfile");
+        const sp = await StudentProfile.findById(payment.studentId).select("name email");
+        const stub = {
+          _id: rr.userId,
+          name: sp?.name || "Student",
+          email: sp?.email || undefined,
+          upiId: (upiId || "").trim(),
+          accountHolderName: (accountHolderName || "").trim(),
+          bankAccountNumber: (bankAccountNumber || "").trim(),
+          ifsc: (ifsc || "").trim(),
+          razorpayxContactId: null,
+          razorpayxFundAccountId: null,
+        };
+        const { ensureContactAndFundAccount, createPayout } = require("../services/payments/payoutProvider");
+        const { contactId, fundAccountId, useUPI } = await ensureContactAndFundAccount(stub);
+        const mode = useUPI ? "UPI" : "IMPS";
+        const p = await createPayout(fundAccountId, Number(rr.amountApproved), mode, String(rr._id));
+        rr.providerRefundId = p.id;
+        rr.providerStatus = p.status || 'initiated';
+        await rr.save();
+        const adminWalletService = require("../services/payments/walletService");
+        await adminWalletService.adminDebit(Number(rr.amountApproved), "Refund payout", { type: "refund", id: rr._id });
+        return res.json({ success: true, data: rr });
+      } else {
+        return res.status(400).json({ success: false, message: "Invalid method" });
+      }
     }
     if (status === 'rejected') {
       rr.status = 'rejected';
@@ -1806,26 +2060,56 @@ exports.updateRefundRequestStatus = async (req, res) => {
       return res.json({ success: true, data: rr });
     }
     if (status === 'processed') {
-      if (rr.status !== 'approved') {
-        return res.status(400).json({ success: false, message: "Only approved requests can be processed" });
-      }
-      const amount = Number(rr.amount || 0);
-      const adminWalletService = require("../services/payments/walletService");
-      await adminWalletService.adminDebit(amount, "Refund processed", { type: "refund", id: rr._id });
-      const userId = rr.userId;
-      const Wallet = require("../models/Wallet");
-      const User = require("../models/User");
-      const user = await User.findById(userId);
-      if (user) {
-        const wallet = await adminWalletService.ensureWallet(userId, user.role);
-        wallet.balance += amount;
-        await wallet.save();
-        await adminWalletService.addTransaction({ userId, type: "credit", amount, description: "Refund credit", reference: { type: "refund", id: rr._id }, status: "completed" });
-      }
-      rr.status = 'processed';
-      await rr.save();
-      return res.json({ success: true, data: rr });
+      return res.status(405).json({ success: false, message: "Processing is driven by provider webhooks" });
     }
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.getStudentRegularClassPayment = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const rcId = req.params.id;
+    const RegularClass = require("../models/RegularClass");
+    const rc = await RegularClass.findById(rcId);
+    if (!rc) return res.status(404).json({ success: false, message: "Regular class not found" });
+    try {
+      const StudentProfile = require("../models/StudentProfile");
+      const sp = await StudentProfile.findById(rc.studentId).select("userId");
+      const ownerUserId = sp?.userId || rc.studentId;
+      if (String(ownerUserId) !== String(userId)) {
+        return res.status(403).json({ success: false, message: "Not authorized" });
+      }
+    } catch (_) {}
+    let p = await Payment.findOne({ regularClassId: rcId, type: "subscription", status: "paid" }).sort({ createdAt: -1 }).lean();
+    if (!p) {
+      p = await Payment.findOne({ regularClassId: rcId, type: "subscription" }).sort({ createdAt: -1 }).lean();
+    }
+    if (!p) return res.json({ success: true, data: null });
+    return res.json({
+      success: true,
+      data: {
+        _id: p._id,
+        amount: p.amount,
+        currency: p.currency,
+        status: p.status,
+        gateway: p.gateway,
+        gatewayOrderId: p.gatewayOrderId,
+        regularClassId: p.regularClassId,
+        createdAt: p.createdAt,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+exports.listStudentRefunds = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const RefundRequest = require("../models/RefundRequest");
+    const items = await RefundRequest.find({ userId }).sort({ createdAt: -1 }).lean();
+    return res.json({ success: true, data: items });
   } catch (err) {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }

@@ -241,6 +241,9 @@ exports.getDownloadUrl = async (req, res) => {
     if (!payment) {
       return res.status(403).json({ success: false, message: "Not purchased" });
     }
+    if (Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
+      return res.status(403).json({ success: false, message: "Access revoked due to refund" });
+    }
 
     const note = await Note.findById(id);
     if (!note) return res.status(404).json({ success: false, message: "Note not found" });

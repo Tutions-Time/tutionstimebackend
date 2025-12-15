@@ -7,7 +7,14 @@ const refundSchema = new mongoose.Schema(
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     amount: { type: Number, required: true },
     reason: { type: String },
-    status: { type: String, enum: ["requested", "approved", "rejected", "processed"], default: "requested" }
+    status: { type: String, enum: ["requested", "approved", "rejected", "processed"], default: "requested" },
+    method: { type: String, enum: ["provider", "payout"] },
+    providerRefundId: { type: String },
+    providerStatus: { type: String },
+    processedAt: { type: Date },
+    notes: { type: String },
+    adminUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    amountApproved: { type: Number }
   },
   { timestamps: true }
 );

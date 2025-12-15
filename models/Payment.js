@@ -64,6 +64,8 @@ const paymentSchema = new mongoose.Schema(
   walletProcessed: { type: Boolean, default: false },
 
     notes: { type: String },
+    refundTotal: { type: Number, default: 0 },
+    refunds: [{ type: mongoose.Schema.Types.ObjectId, ref: "RefundRequest" }],
   },
   { timestamps: true }
 );

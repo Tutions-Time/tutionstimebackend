@@ -6,6 +6,7 @@ const paymentController = require("../controllers/paymentController");
 const rateLimit = require("express-rate-limit");
 
 const joinLimiter = rateLimit({ windowMs: 60 * 1000, max: 10 });
+const adminActionLimiter = rateLimit({ windowMs: 60 * 1000, max: 20 });
 
 // student: create subscription-style order
 router.post(
@@ -64,6 +65,20 @@ router.post(
 );
 
 router.get(
+  "/student/regular/:id/payment",
+  authenticate,
+  checkRole(["student"]),
+  paymentController.getStudentRegularClassPayment
+);
+
+router.get(
+  "/student/refunds",
+  authenticate,
+  checkRole(["student"]),
+  paymentController.listStudentRefunds
+);
+
+router.get(
   "/admin/refunds",
   authenticate,
   checkRole(["admin"]),
@@ -74,6 +89,7 @@ router.patch(
   "/admin/refunds/:id",
   authenticate,
   checkRole(["admin"]),
+  adminActionLimiter,
   paymentController.updateRefundRequestStatus
 );
 

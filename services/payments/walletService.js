@@ -148,3 +148,33 @@ exports.debitWalletGeneric = async (userId, role, amount, description, reference
 
   return wallet;
 };
+
+exports.reversePending = async (userId, role, amount, description, reference) => {
+  const wallet = await this.ensureWallet(userId, role);
+  wallet.pendingBalance = Math.max(0, Number(wallet.pendingBalance || 0) - Number(amount || 0));
+  await wallet.save();
+  await Transaction.create({
+    userId,
+    type: "debit",
+    amount,
+    description,
+    reference,
+    status: "reversed",
+  });
+  return wallet;
+};
+
+exports.debitOrRecordAdjustment = async (userId, role, amount, description, reference) => {
+  try {
+    return await this.debitWalletGeneric(userId, role, Number(amount), description, reference);
+  } catch (_) {
+    return await Transaction.create({
+      userId,
+      type: "debit",
+      amount: Number(amount),
+      description,
+      reference,
+      status: "locked",
+    });
+  }
+};
