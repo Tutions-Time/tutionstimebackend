@@ -134,7 +134,7 @@ async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
       );
       await notificationService.notifyUser(
         user._id,
-        "Referral Bonus Applied",
+        "Referral Bonus Applied", 
         bonus > 0 ? `A signup bonus was credited` : `Referral applied`,
         { paymentId, bonusAmount: bonus }
       );
@@ -2031,6 +2031,21 @@ exports.requestTutorPayout = async (req, res) => {
     const walletService = require("../services/payments/walletService");
     const { ensureContactAndFundAccount, createPayout } = require("../services/payments/payoutProvider");
 
+    const currentWallet = await walletService.getWallet(userId);
+    const availableBalance = Number(currentWallet?.balance || 0);
+    const pendingBalance = Number(currentWallet?.pendingBalance || 0);
+    if (availableBalance < Number(amount)) {
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient available balance",
+        details: {
+          availableBalance,
+          pendingBalance,
+          requestedAmount: Number(amount),
+        },
+      });
+    }
+
     const payout = await Payment.create({
       tutorId: tp._id,
       type: "payout",
@@ -2043,13 +2058,23 @@ exports.requestTutorPayout = async (req, res) => {
       notes: hasUPI ? `Tutor withdrawal request (UPI)` : `Tutor withdrawal request (Bank)`,
     });
 
-    await walletService.debitWalletGeneric(
-      userId,
-      "tutor",
-      Number(amount),
-      "Payout requested",
-      { type: "payout", id: payout._id }
-    );
+    try {
+      await walletService.debitWalletGeneric(
+        userId,
+        "tutor",
+        Number(amount),
+        "Payout requested",
+        { type: "payout", id: payout._id }
+      );
+    } catch (debitErr) {
+      await Payment.updateOne({ _id: payout._id }, { status: "failed", notes: "Debit failed: insufficient funds" });
+      return res.status(400).json({
+        success: false,
+        message: "Unable to reserve funds for payout",
+        error: debitErr.message || "Debit failed",
+        details: { availableBalance, pendingBalance, requestedAmount: Number(amount) },
+      });
+    }
 
     const TutorProfileModel = require("../models/TutorProfile");
     const hasKeys =
@@ -2081,6 +2106,7 @@ exports.requestTutorPayout = async (req, res) => {
         rzpPayout.status === "queued" ||
         rzpPayout.status === "pending"
       ) {
+        
         const adminWalletService = require("../services/payments/walletService");
         await adminWalletService.adminDebit(Number(amount), "Tutor payout", {
           type: "payout",

@@ -101,10 +101,10 @@ setInterval(() => {
   autoCompletePastSessions();
 }, 5 * 60 * 1000);
 payoutScheduler.start();
-payoutScheduler.start();
 weeklyReportScheduler.start();
 sessionReminderScheduler.start();
 
+payoutScheduler.runOnce();
 
 app.get("/", (req, res) =>
   res.status(200).json({ status: "CORS enabled and working!" })
