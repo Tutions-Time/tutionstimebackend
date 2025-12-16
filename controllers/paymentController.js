@@ -1913,13 +1913,20 @@ exports.createRefundRequest = async (req, res) => {
     if (!payment) {
       return res.status(404).json({ success: false, message: "Payment not found" });
     }
+    // Authorization: support either StudentProfile._id held in payment.studentId OR direct User._id
     try {
       const StudentProfile = require("../models/StudentProfile");
       const sp = await StudentProfile.findById(payment.studentId).select("userId");
-      if (!sp || String(sp.userId) !== String(userId)) {
+      const ownerUserId = sp?.userId || payment.studentId;
+      if (String(ownerUserId) !== String(userId)) {
         return res.status(403).json({ success: false, message: "Not authorized for this payment" });
       }
-    } catch (_) {}
+    } catch (_) {
+      // Fallback: compare directly when studentId stores User._id
+      if (String(payment.studentId) !== String(userId)) {
+        return res.status(403).json({ success: false, message: "Not authorized for this payment" });
+      }
+    }
     if (!['subscription', 'note', 'group'].includes(payment.type) || payment.status !== 'paid') {
       return res.status(400).json({ success: false, message: "Refunds allowed for paid subscription/note/group payments" });
     }
