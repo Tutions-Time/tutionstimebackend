@@ -315,6 +315,30 @@ exports.rescheduleBatch = async (req, res) => {
   }
 };
 
+exports.myBatches = async (req, res) => {
+  try {
+    if (!featureEnabled()) return res.status(404).json({ success: false, message: "Feature disabled" });
+    const tutorUserId = req.user.id;
+    const TutorProfile = require("../models/TutorProfile");
+    const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id");
+    if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
+
+    const items = await GroupBatch.find({ tutorId: tp._id }).sort({ createdAt: -1 }).lean();
+    
+    const now = Date.now();
+    const data = items.map((b) => {
+      const holdActiveCount = (b.holds || []).filter((h) => h.status === "active" && new Date(h.expiresAt).getTime() > now).length;
+      const enrolledCount = (b.enrolled || []).length;
+      const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount - holdActiveCount);
+      return { ...b, liveSeats };
+    });
+
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
 exports.listBatches = async (req, res) => {
   console.log("listBatches", req.query);
   try {

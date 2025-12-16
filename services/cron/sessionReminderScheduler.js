@@ -21,7 +21,22 @@ async function runOnce() {
     if (!existsTutor && tutor?.userId) {
       await notificationService.notifyUser(tutor.userId, 'Upcoming Session', 'Your session starts soon', { sessionId: s._id, tag: 'session_reminder', startDateTime: s.startDateTime });
     }
-    if (student?.userId) {
+
+    // Handle Group Batches
+    if (s.groupBatchId) {
+      const GroupBatch = require('../../models/GroupBatch');
+      const gb = await GroupBatch.findById(s.groupBatchId).select('enrolled subject');
+      if (gb && gb.enrolled && gb.enrolled.length > 0) {
+         // Notify all enrolled students
+         const students = await StudentProfile.find({ _id: { $in: gb.enrolled } }).select('userId');
+         for (const stu of students) {
+            const existsStu = await Notification.findOne({ userId: stu.userId, 'meta.sessionId': s._id, 'meta.tag': 'session_reminder' }).lean();
+            if (!existsStu) {
+                await notificationService.notifyUser(stu.userId, `Upcoming Class: ${gb.subject}`, 'Your group class starts soon', { sessionId: s._id, tag: 'session_reminder', startDateTime: s.startDateTime });
+            }
+         }
+      }
+    } else if (student?.userId) {
       const existsStu = await Notification.findOne({ userId: student.userId, 'meta.sessionId': s._id, 'meta.tag': 'session_reminder' }).lean();
       if (!existsStu) {
         await notificationService.notifyUser(student.userId, 'Upcoming Session', 'Your session starts soon', { sessionId: s._id, tag: 'session_reminder', startDateTime: s.startDateTime });

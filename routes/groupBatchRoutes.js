@@ -12,6 +12,7 @@ router.post("/create", checkRole(["tutor"]), c.createBatch);
 router.patch("/:id/edit", checkRole(["tutor"]), c.editBatch);
 router.post("/:id/cancel", checkRole(["tutor"]), c.cancelBatch);
 router.post("/:id/reschedule", checkRole(["tutor"]), c.rescheduleBatch);
+router.get("/my", checkRole(["tutor"]), c.myBatches);
 router.get("/list", c.listBatches);
 router.get("/:id", c.getBatch);
 router.post("/:id/join", checkRole(["student"]), joinLimiter, c.joinBatch);

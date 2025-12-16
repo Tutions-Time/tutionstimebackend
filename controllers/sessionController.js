@@ -194,8 +194,12 @@ exports.markAttendanceEvent = async (req, res) => {
       const sp = await StudentProfile.findOne({ userId }).select("_id");
       const spId = sp?._id || userId;
       if (session.groupBatchId) {
-        const gb = await GroupBatch.findById(session.groupBatchId).select("enrolled");
-        authorized = !!gb && (gb.enrolled || []).some((s) => String(s) === String(spId));
+        const gb = await GroupBatch.findById(session.groupBatchId).select("enrolled enrollmentDetails");
+        const enrollment = (gb?.enrollmentDetails || []).find(e => String(e.studentId) === String(spId));
+        if (enrollment && enrollment.validUntil && new Date(enrollment.validUntil) < new Date()) {
+            return res.status(403).json({ success: false, message: "Subscription expired" });
+        }
+        authorized = !!gb && ((enrollment && new Date(enrollment.validUntil) >= new Date()) || (gb.enrolled || []).some((s) => String(s) === String(spId)));
       } else {
         authorized = String(session.regularClassId.studentId) === String(spId);
       }
@@ -353,12 +357,23 @@ exports.joinSession = async (req, res) => {
     let isTutor = false;
     let isStudent = false;
     if (session.groupBatchId) {
-      const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId enrolled");
+      const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId enrolled enrollmentDetails");
       const StudentProfile = require("../models/StudentProfile");
       const sp = await StudentProfile.findOne({ userId }).select("_id");
       const spId = sp?._id || userId;
       isTutor = role === "tutor" && !!gb && String(gb.tutorId) === String(userId);
-      isStudent = role === "student" && !!gb && (gb.enrolled || []).some((s) => String(s) === String(spId));
+      
+      if (role === "student" && !!gb) {
+          const enrollment = (gb.enrollmentDetails || []).find(e => String(e.studentId) === String(spId));
+          if (enrollment && enrollment.validUntil) {
+             if (new Date(enrollment.validUntil) < new Date()) {
+                 return res.status(403).json({ success: false, message: "Subscription expired" });
+             }
+             isStudent = true;
+          } else {
+             isStudent = (gb.enrolled || []).some((s) => String(s) === String(spId));
+          }
+      }
     } else {
       const StudentProfile = require("../models/StudentProfile");
       const sp = await StudentProfile.findOne({ userId }).select("_id");
