@@ -31,39 +31,8 @@ async function applyCouponIfValid({ code, type, amount, userId }) {
 
 async function computeRefundCap(payment) {
   try {
-    if (payment.type === "subscription" && payment.regularClassId) {
-      const rc = await RegularClass.findById(payment.regularClassId).lean();
-      if (!rc) return Number(payment.amount || 0);
-      const totalSessions =
-        rc.planType === "hourly"
-          ? Number(rc.classCount || 0)
-          : await Session.countDocuments({
-              regularClassId: rc._id,
-              ...(payment.periodStart && payment.periodEnd
-                ? { startDateTime: { $gte: payment.periodStart, $lte: payment.periodEnd } }
-                : {}),
-            });
-      if (!totalSessions || totalSessions <= 0) return Number(payment.amount || 0);
-      const completedSessions = await Session.countDocuments({
-        regularClassId: rc._id,
-        status: "completed",
-        ...(payment.periodStart && payment.periodEnd
-          ? { startDateTime: { $gte: payment.periodStart, $lte: payment.periodEnd } }
-          : {}),
-      });
-      const remaining = Math.max(0, totalSessions - completedSessions);
-      const proportion = remaining / totalSessions;
-      return Math.max(0, Math.floor(Number(payment.amount || 0) * proportion));
-    }
-    if (payment.type === "group" && payment.groupBatchId) {
-      const totalSessions = await Session.countDocuments({ groupBatchId: payment.groupBatchId });
-      if (!totalSessions || totalSessions <= 0) return Number(payment.amount || 0);
-      const completedSessions = await Session.countDocuments({ groupBatchId: payment.groupBatchId, status: "completed" });
-      const remaining = Math.max(0, totalSessions - completedSessions);
-      const proportion = remaining / totalSessions;
-      return Math.max(0, Math.floor(Number(payment.amount || 0) * proportion));
-    }
-    return Math.max(0, Number(payment.amount || 0));
+    const ctx = await getRefundContext(payment._id);
+    return Math.max(0, Number(ctx.refundableCap || 0));
   } catch (_) {
     return Math.max(0, Number(payment.amount || 0));
   }
@@ -74,6 +43,90 @@ async function recordCouponUse({ coupon, userId, paymentId, amountDiscounted }) 
   await CouponUse.create({ couponId: coupon._id, userId, paymentId, amountDiscounted });
   coupon.redemptions = (coupon.redemptions || 0) + 1;
   await coupon.save();
+}
+
+async function getRefundContext(paymentId) {
+  const p = await Payment.findById(paymentId).lean();
+  if (!p) return { totalPaid: 0, completionPercentage: 0, refundablePercentage: 0, refundableCap: 0, alreadyRefunded: 0, remainingRefundable: 0, refundWindowValid: false, payoutState: "locked" };
+  const totalPaid = Number(p.amount || 0);
+  const alreadyRefunded = Math.max(0, Number(p.refundTotal || 0));
+  const now = new Date();
+  const refundWindowValid = p.createdAt ? ((now.getTime() - new Date(p.createdAt).getTime()) <= 30 * 24 * 60 * 60 * 1000) : false;
+  let completionPercentage = 0;
+  let totalUnits = 0;
+  let completedUnits = 0;
+  if (p.type === "subscription" && p.regularClassId) {
+    const rc = await RegularClass.findById(p.regularClassId).lean();
+    if (rc) {
+      if (rc.planType === "hourly") {
+        totalUnits = Math.max(0, Number(rc.classCount || 0));
+        completedUnits = await Session.countDocuments({ regularClassId: rc._id, status: "completed" });
+      } else {
+        totalUnits = await Session.countDocuments({ regularClassId: rc._id, ...(p.periodStart && p.periodEnd ? { startDateTime: { $gte: p.periodStart, $lte: p.periodEnd } } : {}) });
+        completedUnits = await Session.countDocuments({ regularClassId: rc._id, status: "completed", ...(p.periodStart && p.periodEnd ? { startDateTime: { $gte: p.periodStart, $lte: p.periodEnd } } : {}) });
+      }
+    }
+  } else if (p.type === "group" && p.groupBatchId) {
+    totalUnits = await Session.countDocuments({ groupBatchId: p.groupBatchId });
+    completedUnits = await Session.countDocuments({ groupBatchId: p.groupBatchId, status: "completed" });
+  } else {
+    totalUnits = 1;
+    completedUnits = 0;
+  }
+  if (totalUnits > 0) {
+    completionPercentage = Math.min(1, Math.max(0, Number(completedUnits || 0) / Number(totalUnits || 1)));
+  } else {
+    completionPercentage = 0;
+  }
+  let refundablePercentage = 0;
+  if (completionPercentage === 0) {
+    refundablePercentage = 1.0;
+  } else if (completionPercentage > 0 && completionPercentage <= 0.25) {
+    refundablePercentage = 0.75;
+  } else if (completionPercentage > 0.25 && completionPercentage <= 0.5) {
+    refundablePercentage = 0.5;
+  } else if (completionPercentage > 0.5 && completionPercentage <= 0.75) {
+    refundablePercentage = 0.25;
+  } else {
+    refundablePercentage = 0;
+  }
+  const refundableCapRaw = Math.max(0, Math.floor(totalPaid * refundablePercentage));
+  const refundableCap = refundableCapRaw;
+  const remainingRefundable = Math.max(0, refundableCap - alreadyRefunded);
+  let payoutState = "locked";
+  if (p.type === "subscription" && p.regularClassId) {
+    const rc2 = await RegularClass.findById(p.regularClassId).lean();
+    payoutState = rc2 && rc2.tutorPaymentStatus === "released" ? "released" : "locked";
+  } else {
+    payoutState = "locked";
+  }
+  return { totalPaid, completionPercentage, refundablePercentage, refundableCap, alreadyRefunded, remainingRefundable, refundWindowValid, payoutState, payment: p };
+}
+
+function applyReasonModifier(ctx, reasonCode) {
+  let percent = ctx.refundablePercentage;
+  const p = ctx.payment;
+  if (reasonCode === "CLASS_NOT_CONDUCTED") {
+    percent = 1.0;
+  } else if (reasonCode === "TUTOR_ABSENT_OR_LATE") {
+    percent = Math.max(percent, 0.75);
+  } else if (reasonCode === "WRONG_PURCHASE") {
+    const within24h = p.createdAt ? ((new Date().getTime() - new Date(p.createdAt).getTime()) <= 24 * 60 * 60 * 1000) : false;
+    percent = within24h ? 1.0 : percent;
+  } else if (reasonCode === "QUALITY_ISSUE") {
+    percent = percent;
+  } else if (reasonCode === "TECHNICAL_ISSUE") {
+    percent = percent;
+  } else if (reasonCode === "SCHEDULE_CONFLICT") {
+    percent = percent;
+  } else if (reasonCode === "CONTENT_NOT_AS_DESCRIBED") {
+    percent = percent;
+  } else if (reasonCode === "OTHER") {
+    percent = percent;
+  }
+  const cap = Math.max(0, Math.floor(Number(ctx.totalPaid || 0) * percent));
+  const remaining = Math.max(0, cap - Number(ctx.alreadyRefunded || 0));
+  return { ...ctx, refundablePercentage: percent, refundableCap: cap, remainingRefundable: remaining };
 }
 
 async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
@@ -716,8 +769,8 @@ exports.razorpayWebhook = async (req, res) => {
             const commissionPercent = Number(payment.commissionPercent || 25);
             const commissionAmount = (Number(amt) * commissionPercent) / 100;
             const tutorNetAmount = Math.max(0, Number(amt) - commissionAmount);
-            const rc = payment.regularClassId ? await RegularClass.findById(payment.regularClassId) : null;
-            const locked = rc ? (rc.tutorPaymentStatus !== "released") : true;
+            const ctx = await getRefundContext(payment._id);
+            const locked = ctx.payoutState !== "released";
             if (locked) {
               await walletService.adminDecreaseHold(tutorNetAmount);
               await walletService.reversePending(tutorUserId, "tutor", tutorNetAmount, "Refund adjustment", { type: "refund", id: rr._id });
@@ -732,12 +785,15 @@ exports.razorpayWebhook = async (req, res) => {
             if (payment.type === "note" && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
               await createAdminNotification("Note refund processed", "Access revoked after full refund", { refundRequestId: rr._id, paymentId: payment._id });
             }
-            if (payment.type === "subscription" && rc && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
-              rc.status = "paused";
-              await rc.save();
+            if (payment.type === "subscription" && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
+              const rc = payment.regularClassId ? await RegularClass.findById(payment.regularClassId) : null;
+              if (rc) {
+                rc.status = "paused";
+                await rc.save();
+              }
               try {
                 const Session = require("../models/Session");
-                await Session.deleteMany({ regularClassId: rc._id, status: "scheduled" });
+                if (rc) await Session.deleteMany({ regularClassId: rc._id, status: "scheduled" });
               } catch (_) {}
             }
           } catch (_) {}
@@ -1015,8 +1071,8 @@ exports.razorpayxWebhook = async (req, res) => {
             const commissionPercent = Number(payment.commissionPercent || 25);
             const commissionAmount = (Number(amt) * commissionPercent) / 100;
             const tutorNetAmount = Math.max(0, Number(amt) - commissionAmount);
-            const rc = payment.regularClassId ? await RegularClass.findById(payment.regularClassId) : null;
-            const locked = rc ? (rc.tutorPaymentStatus !== "released") : true;
+            const ctx = await getRefundContext(payment._id);
+            const locked = ctx.payoutState !== "released";
             if (locked) {
               await walletService.adminDecreaseHold(tutorNetAmount);
               await walletService.reversePending(tutorUserId, "tutor", tutorNetAmount, "Refund adjustment", { type: "refund", id: rr._id });
@@ -1031,12 +1087,15 @@ exports.razorpayxWebhook = async (req, res) => {
             if (payment.type === "note" && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
               await createAdminNotification("Note refund processed", "Access revoked after full refund", { refundRequestId: rr._id, paymentId: payment._id });
             }
-            if (payment.type === "subscription" && rc && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
-              rc.status = "paused";
-              await rc.save();
+            if (payment.type === "subscription" && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
+              const rc = payment.regularClassId ? await RegularClass.findById(payment.regularClassId) : null;
+              if (rc) {
+                rc.status = "paused";
+                await rc.save();
+              }
               try {
                 const Session = require("../models/Session");
-                await Session.deleteMany({ regularClassId: rc._id, status: "scheduled" });
+                if (rc) await Session.deleteMany({ regularClassId: rc._id, status: "scheduled" });
               } catch (_) {}
             }
           } catch (_) {}
@@ -1904,10 +1963,13 @@ exports.listTutorPayouts = async (req, res) => {
 
 exports.createRefundRequest = async (req, res) => {
   try {
-    const { paymentId, amount, reason } = req.body;
+    const { paymentId, reasonCode, reasonText, amount } = req.body;
     const userId = req.user.id;
-    if (!paymentId || !amount) {
-      return res.status(400).json({ success: false, message: "paymentId and amount are required" });
+    if (!paymentId) {
+      return res.status(400).json({ success: false, message: "paymentId is required" });
+    }
+    if (typeof amount !== "undefined") {
+      return res.status(400).json({ success: false, message: "Amount must not be provided by student" });
     }
     const payment = await Payment.findById(paymentId);
     if (!payment) {
@@ -1934,13 +1996,27 @@ exports.createRefundRequest = async (req, res) => {
     if (payment.createdAt && (now.getTime() - new Date(payment.createdAt).getTime()) > 30 * 24 * 60 * 60 * 1000) {
       return res.status(400).json({ success: false, message: "Refund window expired" });
     }
-    const refundableCap = await computeRefundCap(payment);
-    const maxRemaining = Math.min(refundableCap, Math.max(0, Number(payment.amount || 0) - Number(payment.refundTotal || 0)));
-    if (Number(amount) > maxRemaining) {
-      return res.status(400).json({ success: false, message: "Requested amount exceeds refundable balance" });
+    if (!reasonCode || !["CLASS_NOT_CONDUCTED","TUTOR_ABSENT_OR_LATE","WRONG_PURCHASE","QUALITY_ISSUE","TECHNICAL_ISSUE","SCHEDULE_CONFLICT","CONTENT_NOT_AS_DESCRIBED","OTHER"].includes(reasonCode)) {
+      return res.status(400).json({ success: false, message: "Invalid reasonCode" });
     }
+    if (reasonCode === "OTHER" && !(reasonText && String(reasonText).trim().length > 0)) {
+      return res.status(400).json({ success: false, message: "reasonText is required for OTHER" });
+    }
+    let ctx = await getRefundContext(paymentId);
+    ctx = applyReasonModifier(ctx, reasonCode);
+    const suggestedAmount = Math.max(0, Number(ctx.remainingRefundable || 0));
     const RefundRequest = require("../models/RefundRequest");
-    const rr = await RefundRequest.create({ paymentId, userId, amount: Number(amount), reason: reason || "" });
+    const rr = await RefundRequest.create({
+      paymentId,
+      userId,
+      amount: Number(suggestedAmount),
+      reason: reasonText || "",
+      reasonCode,
+      reasonText: reasonText || null,
+      completionPercentage: Number(ctx.completionPercentage || 0),
+      refundableCap: Number(ctx.refundableCap || 0),
+      suggestedAmount: Number(suggestedAmount)
+    });
     return res.status(201).json({ success: true, data: rr });
   } catch (err) {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
@@ -1963,7 +2039,14 @@ exports.listRefundRequests = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit))
-      .populate({ path: "paymentId", select: "type amount currency gateway tutorId studentId" })
+      .populate({
+        path: "paymentId",
+        select: "type amount currency gateway tutorId studentId",
+        populate: [
+          { path: "tutorId", select: "name userId" },
+          { path: "studentId", select: "name userId" },
+        ],
+      })
       .populate({ path: "userId", select: "name role" })
       .lean();
     const data = items.map((r) => ({
@@ -1994,12 +2077,11 @@ exports.updateRefundRequestStatus = async (req, res) => {
       if (!['subscription', 'note', 'group'].includes(payment.type) || payment.status !== 'paid') {
         return res.status(400).json({ success: false, message: "Refunds allowed for paid subscription/note/group payments" });
       }
-      const now = new Date();
-      const within30d = (payment.createdAt && ((now.getTime() - new Date(payment.createdAt).getTime()) <= 30 * 24 * 60 * 60 * 1000));
-      const refundableCap = await computeRefundCap(payment);
-      const maxRemaining = Math.min(refundableCap, Math.max(0, Number(payment.amount || 0) - Number(payment.refundTotal || 0)));
+      let ctx = await getRefundContext(rr.paymentId);
+      const rc2 = rr.reasonCode || null;
+      if (rc2) ctx = applyReasonModifier(ctx, rc2);
+      const maxRemaining = Math.max(0, Number(ctx.remainingRefundable || 0));
       let approved = Number(amountApproved || rr.amount || 0);
-      if (!within30d) approved = Math.min(approved, maxRemaining);
       approved = Math.min(approved, maxRemaining);
       if (approved <= 0) {
         return res.status(400).json({ success: false, message: "No refundable amount remaining" });
@@ -2117,6 +2199,44 @@ exports.listStudentRefunds = async (req, res) => {
     const RefundRequest = require("../models/RefundRequest");
     const items = await RefundRequest.find({ userId }).sort({ createdAt: -1 }).lean();
     return res.json({ success: true, data: items });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.previewRefund = async (req, res) => {
+  try {
+    const { paymentId, reasonCode, reasonText } = req.body;
+    if (!paymentId) {
+      return res.status(400).json({ success: false, message: "paymentId is required" });
+    }
+    const payment = await Payment.findById(paymentId);
+    if (!payment) {
+      return res.status(404).json({ success: false, message: "Payment not found" });
+    }
+    let ctx = await getRefundContext(paymentId);
+    if (reasonCode) {
+      if (!["CLASS_NOT_CONDUCTED","TUTOR_ABSENT_OR_LATE","WRONG_PURCHASE","QUALITY_ISSUE","TECHNICAL_ISSUE","SCHEDULE_CONFLICT","CONTENT_NOT_AS_DESCRIBED","OTHER"].includes(reasonCode)) {
+        return res.status(400).json({ success: false, message: "Invalid reasonCode" });
+      }
+      if (reasonCode === "OTHER" && !(reasonText && String(reasonText).trim().length > 0)) {
+        return res.status(400).json({ success: false, message: "reasonText is required for OTHER" });
+      }
+      ctx = applyReasonModifier(ctx, reasonCode);
+    }
+    const suggestedRefundMethod = payment.gateway === "razorpay" ? "provider" : "payout";
+    const explanation = `Completion ${(Math.round(ctx.completionPercentage * 100))}% → refundable ${(Math.round(ctx.refundablePercentage * 100))}%`;
+    return res.json({
+      success: true,
+      data: {
+        completionPercentage: ctx.completionPercentage,
+        refundablePercentage: ctx.refundablePercentage,
+        maximumRefundableAmount: Math.max(0, Number(ctx.remainingRefundable || 0)),
+        explanation,
+        refundWindowValid: ctx.refundWindowValid,
+        suggestedRefundMethod
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }

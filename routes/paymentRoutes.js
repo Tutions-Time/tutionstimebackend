@@ -63,6 +63,12 @@ router.post(
   checkRole(["student"]),
   paymentController.createRefundRequest
 );
+router.post(
+  "/refunds/preview",
+  authenticate,
+  checkRole(["student"]),
+  paymentController.previewRefund
+);
 
 router.get(
   "/student/regular/:id/payment",
