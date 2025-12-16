@@ -364,10 +364,26 @@ exports.listBatches = async (req, res) => {
     }
     const now = Date.now();
     let spId = null;
+    let paymentsMap = {};
     try {
       const StudentProfile = require("../models/StudentProfile");
       const sp = await StudentProfile.findOne({ userId: req.user?.id }).select("_id");
       spId = sp?._id || null;
+      
+      if (spId && items.length > 0) {
+        const Payment = require("../models/Payment");
+        const batchIds = items.map(b => b._id);
+        const payments = await Payment.find({
+          studentId: spId,
+          groupBatchId: { $in: batchIds },
+          status: "paid",
+          type: "group"
+        }).select("groupBatchId _id");
+        
+        payments.forEach(p => {
+          paymentsMap[String(p.groupBatchId)] = p._id;
+        });
+      }
     } catch (_) {}
     const data = items.map((b) => {
       const holdActiveCount = (b.holds || []).filter((h) => h.status === "active" && new Date(h.expiresAt).getTime() > now).length;
@@ -375,7 +391,8 @@ exports.listBatches = async (req, res) => {
       const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount - holdActiveCount);
       const isEnrolledForCurrentUser = spId ? (b.enrolled || []).some((s) => String(s) === String(spId)) : false;
       const hasActiveHoldForCurrentUser = spId ? (b.holds || []).some((h) => String(h.studentId) === String(spId) && h.status === "active" && new Date(h.expiresAt).getTime() > now) : false;
-      return { ...b, liveSeats, isEnrolledForCurrentUser, hasActiveHoldForCurrentUser };
+      const myPaymentId = paymentsMap[String(b._id)] || null;
+      return { ...b, liveSeats, isEnrolledForCurrentUser, hasActiveHoldForCurrentUser, myPaymentId };
     });
     res.json({ success: true, data });
   } catch (err) {
