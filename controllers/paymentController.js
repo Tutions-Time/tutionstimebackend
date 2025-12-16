@@ -2246,7 +2246,7 @@ exports.updateRefundRequestStatus = async (req, res) => {
       rr.status = 'approved';
       rr.amountApproved = approved;
       rr.method = method || rr.method || (payment.gateway === 'wallet' ? 'payout' : 'provider');
-      rr.adminUserId = req.user.id;
+      rr.adminUserId = req.user._id;
       await rr.save();
       try {
         const notificationService = require("../services/notificationService");
@@ -2257,7 +2257,9 @@ exports.updateRefundRequestStatus = async (req, res) => {
           return res.status(400).json({ success: false, message: "Provider refund requires Razorpay payment" });
         }
         if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-          return res.status(500).json({ success: false, message: "Razorpay not configured" });
+          rr.providerStatus = 'pending';
+          await rr.save();
+          return res.json({ success: true, data: rr, warning: "Razorpay not configured; refund marked approved and pending processing" });
         }
         const amtPaise = Math.round(Number(rr.amountApproved) * 100);
         const notes = { rr: String(rr._id) };
@@ -2271,7 +2273,9 @@ exports.updateRefundRequestStatus = async (req, res) => {
         return res.json({ success: true, data: rr });
       } else if (rr.method === 'payout') {
         if (!process.env.RAZORPAYX_KEY_ID || !process.env.RAZORPAYX_KEY_SECRET || !process.env.RAZORPAYX_ACCOUNT_NUMBER) {
-          return res.status(500).json({ success: false, message: "RazorpayX not configured" });
+          rr.providerStatus = 'pending';
+          await rr.save();
+          return res.json({ success: true, data: rr, warning: "RazorpayX not configured; refund marked approved and pending payout" });
         }
         const StudentProfile = require("../models/StudentProfile");
         const sp = await StudentProfile.findById(payment.studentId).select("name email");
