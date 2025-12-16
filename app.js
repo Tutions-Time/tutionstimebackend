@@ -93,6 +93,7 @@ const { autoCompletePastSessions } = require('./controllers/sessionController');
 const payoutScheduler = require('./services/cron/payoutScheduler');
 const weeklyReportScheduler = require('./services/cron/weeklyReportScheduler');
 const sessionReminderScheduler = require('./services/cron/sessionReminderScheduler');
+const batchScheduler = require('./services/cron/batchScheduler');
 
 app.use("/api/sessions", require("./routes/sessionRoutes"));
 

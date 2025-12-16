@@ -434,7 +434,8 @@ exports.createSubscriptionOrder = async (req, res) => {
  */
 exports.createGroupOrder = async (req, res) => {
   try {
-    const { batchId, reservationId, couponCode } = req.body;
+    const { batchId, reservationId, couponCode, durationInMonths } = req.body;
+    const months = Math.max(1, Math.min(12, Number(durationInMonths) || 1));
     const userId = req.user.id;
     const StudentProfile = require("../models/StudentProfile");
     const TutorProfile = require("../models/TutorProfile");
@@ -451,15 +452,28 @@ exports.createGroupOrder = async (req, res) => {
     }
 
     const now = Date.now();
+    // Allow renewing? Check hold or existing enrollment
+    // If just joining, check hold
+    // If renewing, hold might not exist.
+    // For now, assume hold check is for new joiners or waitlist.
     const hold = (gb.holds || []).find(
       (h) => String(h.studentId) === String(sp._id) && h.status === "active" && new Date(h.expiresAt).getTime() > now
     );
-    if (!hold) return res.status(409).json({ success: false, message: "Seat reservation expired or missing" });
+    // If not in hold, check if already enrolled (renewal)
+    const isEnrolled = gb.enrolled.some(id => String(id) === String(sp._id));
+    if (!hold && !isEnrolled) return res.status(409).json({ success: false, message: "Seat reservation expired or missing" });
 
-    let amountINR = Number(gb.pricePerStudent || 0);
+    let amountINR = Number(gb.pricePerStudent || 0) * months;
     const { discount } = await applyCouponIfValid({ code: (couponCode || "").trim(), type: "group", amount: amountINR, userId });
     if (discount > 0) amountINR = Math.max(0, amountINR - discount);
     const amountInPaise = Math.round(amountINR * 100);
+
+    // Calculate period
+    let startDate = (gb.batchStartDate && new Date(gb.batchStartDate) > now) ? new Date(gb.batchStartDate) : new Date();
+    // If renewing, could potentially start from last expiry, but keeping it simple as per prompt
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + months);
+
     // Wallet-only payment if balance suffices
     try {
       const wallet = await walletService.getWallet(userId);
@@ -473,7 +487,9 @@ exports.createGroupOrder = async (req, res) => {
           currency: "INR",
           gateway: "wallet",
           status: "paid",
-          notes: `Group batch checkout for ${batchId}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
+          notes: `Group batch checkout for ${batchId}, Months:${months}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
+          periodStart: startDate,
+          periodEnd: endDate
         });
 
         const tp = await TutorProfile.findById(gb.tutorId).select("userId name");
@@ -485,7 +501,7 @@ exports.createGroupOrder = async (req, res) => {
           userId,
           "student",
           Number(amountINR),
-          `Payment for group batch — Tutor: ${tp?.name || "Tutor"}${discount > 0 && (couponCode || "").trim() ? ` (Coupon ${(couponCode || "").trim()} -₹${discount})` : ""}`,
+          `Payment for group batch (${months} mo) — Tutor: ${tp?.name || "Tutor"}${discount > 0 && (couponCode || "").trim() ? ` (Coupon ${(couponCode || "").trim()} -₹${discount})` : ""}`,
           { type: "group", id: paymentDoc.groupBatchId }
         );
 
@@ -512,9 +528,33 @@ exports.createGroupOrder = async (req, res) => {
           { batchId, paymentId: paymentDoc._id, amount: amountINR }
         );
 
+        // Auto-verify/enroll for wallet payment
+        // We need to call verification logic or duplicate it. 
+        // Ideally refactor verification to a function.
+        // For now, I'll just replicate the enrollment update here as it's cleaner than self-calling API.
+        
+        gb.enrollmentDetails = gb.enrollmentDetails || [];
+        const existingIdx = gb.enrollmentDetails.findIndex(e => String(e.studentId) === String(sp._id));
+        if (existingIdx !== -1) {
+            gb.enrollmentDetails[existingIdx].validUntil = endDate;
+        } else {
+            gb.enrollmentDetails.push({
+                studentId: sp._id,
+                validUntil: endDate,
+                joinedAt: new Date()
+            });
+        }
+        if (!gb.enrolled.includes(sp._id)) gb.enrolled.push(sp._id);
+        
+        if (hold) {
+            const hIdx = gb.holds.indexOf(hold);
+            if (hIdx !== -1) gb.holds[hIdx].status = "finalized";
+        }
+        await gb.save();
+
         return res.json({ success: true, walletPaid: true, paymentId: paymentDoc._id });
       }
-    } catch (_) {}
+    } catch (e) { console.log(e); }
 
     const safeReceipt = `gb_${Math.random().toString(36).substring(2, 10)}`;
     const order = await razorpay.orders.create({
@@ -534,28 +574,24 @@ exports.createGroupOrder = async (req, res) => {
       gateway: "razorpay",
       gatewayOrderId: order.id,
       status: "created",
-      notes: `Group batch checkout for ${batchId}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
+      notes: `Group batch checkout for ${batchId}, Months:${months}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
+      periodStart: startDate,
+      periodEnd: endDate
     });
 
     // Link orderId to the student's active seat hold for traceability
-    try {
-      const now2 = Date.now();
-      const idx = (gb.holds || []).findIndex(
-        (h) => String(h.studentId) === String(sp._id) && h.status === "active" && new Date(h.expiresAt).getTime() > now2
-      );
-      if (idx !== -1) {
-        gb.holds[idx].orderId = order.id;
+    if (hold) {
+        hold.orderId = order.id;
         await gb.save();
-      }
-    } catch (_) {}
+    }
 
     await createAdminNotification(
       "Group batch payment initiated",
       `Order ${order.id} created for batch ${batchId}`,
-      { batchId, paymentId: paymentDoc._id, amount: gb.pricePerStudent }
+      { batchId, paymentId: paymentDoc._id, amount: amountINR }
     );
     const metrics = require("../services/metricsService");
-    metrics.emit("group.checkout.initiated", { batchId }, { amount: gb.pricePerStudent });
+    metrics.emit("group.checkout.initiated", { batchId }, { amount: amountINR });
 
     return res.json({ success: true, key: process.env.RAZORPAY_KEY_ID, orderId: order.id, amount: amountInPaise, currency: "INR" });
   } catch (err) {
@@ -1410,9 +1446,28 @@ exports.verifyGroupPayment = async (req, res) => {
 
     const now = Date.now();
     const holdIdx = (gb.holds || []).findIndex((h) => String(h.studentId) === String(payment.studentId || sp._id) && h.status === "active" && new Date(h.expiresAt).getTime() > now);
-    if (holdIdx === -1) return res.status(409).json({ success: false, message: "Seat hold missing or expired" });
+    
+    const isEnrolled = gb.enrolled && gb.enrolled.some(id => String(id) === String(sp._id));
+    if (holdIdx === -1 && !isEnrolled) return res.status(409).json({ success: false, message: "Seat hold missing or expired" });
 
-    gb.holds[holdIdx].status = "finalized";
+    if (holdIdx !== -1) gb.holds[holdIdx].status = "finalized";
+    
+    gb.enrollmentDetails = gb.enrollmentDetails || [];
+    const existingIdx = gb.enrollmentDetails.findIndex(e => String(e.studentId) === String(sp._id));
+    
+    // Use payment.periodEnd which was set during createGroupOrder
+    const validUntil = payment.periodEnd || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+    if (existingIdx !== -1) {
+        gb.enrollmentDetails[existingIdx].validUntil = validUntil;
+    } else {
+        gb.enrollmentDetails.push({
+            studentId: sp._id,
+            validUntil: validUntil,
+            joinedAt: new Date()
+        });
+    }
+
     gb.enrolled = gb.enrolled || [];
     if (!gb.enrolled.find((s) => String(s) === String(sp._id))) gb.enrolled.push(sp._id);
     await gb.save();

@@ -45,6 +45,13 @@ const groupBatchSchema = new mongoose.Schema(
   enrollmentOpenAt: { type: Date },
   enrollmentCloseAt: { type: Date },
   enrolled: [{ type: mongoose.Schema.Types.ObjectId, ref: "StudentProfile" }],
+  enrollmentDetails: [
+    {
+      studentId: { type: mongoose.Schema.Types.ObjectId, ref: "StudentProfile" },
+      validUntil: { type: Date },
+      joinedAt: { type: Date, default: Date.now }
+    }
+  ],
   holds: [holdSchema],
   waitlist: [{ type: mongoose.Schema.Types.ObjectId, ref: "StudentProfile" }]
   },

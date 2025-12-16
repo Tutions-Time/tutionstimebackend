@@ -28,7 +28,6 @@ function validateBatchInput(tp, body) {
   const subjects = Array.isArray(tp.subjects) ? tp.subjects : [];
   const levels = Array.isArray(tp.classLevels) ? tp.classLevels : [];
   const availability = Array.isArray(tp.availability) ? tp.availability : [];
-  const availableDays = availability.map(toDayName);
   const payload = {};
 
   const subject = String(body.subject || "").trim();
@@ -43,14 +42,13 @@ function validateBatchInput(tp, body) {
   if (!["revision", "exam"].includes(batchType)) errors.push("Invalid batchType");
   payload.batchType = batchType;
 
-  payload.scheduleType = "fixed";
-
   const seatCap = Number(body.seatCap);
   if (!Number.isFinite(seatCap) || seatCap < 2 || seatCap > 200) errors.push("Invalid seatCap");
   payload.seatCap = seatCap;
 
-  const pricePerStudent = Number(body.pricePerStudent);
-  if (!Number.isFinite(pricePerStudent) || pricePerStudent <= 0) errors.push("Invalid pricePerStudent");
+  // Price derived from Tutor Profile
+  const pricePerStudent = Number(tp.monthlyRate);
+  if (!Number.isFinite(pricePerStudent) || pricePerStudent <= 0) errors.push("Tutor monthly rate not set in profile");
   payload.pricePerStudent = pricePerStudent;
 
   const description = body.description ? String(body.description).trim() : "";
@@ -64,57 +62,46 @@ function validateBatchInput(tp, body) {
   if (expireAfterMin < 0 || expireAfterMin > 240) errors.push("Invalid expireAfterMin");
   payload.accessWindow = { joinBeforeMin, expireAfterMin };
 
-  // Tutor-selected class start time (HH:mm)
+  // Class Start Time (HH:mm)
   const startTimeStr = String(body.classStartTime || "").trim();
-  let startHour = null;
-  let startMinute = null;
-  if (startTimeStr) {
-    const m = startTimeStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
-    if (!m) errors.push("Invalid classStartTime");
-    else {
-      startHour = Number(m[1]);
-      startMinute = Number(m[2]);
-    }
-  } else {
-    errors.push("classStartTime required");
+  if (!startTimeStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/)) {
+    errors.push("Invalid classStartTime");
   }
 
-  const fixedDates = Array.isArray(body.fixedDates) ? body.fixedDates : [];
-  let dates = fixedDates
-    .map((d) => new Date(d))
-    .filter((d) => !isNaN(d.getTime()) && d.getTime() > now)
-    .map((d) => new Date(d.toISOString()));
-  // Apply selected start time to each date
-  if (startHour !== null && startMinute !== null) {
-    dates = dates.map((d) => {
-      const nd = new Date(d);
-      nd.setHours(startHour, startMinute, 0, 0);
-      return nd;
-    });
+  // Start Date
+  const startDate = new Date(body.startDate);
+  if (isNaN(startDate.getTime()) || startDate < now) {
+    errors.push("Invalid startDate (must be future)");
   }
-  if (dates.length === 0) errors.push("No valid fixedDates");
-  if (availability.length > 0) {
-    // Validate selected dates are part of availability (date-only match)
-    const availDateOnlySet = new Set(availability.map((x) => new Date(x).toDateString()));
-    for (const d of dates) {
-      if (!availDateOnlySet.has(new Date(d).toDateString())) {
-        errors.push("fixedDates must be from availability");
-        break;
-      }
-    }
+
+  // Derive Recurring Days from Availability
+  // Filter availability dates that are on or after startDate
+  const futureAvailability = availability
+    .map(d => new Date(d))
+    .filter(d => !isNaN(d.getTime()) && d >= startDate);
+  
+  const uniqueDays = [...new Set(futureAvailability.map(d => toDayName(d)))];
+  
+  if (uniqueDays.length === 0) {
+    errors.push("No available days found in profile on or after start date");
   }
-  payload.fixedDates = Array.from(new Set(dates.map((d) => d.toISOString()))).map((s) => new Date(s));
 
-  payload.meetingLink = `https://meet.jit.si/tuitiontime-${Math.random().toString(36).slice(2, 10)}`;
+  payload.scheduleType = "recurring";
+  payload.recurring = {
+    days: uniqueDays,
+    time: startTimeStr,
+    startDate: startDate,
+    endDate: null // Unlimited
+  };
+  
+  // Remove fixedDates logic
+  payload.fixedDates = [];
 
-  const published = !!body.published;
-  payload.published = published;
-
-  if (errors.length) {
-    const e = new Error("Validation failed");
-    e.status = 422;
-    e.errors = errors;
-    throw e;
+  if (errors.length > 0) {
+    const err = new Error("Validation failed");
+    err.status = 422;
+    err.errors = errors;
+    throw err;
   }
   return payload;
 }
@@ -124,44 +111,70 @@ exports.createBatch = async (req, res) => {
     if (!featureEnabled()) return res.status(404).json({ success: false, message: "Feature disabled" });
     const tutorUserId = req.user.id;
     const TutorProfile = require("../models/TutorProfile");
-    const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id subjects classLevels availability isVerified");
+    const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id subjects classLevels availability isVerified monthlyRate");
     if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
     if (!tp.isVerified) return res.status(403).json({ success: false, message: "Tutor not verified" });
 
-    const payload = validateBatchInput(tp, req.body || {});
+    let payload;
+    try {
+      payload = validateBatchInput(tp, req.body || {});
+    } catch (e) {
+      if (e.status === 422) return res.status(422).json({ success: false, message: e.message, errors: e.errors });
+      throw e;
+    }
+
     const gb = await GroupBatch.create({
       tutorId: tp._id,
       subject: payload.subject,
       level: payload.level,
       batchType: payload.batchType,
-      scheduleType: "fixed",
-      fixedDates: payload.fixedDates,
-      recurring: undefined,
+      scheduleType: "recurring",
+      fixedDates: [],
+      recurring: payload.recurring,
       seatCap: payload.seatCap,
       pricePerStudent: payload.pricePerStudent,
       meetingLink: payload.meetingLink,
       accessWindow: payload.accessWindow,
       description: payload.description,
       published: payload.published,
+      batchStartDate: payload.recurring.startDate,
+      enrollmentOpenAt: new Date(), // Open immediately
     });
 
-    const existingSessions = await Session.countDocuments({ groupBatchId: gb._id });
-    if (existingSessions === 0) {
-      const sessions = (gb.fixedDates || []).map((d, idx) => ({
-        groupBatchId: gb._id,
-        tutorId: gb.tutorId,
-        startDateTime: d,
-        meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${idx}-${Date.now()}`,
-        status: "scheduled",
-      }));
-      if (sessions.length) await Session.insertMany(sessions);
+    // Generate sessions for next 30 days
+    const daysMap = { "Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6 };
+    const targetDays = (gb.recurring.days || []).map(d => daysMap[d]);
+    const [startHour, startMinute] = gb.recurring.time.split(":").map(Number);
+    
+    let current = new Date(gb.recurring.startDate);
+    const endLimit = new Date();
+    endLimit.setDate(endLimit.getDate() + 30);
+    
+    const sessions = [];
+    while (current <= endLimit) {
+      if (targetDays.includes(current.getDay())) {
+        const sessionDate = new Date(current);
+        sessionDate.setHours(startHour, startMinute, 0, 0);
+        // Only add if session is in the future
+        if (sessionDate > Date.now()) {
+            sessions.push({
+              groupBatchId: gb._id,
+              tutorId: gb.tutorId,
+              startDateTime: sessionDate,
+              meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${sessions.length}-${Date.now()}`,
+              status: "scheduled"
+            });
+        }
+      }
+      current.setDate(current.getDate() + 1);
     }
+    
+    if (sessions.length) await Session.insertMany(sessions);
 
     await createAdminNotification("Group batch created", `Batch ${gb._id} created`, { batchId: gb._id, tutorId: tp._id });
     metrics.emit("group.created", { batchId: gb._id });
     res.json({ success: true, data: gb });
   } catch (err) {
-    if (err && err.status === 422) return res.status(422).json({ success: false, message: err.message, errors: err.errors });
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
@@ -170,7 +183,7 @@ exports.getCreateOptions = async (req, res) => {
   try {
     if (!featureEnabled()) return res.status(404).json({ success: false, message: "Feature disabled" });
     const TutorProfile = require("../models/TutorProfile");
-    const tp = await TutorProfile.findOne({ userId: req.user.id }).select("subjects classLevels availability");
+    const tp = await TutorProfile.findOne({ userId: req.user.id }).select("subjects classLevels availability monthlyRate");
     if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
     const subjects = Array.isArray(tp.subjects) ? tp.subjects : [];
     const levels = Array.isArray(tp.classLevels) ? tp.classLevels : [];
@@ -180,8 +193,8 @@ exports.getCreateOptions = async (req, res) => {
       .filter((d) => !isNaN(d.getTime()) && d.getTime() > Date.now())
       .map((d) => d.toISOString());
     const batchTypes = ["revision", "exam"];
-    const scheduleTypes = ["fixed"];
-    res.json({ success: true, data: { subjects, levels, availabilityDates: futureDates, batchTypes, scheduleTypes } });
+    const scheduleTypes = ["recurring"];
+    res.json({ success: true, data: { subjects, levels, availabilityDates: futureDates, batchTypes, scheduleTypes, monthlyRate: tp.monthlyRate } });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
@@ -351,7 +364,19 @@ exports.getBatch = async (req, res) => {
     const holdActive = (b.holds || []).filter((h) => h.status === "active" && new Date(h.expiresAt).getTime() > now).length;
     const enrolledCount = (b.enrolled || []).length;
     const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount - holdActive);
-    res.json({ success: true, data: { ...b, liveSeats } });
+
+    let myEnrollment = null;
+    try {
+      if (req.user?.role === "student") {
+        const StudentProfile = require("../models/StudentProfile");
+        const sp = await StudentProfile.findOne({ userId: req.user.id }).select("_id");
+        if (sp) {
+          myEnrollment = (b.enrollmentDetails || []).find(ed => String(ed.studentId) === String(sp._id));
+        }
+      }
+    } catch (_) {}
+
+    res.json({ success: true, data: { ...b, liveSeats, myEnrollment } });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
