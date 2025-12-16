@@ -12,7 +12,7 @@ function computeRefundPolicy(gb) {
 const notificationService = require("../services/notificationService");
 
 function featureEnabled() {
-  return String(process.env.FEATURE_GROUP_BATCHES || "false").toLowerCase() === "true";
+  return String(process.env.FEATURE_GROUP_BATCHES || "true").toLowerCase() === "true";
 }
 
 const { nanoid } = require("nanoid");
@@ -188,9 +188,14 @@ exports.getCreateOptions = async (req, res) => {
     const subjects = Array.isArray(tp.subjects) ? tp.subjects : [];
     const levels = Array.isArray(tp.classLevels) ? tp.classLevels : [];
     const availability = Array.isArray(tp.availability) ? tp.availability : [];
+    
+    // Normalize "now" to start of today so we include today's dates
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+
     const futureDates = availability
       .map((x) => new Date(x))
-      .filter((d) => !isNaN(d.getTime()) && d.getTime() > Date.now())
+      .filter((d) => !isNaN(d.getTime()) && d.getTime() >= now.getTime())
       .map((d) => d.toISOString());
     const batchTypes = ["revision", "exam"];
     const scheduleTypes = ["recurring"];
