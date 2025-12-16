@@ -823,7 +823,7 @@ exports.razorpayWebhook = async (req, res) => {
             }
             if (payment.type === "subscription" && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
               const rc = payment.regularClassId ? await RegularClass.findById(payment.regularClassId) : null;
-              if (rc) {
+              if (rc && rc.status !== 'ended') {
                 rc.status = "paused";
                 await rc.save();
               }
@@ -1125,7 +1125,7 @@ exports.razorpayxWebhook = async (req, res) => {
             }
             if (payment.type === "subscription" && Number(payment.refundTotal || 0) >= Number(payment.amount || 0)) {
               const rc = payment.regularClassId ? await RegularClass.findById(payment.regularClassId) : null;
-              if (rc) {
+              if (rc && rc.status !== 'ended') {
                 rc.status = "paused";
                 await rc.save();
               }
@@ -2303,6 +2303,32 @@ exports.updateRefundRequestStatus = async (req, res) => {
       rr.method = method || rr.method || (payment.gateway === 'wallet' ? 'payout' : 'provider');
       rr.adminUserId = req.user._id;
       await rr.save();
+
+      // REVOKE ACCESS IMMEDIATELY
+      try {
+        if (payment.type === 'subscription' && payment.regularClassId) {
+          const RegularClass = require("../models/RegularClass");
+          const rc = await RegularClass.findById(payment.regularClassId);
+          if (rc) {
+            rc.status = 'ended'; // End the class immediately
+            await rc.save();
+            const Session = require("../models/Session");
+            await Session.deleteMany({ regularClassId: rc._id, status: 'scheduled' });
+          }
+        } else if (payment.type === 'group' && payment.groupBatchId) {
+          const GroupBatch = require("../models/GroupBatch");
+          const gb = await GroupBatch.findById(payment.groupBatchId);
+          if (gb) {
+             // Remove from enrolled and enrollmentDetails
+             gb.enrolled = gb.enrolled.filter(s => String(s) !== String(payment.studentId));
+             gb.enrollmentDetails = gb.enrollmentDetails.filter(e => String(e.studentId) !== String(payment.studentId));
+             await gb.save();
+          }
+        }
+      } catch (accessErr) {
+        console.error("Error revoking access during refund approval:", accessErr);
+      }
+
       try {
         const notificationService = require("../services/notificationService");
         await notificationService.notifyUser(rr.userId, "Refund Approved", "Your refund was approved", { refundRequestId: rr._id, amountApproved: rr.amountApproved, method: rr.method });
