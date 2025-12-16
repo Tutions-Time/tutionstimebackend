@@ -2017,7 +2017,87 @@ exports.createRefundRequest = async (req, res) => {
       refundableCap: Number(ctx.refundableCap || 0),
       suggestedAmount: Number(suggestedAmount)
     });
-    return res.status(201).json({ success: true, data: rr });
+    let courseLabel = null;
+    let studentName = null;
+    let tutorName = null;
+    const type = payment.type || null;
+    if (type === "subscription" && payment.regularClassId) {
+      const RegularClass = require("../models/RegularClass");
+      const rc = await RegularClass.findById(payment.regularClassId)
+        .select("subject studentId tutorId")
+        .populate([{ path: "studentId", select: "name" }, { path: "tutorId", select: "name" }]);
+      courseLabel = rc?.subject || null;
+      studentName = rc?.studentId?.name || null;
+      tutorName = rc?.tutorId?.name || null;
+      if (!tutorName && rc?.tutorId) {
+        try {
+          const TutorProfile = require("../models/TutorProfile");
+          const tid = typeof rc.tutorId === "object" ? rc.tutorId._id || rc.tutorId : rc.tutorId;
+          const tp = tid ? await TutorProfile.findById(tid).select("name") : null;
+          tutorName = tp?.name || tutorName;
+        } catch (_) {}
+      }
+      if (!tutorName) {
+        try {
+          const Session = require("../models/Session");
+          const latest = await Session.findOne({ regularClassId: payment.regularClassId })
+            .sort({ startDateTime: -1 })
+            .select("tutorId");
+          if (latest?.tutorId) {
+            const TutorProfile = require("../models/TutorProfile");
+            const tp = await TutorProfile.findById(latest.tutorId).select("name");
+            tutorName = tp?.name || tutorName;
+          }
+        } catch (_) {}
+      }
+    } else if (type === "group" && payment.groupBatchId) {
+      const GroupBatch = require("../models/GroupBatch");
+      const gb = await GroupBatch.findById(payment.groupBatchId)
+        .select("subject tutorId")
+        .populate([{ path: "tutorId", select: "name" }]);
+      courseLabel = gb?.subject || null;
+      tutorName = gb?.tutorId?.name || null;
+    } else if (type === "note" && payment.noteId) {
+      const Note = require("../models/Note");
+      const note = await Note.findById(payment.noteId)
+        .select("title subject tutorId")
+        .populate([{ path: "tutorId", select: "name" }]);
+      courseLabel = note?.title || note?.subject || null;
+      tutorName = note?.tutorId?.name || null;
+    }
+    if (!studentName && payment.studentId) {
+      try {
+        const StudentProfile = require("../models/StudentProfile");
+        const sp2 = await StudentProfile.findById(payment.studentId).select("name");
+        studentName = sp2?.name || null;
+      } catch (_) {}
+    }
+    if (!tutorName && payment.tutorId) {
+      try {
+        const TutorProfile = require("../models/TutorProfile");
+        const tp2 = await TutorProfile.findById(payment.tutorId).select("name");
+        tutorName = tp2?.name || null;
+      } catch (_) {}
+    }
+    if (!studentName) {
+      try {
+        const StudentProfile = require("../models/StudentProfile");
+        const sp3 = await StudentProfile.findOne({ userId }).select("name");
+        studentName = sp3?.name || null;
+      } catch (_) {}
+    }
+    return res.status(201).json({
+      success: true,
+      data: {
+        ...rr.toObject(),
+        paymentType: type,
+        paymentAmount: payment.amount || 0,
+        paymentGateway: payment.gateway || null,
+        courseLabel,
+        studentName,
+        tutorName,
+      },
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
@@ -2041,19 +2121,96 @@ exports.listRefundRequests = async (req, res) => {
       .limit(Number(limit))
       .populate({
         path: "paymentId",
-        select: "type amount currency gateway tutorId studentId",
+        select: "type amount currency gateway tutorId studentId regularClassId groupBatchId noteId",
         populate: [
           { path: "tutorId", select: "name userId" },
           { path: "studentId", select: "name userId" },
+          {
+            path: "regularClassId",
+            select: "subject studentId tutorId",
+            populate: [
+              { path: "studentId", select: "name" },
+              { path: "tutorId", select: "name" }
+            ]
+          },
+          {
+            path: "groupBatchId",
+            select: "subject tutorId",
+            populate: [{ path: "tutorId", select: "name" }]
+          },
+          {
+            path: "noteId",
+            select: "title subject tutorId",
+            populate: [{ path: "tutorId", select: "name" }]
+          },
         ],
       })
       .populate({ path: "userId", select: "name role" })
       .lean();
-    const data = items.map((r) => ({
-      ...r,
-      paymentType: r.paymentId?.type || null,
-      paymentAmount: r.paymentId?.amount || 0,
-      paymentGateway: r.paymentId?.gateway || null,
+    const data = await Promise.all(items.map(async (r) => {
+      const type = r.paymentId?.type || null;
+      let courseLabel = null;
+      if (type === "subscription" && r.paymentId?.regularClassId) {
+        courseLabel = r.paymentId?.regularClassId?.subject || null;
+      } else if (type === "group" && r.paymentId?.groupBatchId) {
+        courseLabel = r.paymentId?.groupBatchId?.subject || null;
+      } else if (type === "note" && r.paymentId?.noteId) {
+        courseLabel = r.paymentId?.noteId?.title || r.paymentId?.noteId?.subject || null;
+      }
+      let studentName = null;
+      let tutorName = null;
+      studentName =
+        r.paymentId?.studentId?.name ||
+        (type === "subscription" ? r.paymentId?.regularClassId?.studentId?.name : null) ||
+        null;
+      tutorName =
+        r.paymentId?.tutorId?.name ||
+        (type === "subscription" ? r.paymentId?.regularClassId?.tutorId?.name : null) ||
+        (type === "group" ? r.paymentId?.groupBatchId?.tutorId?.name : null) ||
+        (type === "note" ? r.paymentId?.noteId?.tutorId?.name : null) ||
+        null;
+      if (!tutorName && type === "subscription" && r.paymentId?.regularClassId?.tutorId) {
+        try {
+          const TutorProfile = require("../models/TutorProfile");
+          const tutorId =
+            typeof r.paymentId.regularClassId.tutorId === "object"
+              ? r.paymentId.regularClassId.tutorId._id || r.paymentId.regularClassId.tutorId
+              : r.paymentId.regularClassId.tutorId;
+          const tp = tutorId ? await TutorProfile.findById(tutorId).select("name") : null;
+          tutorName = tp?.name || tutorName;
+        } catch (_) {}
+      }
+      // Fallback: resolve student name via StudentProfile.userId
+      if (!studentName && r.userId?._id) {
+        try {
+          const StudentProfile = require("../models/StudentProfile");
+          const sp = await StudentProfile.findOne({ userId: r.userId._id }).select("name");
+          studentName = sp?.name || null;
+        } catch (_) {}
+      }
+      if (!tutorName && type === "subscription" && r.paymentId?.regularClassId) {
+        try {
+          const Session = require("../models/Session");
+          const rcId = r.paymentId.regularClassId._id || r.paymentId.regularClassId;
+          const latest = await Session.findOne({ regularClassId: rcId })
+            .sort({ startDateTime: -1 })
+            .select("tutorId");
+          if (latest?.tutorId) {
+            const TutorProfile = require("../models/TutorProfile");
+            const tp = await TutorProfile.findById(latest.tutorId).select("name");
+            tutorName = tp?.name || tutorName;
+          }
+        } catch (_) {}
+      }
+      return {
+        ...r,
+        paymentType: type,
+        paymentAmount: r.paymentId?.amount || 0,
+        paymentGateway: r.paymentId?.gateway || null,
+        courseLabel,
+        studentName,
+        tutorName,
+      };
     }));
     return res.json({ success: true, data });
   } catch (err) {
@@ -2197,8 +2354,57 @@ exports.listStudentRefunds = async (req, res) => {
   try {
     const userId = req.user.id;
     const RefundRequest = require("../models/RefundRequest");
-    const items = await RefundRequest.find({ userId }).sort({ createdAt: -1 }).lean();
-    return res.json({ success: true, data: items });
+    const items = await RefundRequest.find({ userId })
+      .sort({ createdAt: -1 })
+      .populate({
+        path: "paymentId",
+        select: "type amount currency gateway tutorId studentId regularClassId groupBatchId noteId",
+        populate: [
+          { path: "tutorId", select: "name" },
+          {
+            path: "regularClassId",
+            select: "subject tutorId",
+            populate: [{ path: "tutorId", select: "name" }],
+          },
+          {
+            path: "groupBatchId",
+            select: "subject tutorId",
+            populate: [{ path: "tutorId", select: "name" }],
+          },
+          {
+            path: "noteId",
+            select: "title subject tutorId",
+            populate: [{ path: "tutorId", select: "name" }],
+          },
+        ],
+      })
+      .lean();
+    const data = items.map((r) => {
+      const type = r.paymentId?.type || null;
+      let courseLabel = null;
+      if (type === "subscription" && r.paymentId?.regularClassId) {
+        courseLabel = r.paymentId?.regularClassId?.subject || null;
+      } else if (type === "group" && r.paymentId?.groupBatchId) {
+        courseLabel = r.paymentId?.groupBatchId?.subject || null;
+      } else if (type === "note" && r.paymentId?.noteId) {
+        courseLabel = r.paymentId?.noteId?.title || r.paymentId?.noteId?.subject || null;
+      }
+      const tutorName =
+        r.paymentId?.tutorId?.name ||
+        (type === "subscription" ? r.paymentId?.regularClassId?.tutorId?.name : null) ||
+        (type === "group" ? r.paymentId?.groupBatchId?.tutorId?.name : null) ||
+        (type === "note" ? r.paymentId?.noteId?.tutorId?.name : null) ||
+        null;
+      return {
+        ...r,
+        paymentType: type,
+        paymentAmount: r.paymentId?.amount || 0,
+        paymentGateway: r.paymentId?.gateway || null,
+        courseLabel,
+        tutorName,
+      };
+    });
+    return res.json({ success: true, data });
   } catch (err) {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
