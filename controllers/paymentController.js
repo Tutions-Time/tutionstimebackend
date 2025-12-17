@@ -62,8 +62,11 @@ async function getRefundContext(paymentId) {
         totalUnits = Math.max(0, Number(rc.classCount || 0));
         completedUnits = await Session.countDocuments({ regularClassId: rc._id, status: "completed" });
       } else {
-        totalUnits = await Session.countDocuments({ regularClassId: rc._id, ...(p.periodStart && p.periodEnd ? { startDateTime: { $gte: p.periodStart, $lte: p.periodEnd } } : {}) });
-        completedUnits = await Session.countDocuments({ regularClassId: rc._id, status: "completed", ...(p.periodStart && p.periodEnd ? { startDateTime: { $gte: p.periodStart, $lte: p.periodEnd } } : {}) });
+        const ps = p.periodStart || rc.currentPeriodStart || null;
+        const pe = p.periodEnd || rc.currentPeriodEnd || null;
+        const range = ps && pe ? { startDateTime: { $gte: ps, $lte: pe } } : {};
+        totalUnits = await Session.countDocuments({ regularClassId: rc._id, ...range });
+        completedUnits = await Session.countDocuments({ regularClassId: rc._id, status: "completed", ...range });
       }
     }
   } else if (p.type === "group" && p.groupBatchId) {
@@ -95,10 +98,11 @@ async function getRefundContext(paymentId) {
   const remainingRefundable = Math.max(0, refundableCap - alreadyRefunded);
   let payoutState = "locked";
   if (p.type === "subscription" && p.regularClassId) {
-    const rc2 = await RegularClass.findById(p.regularClassId).lean();
-    payoutState = rc2 && rc2.tutorPaymentStatus === "released" ? "released" : "locked";
-  } else {
-    payoutState = "locked";
+    const filter = { type: "payout", regularClassId: p.regularClassId, status: "settled" };
+    if (p.periodStart) filter.periodStart = p.periodStart;
+    if (p.periodEnd) filter.periodEnd = p.periodEnd;
+    const settled = await Payment.findOne(filter).lean();
+    payoutState = settled ? "released" : "locked";
   }
   return { totalPaid, completionPercentage, refundablePercentage, refundableCap, alreadyRefunded, remainingRefundable, refundWindowValid, payoutState, payment: p };
 }
@@ -2304,30 +2308,29 @@ exports.updateRefundRequestStatus = async (req, res) => {
       rr.adminUserId = req.user._id;
       await rr.save();
 
-      // REVOKE ACCESS IMMEDIATELY
       try {
-        if (payment.type === 'subscription' && payment.regularClassId) {
-          const RegularClass = require("../models/RegularClass");
-          const rc = await RegularClass.findById(payment.regularClassId);
-          if (rc) {
-            rc.status = 'ended'; // End the class immediately
-            await rc.save();
-            const Session = require("../models/Session");
-            await Session.deleteMany({ regularClassId: rc._id, status: 'scheduled' });
-          }
-        } else if (payment.type === 'group' && payment.groupBatchId) {
-          const GroupBatch = require("../models/GroupBatch");
-          const gb = await GroupBatch.findById(payment.groupBatchId);
-          if (gb) {
-             // Remove from enrolled and enrollmentDetails
-             gb.enrolled = gb.enrolled.filter(s => String(s) !== String(payment.studentId));
-             gb.enrollmentDetails = gb.enrollmentDetails.filter(e => String(e.studentId) !== String(payment.studentId));
-             await gb.save();
+        const full = Math.max(0, Number(rr.amountApproved || 0) + Math.max(0, Number(payment.refundTotal || 0))) >= Math.max(0, Number(payment.amount || 0));
+        if (full) {
+          if (payment.type === 'subscription' && payment.regularClassId) {
+            const RegularClass = require("../models/RegularClass");
+            const rc = await RegularClass.findById(payment.regularClassId);
+            if (rc) {
+              rc.status = 'ended';
+              await rc.save();
+              const Session = require("../models/Session");
+              await Session.deleteMany({ regularClassId: rc._id, status: 'scheduled' });
+            }
+          } else if (payment.type === 'group' && payment.groupBatchId) {
+            const GroupBatch = require("../models/GroupBatch");
+            const gb = await GroupBatch.findById(payment.groupBatchId);
+            if (gb) {
+              gb.enrolled = gb.enrolled.filter(s => String(s) !== String(payment.studentId));
+              gb.enrollmentDetails = gb.enrollmentDetails.filter(e => String(e.studentId) !== String(payment.studentId));
+              await gb.save();
+            }
           }
         }
-      } catch (accessErr) {
-        console.error("Error revoking access during refund approval:", accessErr);
-      }
+      } catch (accessErr) {}
 
       try {
         const notificationService = require("../services/notificationService");

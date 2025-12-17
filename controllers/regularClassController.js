@@ -94,6 +94,8 @@ exports.scheduleRegularClassSessions = async (req, res) => {
       });
     }
 
+    const tutorProfile = await TutorProfile.findOne({ userId: tutorUserId }).lean();
+
     // Check Tutor Ownership — support both User._id and TutorProfile._id stored in rc.tutorId
     const ownsClass =
       String(rc.tutorId) === String(tutorUserId) ||
@@ -115,7 +117,6 @@ exports.scheduleRegularClassSessions = async (req, res) => {
     }
 
     // Load Tutor Availability
-    const tutorProfile = await TutorProfile.findOne({ userId: tutorUserId }).lean();
     if (
       !tutorProfile ||
       !Array.isArray(tutorProfile.availability) ||
