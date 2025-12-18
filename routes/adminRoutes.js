@@ -39,4 +39,7 @@ router.get('/dashboard/stats', adminController.getDashboardStats);
 router.get('/sessions', adminController.listAdminSessions);
 router.post('/uploads/migrate-to-s3', adminController.migrateUploadsToS3);
 
+// バ. Tutor journey (demos, sessions, batches, notes, payments)
+router.get('/tutors/:id/journey', adminTutorController.getTutorJourney);
+
 module.exports = router;
