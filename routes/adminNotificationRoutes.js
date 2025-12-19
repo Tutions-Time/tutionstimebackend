@@ -6,6 +6,7 @@ const adminNotificationController = require('../controllers/adminNotificationCon
 // Sare routes admin auth ke saath
 router.use(authenticate, checkRole('admin'));
 
+
 // GET /api/admin/notifications
 router.get('/', adminNotificationController.getNotifications);
 
