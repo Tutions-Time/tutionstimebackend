@@ -192,6 +192,13 @@ const updateStudentProfile = async (req, res) => {
         message: "exam is required for competitive track",
       });
 
+    if (!["Online", "Offline", "Both"].includes(b.learningMode || "")) {
+      return res.status(400).json({
+        success: false,
+        message: "learningMode must be Online, Offline, or Both",
+      });
+    }
+
     const profileData = {
       userId,
       name: b.name,
@@ -204,6 +211,7 @@ const updateStudentProfile = async (req, res) => {
       city: b.city || "",
       state: b.state || "",
       pincode: b.pincode || "",
+      learningMode: b.learningMode || "",
       track: b.track || "",
       board: b.board || "",
       boardOther: b.board === "Other" ? b.boardOther || "" : "",

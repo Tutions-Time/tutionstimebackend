@@ -28,6 +28,11 @@ const studentProfileSchema = new mongoose.Schema(
     city: { type: String, trim: true },
     state: { type: String, trim: true },
     pincode: { type: String, trim: true },
+    learningMode: {
+      type: String,
+      enum: ["Online", "Offline", "Both", ""],
+      default: "",
+    },
 
     // Academic Preferences
     track: { type: String, enum: ["school", "college", "competitive", ""], default: "" },
