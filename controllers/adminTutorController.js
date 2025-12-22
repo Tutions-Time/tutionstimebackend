@@ -7,48 +7,133 @@ const Payment = require('../models/Payment');
 const GroupBatch = require('../models/GroupBatch');
 const RegularClass = require('../models/RegularClass');
 const Note = require('../models/Note');
+const Transaction = require('../models/Transaction');
 
 // ✅ Get all tutors with joined KYC and performance info
 exports.getAllTutors = async (req, res) => {
   try {
-    const tutors = await User.find({ role: 'tutor' })
-      .select('-password -refreshToken')
-      .lean();
+    const {
+      page = 1,
+      limit = 20,
+      q = '',
+      kyc = 'all',
+      status = 'all',
+      minRating = 0,
+      sort = 'joined_desc',
+    } = req.query;
 
-    const tutorProfiles = await TutorProfile.find().lean();
-    const profileMap = new Map(tutorProfiles.map(p => [p.userId.toString(), p]));
-    const thirtyAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const Session = require('../models/Session');
-    const Transaction = require('../models/Transaction');
-    const result = [];
-    for (const tutor of tutors) {
-      const profile = profileMap.get(tutor._id.toString());
-      let classes30d = 0;
-      let earnings30d = 0;
-      if (profile?._id) {
-        classes30d = await Session.countDocuments({ tutorId: profile._id, startDateTime: { $gte: thirtyAgo } });
-      }
-      const credits = await Transaction.find({ userId: tutor._id, type: 'credit', createdAt: { $gte: thirtyAgo } }).select('amount').lean();
-      earnings30d = credits.reduce((sum, t) => sum + Number(t.amount || 0), 0);
-      result.push({
-        id: tutor._id,
-        name: profile?.name || 'Unknown Tutor',
-        email: profile?.email || '',
-        phone: tutor.phone || '',
-        kyc: profile?.kycStatus || 'pending',
-        aadhaarUrls: profile?.aadhaarUrls || [],
-        panUrl: profile?.panUrl || null,
-        rating: profile?.rating || 0,
-        classes30d,
-        earnings30d,
-        status: tutor.status || 'active',
-        joinedAt: tutor.createdAt,
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Math.min(100, Number(limit)));
+    const skip = Math.max(0, (pageNum - 1) * limitNum);
+    const search = String(q || '').trim();
+    const ratingMin = Math.max(0, Number(minRating) || 0);
+
+    const match = { role: 'tutor' };
+    if (status !== 'all') match.status = status;
+
+    const pipeline = [
+      { $match: match },
+      {
+        $lookup: {
+          from: 'tutorprofiles',
+          localField: '_id',
+          foreignField: 'userId',
+          as: 'profile',
+        },
+      },
+      { $addFields: { profile: { $arrayElemAt: ['$profile', 0] } } },
+    ];
+
+    if (search) {
+      const regex = new RegExp(search, 'i');
+      pipeline.push({
+        $match: {
+          $or: [
+            { phone: { $regex: regex } },
+            { 'profile.name': { $regex: regex } },
+            { 'profile.email': { $regex: regex } },
+          ],
+        },
       });
     }
 
+    if (kyc !== 'all') {
+      pipeline.push({ $match: { 'profile.kycStatus': kyc } });
+    }
+
+    if (ratingMin > 0) {
+      pipeline.push({ $match: { 'profile.rating': { $gte: ratingMin } } });
+    }
+
+    pipeline.push({
+      $addFields: {
+        ratingSort: { $ifNull: ['$profile.rating', 0] },
+        nameSort: { $ifNull: ['$profile.name', ''] },
+      },
+    });
+
+    let sortStage = { createdAt: -1 };
+    if (sort === 'joined_asc') sortStage = { createdAt: 1 };
+    if (sort === 'rating_desc') sortStage = { ratingSort: -1 };
+    if (sort === 'rating_asc') sortStage = { ratingSort: 1 };
+    if (sort === 'name_asc') sortStage = { nameSort: 1 };
+    if (sort === 'name_desc') sortStage = { nameSort: -1 };
+
+    const [result] = await User.aggregate([
+      ...pipeline,
+      {
+        $facet: {
+          data: [{ $sort: sortStage }, { $skip: skip }, { $limit: limitNum }],
+          total: [{ $count: 'count' }],
+        },
+      },
+    ]);
+
+    const data = result?.data || [];
+    const total = result?.total?.[0]?.count || 0;
+
+    const thirtyAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const userIds = data.map((t) => t._id).filter(Boolean);
+    const profileIds = data.map((t) => t.profile?._id).filter(Boolean);
+
+    const [classesAgg, earningsAgg] = await Promise.all([
+      Session.aggregate([
+        { $match: { tutorId: { $in: profileIds }, startDateTime: { $gte: thirtyAgo } } },
+        { $group: { _id: '$tutorId', count: { $sum: 1 } } },
+      ]),
+      Transaction.aggregate([
+        { $match: { userId: { $in: userIds }, type: 'credit', createdAt: { $gte: thirtyAgo } } },
+        { $group: { _id: '$userId', total: { $sum: '$amount' } } },
+      ]),
+    ]);
+
+    const classesMap = new Map(classesAgg.map((g) => [String(g._id), g.count]));
+    const earningsMap = new Map(earningsAgg.map((g) => [String(g._id), g.total]));
+
+    const rows = data.map((t) => ({
+      id: t._id,
+      name: t.profile?.name || 'Unknown Tutor',
+      email: t.profile?.email || '',
+      phone: t.phone || '',
+      kyc: t.profile?.kycStatus || 'pending',
+      aadhaarUrls: t.profile?.aadhaarUrls || [],
+      panUrl: t.profile?.panUrl || null,
+      rating: t.profile?.rating || 0,
+      classes30d: classesMap.get(String(t.profile?._id)) || 0,
+      earnings30d: earningsMap.get(String(t._id)) || 0,
+      status: t.status || 'active',
+      joinedAt: t.createdAt,
+    }));
+
     res.status(200).json({
       success: true,
-      data: result,
+      data: rows,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        pages: Math.ceil(total / limitNum),
+      },
     });
   } catch (err) {
     console.error('Get tutors error:', err);
