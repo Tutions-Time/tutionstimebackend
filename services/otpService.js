@@ -1,3 +1,5 @@
+const axios = require('axios');
+
 // Using a more persistent object for development
 let otpStore = {};
 
@@ -97,25 +99,52 @@ const verifyOTP = (requestId, providedOTP, phone) => {
   };
 };
 
-
-// Twilio integration
-const twilioSid = process.env.TWILIO_ACCOUNT_SID;
-const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
-const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
-let twilioClient = null;
-if (twilioSid && twilioAuth) {
-  twilioClient = require('twilio')(twilioSid, twilioAuth);
-}
+// BulkSMS integration
+const bulkSmsUsername = process.env.BULKSMS_USERNAME;
+const bulkSmsPassword = process.env.BULKSMS_PASSWORD;
+const bulkSmsFrom = process.env.BULKSMS_FROM;
 
 const sendOTP = async (phone, otp) => {
-  // For development, just log the OTP
-  console.log("==================================");
-  console.log(`📱 New OTP Request`);
-  console.log(`📞 Phone: ${phone}`);
-  console.log(`🔐 OTP: ${otp}`);
-  console.log(`⏰ Time: ${new Date().toISOString()}`);
-  console.log("==================================");
-  return true;
+  if (!bulkSmsUsername || !bulkSmsPassword) {
+    // Development fallback if BulkSMS credentials are not set
+    console.log("==================================");
+    console.log("BulkSMS credentials missing, logging OTP instead.");
+    console.log(`Phone: ${phone}`);
+    console.log(`OTP: ${otp}`);
+    console.log(`Time: ${new Date().toISOString()}`);
+    console.log("==================================");
+    return true;
+  }
+
+  const payload = {
+    to: [phone],
+    body: `Your OTP is ${otp}`
+  };
+
+  if (bulkSmsFrom) {
+    const cleanedFrom = bulkSmsFrom.replace(/[^A-Za-z0-9]/g, '');
+    if (cleanedFrom.length > 0 && cleanedFrom.length <= 11) {
+      payload.from = cleanedFrom;
+    } else {
+      console.log('BulkSMS from value is invalid, sending without from.');
+    }
+  }
+
+  try {
+    await axios.post('https://api.bulksms.com/v1/messages', payload, {
+      auth: {
+        username: bulkSmsUsername,
+        password: bulkSmsPassword
+      },
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    return true;
+  } catch (error) {
+    console.log('BulkSMS send failed:', error.response?.data || error.message);
+    return false;
+  }
 };
 
 module.exports = {
