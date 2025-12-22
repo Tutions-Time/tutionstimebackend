@@ -25,8 +25,9 @@ const groupBatchSchema = new mongoose.Schema(
   {
     tutorId: { type: mongoose.Schema.Types.ObjectId, ref: "TutorProfile", required: true },
     subject: { type: String, required: true },
+    board: { type: String },
     level: { type: String },
-    batchType: { type: String, enum: ["revision", "exam"], required: true },
+    batchType: { type: String, enum: ["revision", "normal class"], required: true },
     scheduleType: { type: String, enum: ["fixed", "recurring"], required: true },
     fixedDates: [{ type: Date }],
     recurring: scheduleRecurringSchema,
@@ -57,5 +58,12 @@ const groupBatchSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+groupBatchSchema.pre("validate", function (next) {
+  if (this.batchType === "normal" || this.batchType === "exam") {
+    this.batchType = "normal class";
+  }
+  next();
+});
 
 module.exports = mongoose.model("GroupBatch", groupBatchSchema);

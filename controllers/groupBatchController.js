@@ -27,6 +27,7 @@ function validateBatchInput(tp, body) {
   const now = Date.now();
   const subjects = Array.isArray(tp.subjects) ? tp.subjects : [];
   const levels = Array.isArray(tp.classLevels) ? tp.classLevels : [];
+  const boards = Array.isArray(tp.boards) ? tp.boards : [];
   const availability = Array.isArray(tp.availability) ? tp.availability : [];
   const payload = {};
 
@@ -34,21 +35,35 @@ function validateBatchInput(tp, body) {
   if (!subject || !subjects.includes(subject)) errors.push("Invalid subject");
   payload.subject = subject;
 
+  const rawBoard = body.board ? String(body.board).trim() : "";
+  const boardOther = body.boardOther ? String(body.boardOther).trim() : "";
+  let board = rawBoard;
+  if (rawBoard === "Other" && boardOther) board = boardOther;
+  if (board && boards.length && rawBoard !== "Other" && !boards.includes(board)) {
+    errors.push("Invalid board");
+  }
+  if (rawBoard === "Other" && !boardOther) errors.push("boardOther is required");
+  payload.board = board;
+
   const level = body.level ? String(body.level).trim() : undefined;
   if (level && !levels.includes(level)) errors.push("Invalid level");
   if (level) payload.level = level;
 
-  const batchType = String(body.batchType || "").trim();
-  if (!["revision", "exam"].includes(batchType)) errors.push("Invalid batchType");
+  const batchTypeRaw = String(body.batchType || "").trim();
+  const batchType = batchTypeRaw === "normal" || batchTypeRaw === "exam"
+    ? "normal class"
+    : batchTypeRaw;
+  if (!["revision", "normal class"].includes(batchType)) errors.push("Invalid batchType");
   payload.batchType = batchType;
 
   const seatCap = Number(body.seatCap);
   if (!Number.isFinite(seatCap) || seatCap < 2 || seatCap > 200) errors.push("Invalid seatCap");
   payload.seatCap = seatCap;
 
-  // Price derived from Tutor Profile
-  const pricePerStudent = Number(tp.monthlyRate);
-  if (!Number.isFinite(pricePerStudent) || pricePerStudent <= 0) errors.push("Tutor monthly rate not set in profile");
+  // Price per student from payload (fallback to tutor profile if missing)
+  const priceInput = body.pricePerMonth ?? body.pricePerStudent ?? tp.monthlyRate;
+  const pricePerStudent = Number(priceInput);
+  if (!Number.isFinite(pricePerStudent) || pricePerStudent <= 0) errors.push("Invalid price per month");
   payload.pricePerStudent = pricePerStudent;
 
   const description = body.description ? String(body.description).trim() : "";
@@ -74,6 +89,18 @@ function validateBatchInput(tp, body) {
     errors.push("Invalid startDate (must be future)");
   }
 
+  let endDate = null;
+  if (body.endDate) {
+    const endDateRaw = new Date(body.endDate);
+    if (isNaN(endDateRaw.getTime())) {
+      errors.push("Invalid endDate");
+    } else if (endDateRaw < startDate) {
+      errors.push("endDate must be on or after startDate");
+    } else {
+      endDate = endDateRaw;
+    }
+  }
+
   // Derive Recurring Days from Availability
   // Filter availability dates that are on or after startDate
   const futureAvailability = availability
@@ -91,11 +118,12 @@ function validateBatchInput(tp, body) {
     days: uniqueDays,
     time: startTimeStr,
     startDate: startDate,
-    endDate: null // Unlimited
+    endDate: endDate
   };
   
   // Remove fixedDates logic
   payload.fixedDates = [];
+  payload.endDate = endDate;
 
   if (errors.length > 0) {
     const err = new Error("Validation failed");
@@ -111,7 +139,7 @@ exports.createBatch = async (req, res) => {
     if (!featureEnabled()) return res.status(404).json({ success: false, message: "Feature disabled" });
     const tutorUserId = req.user.id;
     const TutorProfile = require("../models/TutorProfile");
-    const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id subjects classLevels availability isVerified monthlyRate");
+    const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id subjects classLevels boards availability isVerified monthlyRate");
     if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
     if (!tp.isVerified) return res.status(403).json({ success: false, message: "Tutor not verified" });
 
@@ -126,6 +154,7 @@ exports.createBatch = async (req, res) => {
     const gb = await GroupBatch.create({
       tutorId: tp._id,
       subject: payload.subject,
+      board: payload.board,
       level: payload.level,
       batchType: payload.batchType,
       scheduleType: "recurring",
@@ -138,6 +167,7 @@ exports.createBatch = async (req, res) => {
       description: payload.description,
       published: payload.published,
       batchStartDate: payload.recurring.startDate,
+      batchEndDate: payload.endDate || null,
       enrollmentOpenAt: new Date(), // Open immediately
     });
 
@@ -149,6 +179,9 @@ exports.createBatch = async (req, res) => {
     let current = new Date(gb.recurring.startDate);
     const endLimit = new Date();
     endLimit.setDate(endLimit.getDate() + 30);
+    if (gb.recurring?.endDate && gb.recurring.endDate < endLimit) {
+      endLimit.setTime(new Date(gb.recurring.endDate).getTime());
+    }
     
     const sessions = [];
     while (current <= endLimit) {
@@ -183,10 +216,13 @@ exports.getCreateOptions = async (req, res) => {
   try {
     if (!featureEnabled()) return res.status(404).json({ success: false, message: "Feature disabled" });
     const TutorProfile = require("../models/TutorProfile");
-    const tp = await TutorProfile.findOne({ userId: req.user.id }).select("subjects classLevels availability monthlyRate");
+    const tp = await TutorProfile.findOne({ userId: req.user.id }).select("subjects classLevels boards availability monthlyRate");
     if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
     const subjects = Array.isArray(tp.subjects) ? tp.subjects : [];
     const levels = Array.isArray(tp.classLevels) ? tp.classLevels : [];
+    const boards = Array.isArray(tp.boards) ? tp.boards : [];
+    const defaultBoards = ["CBSE", "ICSE", "State Board", "IB", "IGCSE"];
+    const boardsOut = boards.length ? boards : defaultBoards;
     const availability = Array.isArray(tp.availability) ? tp.availability : [];
     
     // Normalize "now" to start of today so we include today's dates
@@ -197,9 +233,9 @@ exports.getCreateOptions = async (req, res) => {
       .map((x) => new Date(x))
       .filter((d) => !isNaN(d.getTime()) && d.getTime() >= now.getTime())
       .map((d) => d.toISOString());
-    const batchTypes = ["revision", "exam"];
+    const batchTypes = ["revision", "normal class"];
     const scheduleTypes = ["recurring"];
-    res.json({ success: true, data: { subjects, levels, availabilityDates: futureDates, batchTypes, scheduleTypes, monthlyRate: tp.monthlyRate } });
+    res.json({ success: true, data: { subjects, levels, boards: boardsOut, availabilityDates: futureDates, batchTypes, scheduleTypes, monthlyRate: tp.monthlyRate } });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
