@@ -399,6 +399,15 @@ exports.listBatches = async (req, res) => {
       }));
     }
     const now = Date.now();
+    const tutorIds = items.map((b) => b.tutorId).filter(Boolean);
+    let tutorMap = new Map();
+    if (tutorIds.length) {
+      const TutorProfile = require("../models/TutorProfile");
+      const tutors = await TutorProfile.find({ _id: { $in: tutorIds } })
+        .select("_id name photoUrl")
+        .lean();
+      tutorMap = new Map(tutors.map((t) => [String(t._id), t]));
+    }
     let spId = null;
     let paymentsMap = {};
     try {
@@ -428,7 +437,21 @@ exports.listBatches = async (req, res) => {
       const isEnrolledForCurrentUser = spId ? (b.enrolled || []).some((s) => String(s) === String(spId)) : false;
       const hasActiveHoldForCurrentUser = spId ? (b.holds || []).some((h) => String(h.studentId) === String(spId) && h.status === "active" && new Date(h.expiresAt).getTime() > now) : false;
       const myPaymentId = paymentsMap[String(b._id)] || null;
-      return { ...b, liveSeats, isEnrolledForCurrentUser, hasActiveHoldForCurrentUser, myPaymentId };
+      const tutor = tutorMap.get(String(b.tutorId)) || null;
+      const batchTypeLabel = b.batchType === "normal class" || b.batchType === "normal" || b.batchType === "exam"
+        ? "Normal Class"
+        : b.batchType === "revision"
+          ? "Revision"
+          : b.batchType;
+      return {
+        ...b,
+        liveSeats,
+        isEnrolledForCurrentUser,
+        hasActiveHoldForCurrentUser,
+        myPaymentId,
+        batchTypeLabel,
+        tutor: tutor ? { id: tutor._id, name: tutor.name || "Tutor", photoUrl: tutor.photoUrl || null } : null,
+      };
     });
     res.json({ success: true, data });
   } catch (err) {
