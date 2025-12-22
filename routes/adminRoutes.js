@@ -36,6 +36,7 @@ router.put('/tutors/:id/status',  adminTutorController.updateTutorStatus);
 router.get('/bookings/:id', getBookingByIdForAdmin);
 
 router.get('/dashboard/stats', adminController.getDashboardStats);
+router.get('/dashboard/activity', adminController.getDashboardActivity);
 router.get('/sessions', adminController.listAdminSessions);
 router.post('/uploads/migrate-to-s3', adminController.migrateUploadsToS3);
 

@@ -446,6 +446,49 @@ const getDashboardStats = async (req, res) => {
   }
 };
 
+const getDashboardActivity = async (req, res) => {
+  try {
+    const limitRaw = Number(req.query.limit || 6);
+    const limit = Math.max(1, Math.min(20, Number.isFinite(limitRaw) ? limitRaw : 6));
+
+    const recentUsers = await User.find().sort({ createdAt: -1 }).limit(limit).lean();
+
+    const userIds = recentUsers.map((u) => u._id).filter(Boolean);
+    const [studentProfiles, tutorProfiles] = await Promise.all([
+      StudentProfile.find({ userId: { $in: userIds } }).select('userId name').lean(),
+      TutorProfile.find({ userId: { $in: userIds } }).select('userId name').lean(),
+    ]);
+    const studentNameByUserId = new Map(studentProfiles.map((p) => [String(p.userId), p.name]));
+    const tutorNameByUserId = new Map(tutorProfiles.map((p) => [String(p.userId), p.name]));
+
+    const signupEvents = recentUsers.map((u) => {
+      const userId = String(u._id);
+      const name =
+        u.role === 'student'
+          ? studentNameByUserId.get(userId)
+          : u.role === 'tutor'
+          ? tutorNameByUserId.get(userId)
+          : null;
+      return {
+        id: `signup-${u._id}`,
+        type: 'signup',
+        role: u.role,
+        name: name || u.phone || 'User',
+        at: u.createdAt,
+      };
+    });
+
+    const events = signupEvents
+      .filter((ev) => ev.at)
+      .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+      .slice(0, limit);
+
+    res.status(200).json({ success: true, events });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
 const listAdminSessions = async (req, res) => {
   try {
     const { status, from, to, page = 1, limit = 50, student, tutor } = req.query;
@@ -566,8 +609,8 @@ module.exports = {
   getUserById,
   updateUserStatus,
   verifyTutor,
-  updateUserStatus,
-  getDashboardStats
-  ,listAdminSessions
-  ,migrateUploadsToS3
+  getDashboardStats,
+  getDashboardActivity,
+  listAdminSessions,
+  migrateUploadsToS3
 };
