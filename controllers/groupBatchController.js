@@ -15,7 +15,7 @@ function featureEnabled() {
   return String(process.env.FEATURE_GROUP_BATCHES || "true").toLowerCase() === "true";
 }
 
-const { nanoid } = require('nanoid/non-secure');
+const { nanoid } = require('nanoid');
 
 
 function toDayName(d) {
