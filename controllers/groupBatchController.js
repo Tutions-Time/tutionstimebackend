@@ -15,7 +15,8 @@ function featureEnabled() {
   return String(process.env.FEATURE_GROUP_BATCHES || "true").toLowerCase() === "true";
 }
 
-const { nanoid } = require("nanoid");
+const { nanoid } = require('nanoid/non-secure');
+
 
 function toDayName(d) {
   const map = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
