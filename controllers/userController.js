@@ -199,6 +199,7 @@ const updateStudentProfile = async (req, res) => {
       });
     }
 
+    const parsedGroupSizes = parseArray(groupSizes);
     const profileData = {
       userId,
       name: b.name,
@@ -344,6 +345,7 @@ const updateTutorProfile = async (req, res) => {
       exams,
       studentTypes,
       groupSize,
+      groupSizes,
       teachingMode,
       hourlyRate,
       monthlyRate,
@@ -392,6 +394,7 @@ const updateTutorProfile = async (req, res) => {
       }
     };
 
+    const parsedGroupSizes = parseArray(groupSizes);
     const profileData = {
       userId,
       name,
@@ -405,7 +408,8 @@ const updateTutorProfile = async (req, res) => {
       boards: parseArray(boards),
       exams: parseArray(exams),
       studentTypes: parseArray(studentTypes),
-      groupSize,
+      groupSize: groupSize || parsedGroupSizes[0] || "",
+      groupSizes: parsedGroupSizes,
       teachingMode,
       hourlyRate: parseFloat(hourlyRate) || 0,
       monthlyRate: parseFloat(monthlyRate) || 0,

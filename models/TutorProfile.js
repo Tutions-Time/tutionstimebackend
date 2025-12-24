@@ -52,6 +52,7 @@ const tutorProfileSchema = new mongoose.Schema(
     exams: [String],
     studentTypes: [String],
     groupSize: { type: String },
+    groupSizes: [String],
 
     // Rates
     hourlyRate: { type: Number, min: 0 },
