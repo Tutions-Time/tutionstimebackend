@@ -41,6 +41,8 @@ const validateStudentProfileData = (data) => {
     errors.addressLine1 = "Address line 1 is required";
   if (isEmpty(data.addressLine2))
     errors.addressLine2 = "Address line 2 is required";
+  if (isEmpty(data.addressLine2))
+    errors.addressLine2 = "Address line 2 is required";
   if (isEmpty(data.city)) errors.city = "City is required";
   if (isEmpty(data.state)) errors.state = "State is required";
   if (isEmpty(data.pincode) || !PINCODE_REGEX.test(String(data.pincode)))
@@ -125,9 +127,7 @@ const validateTutorProfileData = (data, options = {}) => {
   if (isEmpty(data.email) || !EMAIL_REGEX.test(String(data.email)))
     errors.email = "Valid email is required";
 
-  if (isEmpty(data.phone)) {
-    errors.phone = "Phone number is required";
-  } else if (!PHONE_REGEX.test(String(data.phone))) {
+  if (data.phone && !PHONE_REGEX.test(String(data.phone))) {
     errors.phone = "Phone must be 10 digits";
   }
 
@@ -160,9 +160,6 @@ const validateTutorProfileData = (data, options = {}) => {
   const boards = normalizeArray(data.boards);
   if (!boards.length) errors.boards = "Select at least one board";
 
-  const exams = normalizeArray(data.exams);
-  if (!exams.length) errors.exams = "Select at least one exam";
-
   const studentTypes = normalizeArray(data.studentTypes);
   if (!studentTypes.length)
     errors.studentTypes = "Select at least one student type";
@@ -186,13 +183,6 @@ const validateTutorProfileData = (data, options = {}) => {
   if (isEmpty(data.photoUrl)) errors.photoUrl = "Profile photo is required";
   if (isEmpty(data.resumeUrl)) errors.resumeUrl = "Resume is required";
   if (isEmpty(data.demoVideoUrl)) errors.demoVideo = "Demo video is required";
-
-  if (isEmpty(data.upiId)) errors.upiId = "UPI ID is required";
-  if (isEmpty(data.accountHolderName))
-    errors.accountHolderName = "Account holder name is required";
-  if (isEmpty(data.bankAccountNumber))
-    errors.bankAccountNumber = "Bank account number is required";
-  if (isEmpty(data.ifsc)) errors.ifsc = "IFSC is required";
 
   if (!data.isAgeConfirmed)
     errors.isAgeConfirmed = "Age confirmation is required";

@@ -330,10 +330,6 @@ const updateTutorProfile = async (req, res) => {
       city,
       state,
       pincode,
-      upiId,
-      accountHolderName,
-      bankAccountNumber,
-      ifsc,
     } = req.body;
 
     const existingProfile = await TutorProfile.findOne({ userId }).lean();
@@ -356,12 +352,6 @@ const updateTutorProfile = async (req, res) => {
     const resolvedPhotoUrl = photoUrl || existingProfile?.photoUrl || "";
     const resolvedDemoVideoUrl = demoVideoUrl || existingProfile?.demoVideoUrl || "";
     const resolvedResumeUrl = resumeUrl || existingProfile?.resumeUrl || "";
-    const resolvedUpiId = upiId || existingProfile?.upiId || "";
-    const resolvedAccountHolderName =
-      accountHolderName || existingProfile?.accountHolderName || "";
-    const resolvedBankAccountNumber =
-      bankAccountNumber || existingProfile?.bankAccountNumber || "";
-    const resolvedIfsc = ifsc || existingProfile?.ifsc || "";
     const resolvedIsAgeConfirmed =
       typeof isAgeConfirmed === "undefined"
         ? Boolean(existingProfile?.isAgeConfirmed)
@@ -396,10 +386,6 @@ const updateTutorProfile = async (req, res) => {
       ...(resolvedPhotoUrl && { photoUrl: resolvedPhotoUrl }),
       ...(resolvedDemoVideoUrl && { demoVideoUrl: resolvedDemoVideoUrl }),
       ...(resolvedResumeUrl && { resumeUrl: resolvedResumeUrl }),
-      ...(resolvedUpiId && { upiId: resolvedUpiId }),
-      ...(resolvedAccountHolderName && { accountHolderName: resolvedAccountHolderName }),
-      ...(resolvedBankAccountNumber && { bankAccountNumber: resolvedBankAccountNumber }),
-      ...(resolvedIfsc && { ifsc: resolvedIfsc }),
     };
 
     const validationPayload = {
@@ -407,10 +393,6 @@ const updateTutorProfile = async (req, res) => {
       photoUrl: resolvedPhotoUrl,
       demoVideoUrl: resolvedDemoVideoUrl,
       resumeUrl: resolvedResumeUrl,
-      upiId: resolvedUpiId,
-      accountHolderName: resolvedAccountHolderName,
-      bankAccountNumber: resolvedBankAccountNumber,
-      ifsc: resolvedIfsc,
       isAgeConfirmed: resolvedIsAgeConfirmed,
     };
     const errors = validateTutorProfileData(validationPayload);
