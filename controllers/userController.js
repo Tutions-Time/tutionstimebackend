@@ -1,6 +1,13 @@
 const User = require("../models/User");
 const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
+const {
+  normalizeArray,
+  validateStudentProfileData,
+  validateTutorProfileData,
+  isStudentProfileComplete,
+  isTutorProfileComplete,
+} = require("../utils/profileValidation");
                                                          
 /* ------------------------------------------------------------
    GET USER PROFILE
@@ -146,22 +153,6 @@ const updateStudentProfile = async (req, res) => {
         message: "Only students can update student profiles",
       });
 
-    const parseArray = (raw) => {
-      if (!raw) return [];
-      if (Array.isArray(raw)) return raw;
-      if (typeof raw === "string") {
-        try {
-          const v = JSON.parse(raw);
-          if (Array.isArray(v)) return v;
-        } catch {}
-        return raw
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-      }
-      return [];
-    };
-
     // ⭐ S3 path
     let photoUrl = null;
     if (req.files?.photo) {
@@ -169,37 +160,6 @@ const updateStudentProfile = async (req, res) => {
     }
 
     const b = req.body;
-
-    if (!b.name || !b.email)
-      return res
-        .status(400)
-        .json({ success: false, message: "Name and email are required" });
-
-    if (b.track === "school" && !b.classLevel)
-      return res
-        .status(400)
-        .json({ success: false, message: "classLevel is required for school track" });
-
-    if (b.track === "college" && (!b.program || !b.discipline || !b.yearSem))
-      return res.status(400).json({
-        success: false,
-        message: "program, discipline and yearSem are required for college track",
-      });
-
-    if (b.track === "competitive" && !b.exam)
-      return res.status(400).json({
-        success: false,
-        message: "exam is required for competitive track",
-      });
-
-    if (!["Online", "Offline", "Both"].includes(b.learningMode || "")) {
-      return res.status(400).json({
-        success: false,
-        message: "learningMode must be Online, Offline, or Both",
-      });
-    }
-
-    const parsedGroupSizes = parseArray(groupSizes);
     const profileData = {
       userId,
       name: b.name,
@@ -230,19 +190,28 @@ const updateStudentProfile = async (req, res) => {
       examOther: b.exam === "Other" ? b.examOther || "" : "",
       targetYear: b.targetYear || "",
       targetYearOther: b.targetYear === "Other" ? b.targetYearOther || "" : "",
-      subjects: parseArray(b.subjects),
+      subjects: normalizeArray(b.subjects),
       subjectOther: (() => {
-        const subs = parseArray(b.subjects);
+        const subs = normalizeArray(b.subjects);
         return subs.includes("Other") ? b.subjectOther || "" : "";
       })(),
       tutorGenderPref: b.tutorGenderPref || "No Preference",
       tutorGenderOther:
         b.tutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
-      preferredTimes: parseArray(b.preferredTimes),
-      availability: parseArray(b.availability),
+      preferredTimes: normalizeArray(b.preferredTimes),
+      availability: normalizeArray(b.availability),
       goals: b.goals || "",
       ...(photoUrl && { photoUrl }),
     };
+
+    const errors = validateStudentProfileData(profileData);
+    if (Object.keys(errors).length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors,
+      });
+    }
 
     const profile = await StudentProfile.findOneAndUpdate(
       { userId },
@@ -250,8 +219,9 @@ const updateStudentProfile = async (req, res) => {
       { new: true, upsert: true }
     );
 
-    if (!user.isProfileComplete) {
-      user.isProfileComplete = true;
+    const isComplete = isStudentProfileComplete(profile);
+    if (user.isProfileComplete !== isComplete) {
+      user.isProfileComplete = isComplete;
       await user.save();
     }
 
@@ -363,12 +333,7 @@ const updateTutorProfile = async (req, res) => {
       ifsc,
     } = req.body;
 
-    if (!name || !email || !gender || !qualification || !subjects || !hourlyRate || !bio) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields",
-      });
-    }
+    const existingProfile = await TutorProfile.findOne({ userId }).lean();
 
     // ⭐ AWS S3 returns file.location
     let photoUrl = null,
@@ -384,17 +349,8 @@ const updateTutorProfile = async (req, res) => {
     if (req.files?.resume)
       resumeUrl = req.files.resume[0].location;
 
-    const parseArray = (val) => {
-      try {
-        if (!val) return [];
-        const parsed = JSON.parse(val);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    };
-
-    const parsedGroupSizes = parseArray(groupSizes);
+    const parsedGroupSizes = normalizeArray(groupSizes);
+    const finalDemoVideoUrl = demoVideoUrl || existingProfile?.demoVideoUrl || "";
     const profileData = {
       userId,
       name,
@@ -403,17 +359,17 @@ const updateTutorProfile = async (req, res) => {
       qualification,
       specialization,
       experience: Number(experience) || 0,
-      subjects: parseArray(subjects),
-      classLevels: parseArray(classLevels),
-      boards: parseArray(boards),
-      exams: parseArray(exams),
-      studentTypes: parseArray(studentTypes),
+      subjects: normalizeArray(subjects),
+      classLevels: normalizeArray(classLevels),
+      boards: normalizeArray(boards),
+      exams: normalizeArray(exams),
+      studentTypes: normalizeArray(studentTypes),
       groupSize: groupSize || parsedGroupSizes[0] || "",
       groupSizes: parsedGroupSizes,
       teachingMode,
       hourlyRate: parseFloat(hourlyRate) || 0,
       monthlyRate: parseFloat(monthlyRate) || 0,
-      availability: parseArray(availability),
+      availability: normalizeArray(availability),
       bio,
       achievements,
       addressLine1,
@@ -430,14 +386,35 @@ const updateTutorProfile = async (req, res) => {
       ...(ifsc && { ifsc }),
     };
 
+    const requireDemoVideo = !user.isProfileComplete && !finalDemoVideoUrl;
+    const validationPayload = {
+      ...profileData,
+      demoVideoUrl: finalDemoVideoUrl,
+    };
+    const errors = validateTutorProfileData(validationPayload, {
+      requireDemoVideo,
+    });
+    if (Object.keys(errors).length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors,
+      });
+    }
+
     const profile = await TutorProfile.findOneAndUpdate(
       { userId },
       { $set: profileData },
       { new: true, upsert: true }
     );
 
-    if (!user.isProfileComplete) {
-      user.isProfileComplete = true;
+    const safeProfile = profile?.toObject ? profile.toObject() : profile || {};
+    const isComplete = isTutorProfileComplete({
+      ...safeProfile,
+      demoVideoUrl: finalDemoVideoUrl || safeProfile.demoVideoUrl || "",
+    });
+    if (user.isProfileComplete !== isComplete) {
+      user.isProfileComplete = isComplete;
       await user.save();
     }
 
