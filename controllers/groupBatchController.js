@@ -90,18 +90,6 @@ function validateBatchInput(tp, body) {
     errors.push("Invalid startDate (must be future)");
   }
 
-  let endDate = null;
-  if (body.endDate) {
-    const endDateRaw = new Date(body.endDate);
-    if (isNaN(endDateRaw.getTime())) {
-      errors.push("Invalid endDate");
-    } else if (endDateRaw < startDate) {
-      errors.push("endDate must be on or after startDate");
-    } else {
-      endDate = endDateRaw;
-    }
-  }
-
   // Derive Recurring Days from Availability
   // Filter availability dates that are on or after startDate
   const futureAvailability = availability
@@ -118,13 +106,11 @@ function validateBatchInput(tp, body) {
   payload.recurring = {
     days: uniqueDays,
     time: startTimeStr,
-    startDate: startDate,
-    endDate: endDate
+    startDate: startDate
   };
   
   // Remove fixedDates logic
   payload.fixedDates = [];
-  payload.endDate = endDate;
 
   if (errors.length > 0) {
     const err = new Error("Validation failed");
@@ -142,7 +128,7 @@ exports.createBatch = async (req, res) => {
     const TutorProfile = require("../models/TutorProfile");
     const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id subjects classLevels boards availability isVerified monthlyRate");
     if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
-    if (!tp.isVerified) return res.status(403).json({ success: false, message: "Tutor not verified" });
+    if (!tp.isVerified) return res.status(403).json({ success: false, message: "Tutor not verified. Please complete your kyc" });
 
     let payload;
     try {
@@ -168,7 +154,6 @@ exports.createBatch = async (req, res) => {
       description: payload.description,
       published: payload.published,
       batchStartDate: payload.recurring.startDate,
-      batchEndDate: payload.endDate || null,
       enrollmentOpenAt: new Date(), // Open immediately
     });
 
@@ -435,7 +420,10 @@ exports.listBatches = async (req, res) => {
       const holdActiveCount = (b.holds || []).filter((h) => h.status === "active" && new Date(h.expiresAt).getTime() > now).length;
       const enrolledCount = (b.enrolled || []).length;
       const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount - holdActiveCount);
-      const isEnrolledForCurrentUser = spId ? (b.enrolled || []).some((s) => String(s) === String(spId)) : false;
+      const myEnrollment = spId ? (b.enrollmentDetails || []).find((e) => String(e.studentId) === String(spId)) : null;
+      const isEnrolledForCurrentUser = spId
+        ? (b.enrolled || []).some((s) => String(s) === String(spId))
+        : false;
       const hasActiveHoldForCurrentUser = spId ? (b.holds || []).some((h) => String(h.studentId) === String(spId) && h.status === "active" && new Date(h.expiresAt).getTime() > now) : false;
       const myPaymentId = paymentsMap[String(b._id)] || null;
       const tutor = tutorMap.get(String(b.tutorId)) || null;
@@ -450,6 +438,7 @@ exports.listBatches = async (req, res) => {
         isEnrolledForCurrentUser,
         hasActiveHoldForCurrentUser,
         myPaymentId,
+        myEnrollment,
         batchTypeLabel,
         tutor: tutor ? { id: tutor._id, name: tutor.name || "Tutor", photoUrl: tutor.photoUrl || null } : null,
       };
