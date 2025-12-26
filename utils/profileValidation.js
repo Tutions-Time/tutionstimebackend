@@ -27,8 +27,11 @@ const validateStudentProfileData = (data) => {
   if (isEmpty(data.email) || !EMAIL_REGEX.test(String(data.email)))
     errors.email = "Valid email is required";
 
-  if (data.altPhone && !PHONE_REGEX.test(String(data.altPhone)))
+  if (isEmpty(data.altPhone)) {
+    errors.altPhone = "Alternate phone is required";
+  } else if (!PHONE_REGEX.test(String(data.altPhone))) {
     errors.altPhone = "Alternate phone must be 10 digits";
+  }
 
   if (isEmpty(data.gender)) errors.gender = "Gender is required";
   if (data.gender === "Other" && isEmpty(data.genderOther))
@@ -36,6 +39,8 @@ const validateStudentProfileData = (data) => {
 
   if (isEmpty(data.addressLine1))
     errors.addressLine1 = "Address line 1 is required";
+  if (isEmpty(data.addressLine2))
+    errors.addressLine2 = "Address line 2 is required";
   if (isEmpty(data.city)) errors.city = "City is required";
   if (isEmpty(data.state)) errors.state = "State is required";
   if (isEmpty(data.pincode) || !PINCODE_REGEX.test(String(data.pincode)))
@@ -81,32 +86,50 @@ const validateStudentProfileData = (data) => {
     if (isEmpty(data.exam)) errors.exam = "Exam is required";
     if (data.exam === "Other" && isEmpty(data.examOther))
       errors.examOther = "Please specify exam";
+    if (isEmpty(data.targetYear))
+      errors.targetYear = "Target year is required";
+    if (data.targetYear === "Other" && isEmpty(data.targetYearOther))
+      errors.targetYearOther = "Please specify target year";
   }
 
   const subjects = normalizeArray(data.subjects);
   if (!subjects.length) errors.subjects = "Select at least one subject";
-  if (subjects.includes("Other") && isEmpty(data.subjectOther)) {
-    if (subjects.length === 1) {
-      errors.subjectOther = "Please specify subject";
-    }
-  }
+  if (subjects.includes("Other") && isEmpty(data.subjectOther))
+    errors.subjectOther = "Please specify subject";
 
+  if (isEmpty(data.tutorGenderPref))
+    errors.tutorGenderPref = "Tutor gender preference is required";
   if (data.tutorGenderPref === "Other" && isEmpty(data.tutorGenderOther))
     errors.tutorGenderOther = "Please specify tutor gender";
+
+  const preferredTimes = normalizeArray(data.preferredTimes);
+  if (!preferredTimes.length)
+    errors.preferredTimes = "Preferred time slots are required";
+
+  const availability = normalizeArray(data.availability);
+  if (!availability.length)
+    errors.availability = "Availability is required";
+
+  if (isEmpty(data.goals)) errors.goals = "Learning goals are required";
+
+  if (isEmpty(data.photoUrl))
+    errors.photoUrl = "Profile photo is required";
 
   return errors;
 };
 
 const validateTutorProfileData = (data, options = {}) => {
   const errors = {};
-  const requireDemoVideo = Boolean(options.requireDemoVideo);
 
   if (isEmpty(data.name)) errors.name = "Name is required";
   if (isEmpty(data.email) || !EMAIL_REGEX.test(String(data.email)))
     errors.email = "Valid email is required";
 
-  if (data.phone && !PHONE_REGEX.test(String(data.phone)))
+  if (isEmpty(data.phone)) {
+    errors.phone = "Phone number is required";
+  } else if (!PHONE_REGEX.test(String(data.phone))) {
     errors.phone = "Phone must be 10 digits";
+  }
 
   if (isEmpty(data.gender)) errors.gender = "Gender is required";
   if (isEmpty(data.teachingMode))
@@ -114,6 +137,8 @@ const validateTutorProfileData = (data, options = {}) => {
 
   if (isEmpty(data.addressLine1))
     errors.addressLine1 = "Address line 1 is required";
+  if (isEmpty(data.addressLine2))
+    errors.addressLine2 = "Address line 2 is required";
   if (isEmpty(data.city)) errors.city = "City is required";
   if (isEmpty(data.state)) errors.state = "State is required";
   if (isEmpty(data.pincode) || !PINCODE_REGEX.test(String(data.pincode)))
@@ -128,13 +153,49 @@ const validateTutorProfileData = (data, options = {}) => {
   const subjects = normalizeArray(data.subjects);
   if (!subjects.length) errors.subjects = "Select at least one subject";
 
+  const classLevels = normalizeArray(data.classLevels);
+  if (!classLevels.length)
+    errors.classLevels = "Select at least one class level";
+
+  const boards = normalizeArray(data.boards);
+  if (!boards.length) errors.boards = "Select at least one board";
+
+  const exams = normalizeArray(data.exams);
+  if (!exams.length) errors.exams = "Select at least one exam";
+
+  const studentTypes = normalizeArray(data.studentTypes);
+  if (!studentTypes.length)
+    errors.studentTypes = "Select at least one student type";
+
+  const groupSizes = normalizeArray(data.groupSizes);
+  if (!groupSizes.length && isEmpty(data.groupSize))
+    errors.groupSizes = "Select at least one group size";
+
   if (isEmpty(data.hourlyRate) || Number(data.hourlyRate) <= 0)
     errors.hourlyRate = "Hourly rate must be greater than 0";
 
+  if (isEmpty(data.monthlyRate) || Number(data.monthlyRate) <= 0)
+    errors.monthlyRate = "Monthly rate must be greater than 0";
+
+  const availability = normalizeArray(data.availability);
+  if (!availability.length)
+    errors.availability = "Availability is required";
+
   if (isEmpty(data.bio)) errors.bio = "Bio is required";
 
-  if (requireDemoVideo && isEmpty(data.demoVideoUrl))
-    errors.demoVideo = "Demo video is required";
+  if (isEmpty(data.photoUrl)) errors.photoUrl = "Profile photo is required";
+  if (isEmpty(data.resumeUrl)) errors.resumeUrl = "Resume is required";
+  if (isEmpty(data.demoVideoUrl)) errors.demoVideo = "Demo video is required";
+
+  if (isEmpty(data.upiId)) errors.upiId = "UPI ID is required";
+  if (isEmpty(data.accountHolderName))
+    errors.accountHolderName = "Account holder name is required";
+  if (isEmpty(data.bankAccountNumber))
+    errors.bankAccountNumber = "Bank account number is required";
+  if (isEmpty(data.ifsc)) errors.ifsc = "IFSC is required";
+
+  if (!data.isAgeConfirmed)
+    errors.isAgeConfirmed = "Age confirmation is required";
 
   return errors;
 };
@@ -143,9 +204,7 @@ const isStudentProfileComplete = (profile) =>
   Object.keys(validateStudentProfileData(profile || {})).length === 0;
 
 const isTutorProfileComplete = (profile) =>
-  Object.keys(
-    validateTutorProfileData(profile || {}, { requireDemoVideo: true })
-  ).length === 0;
+  Object.keys(validateTutorProfileData(profile || {})).length === 0;
 
 module.exports = {
   normalizeArray,

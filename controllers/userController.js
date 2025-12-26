@@ -1,4 +1,4 @@
-const User = require("../models/User");
+﻿const User = require("../models/User");
 const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
 const {
@@ -153,13 +153,15 @@ const updateStudentProfile = async (req, res) => {
         message: "Only students can update student profiles",
       });
 
-    // ⭐ S3 path
+    // â­ S3 path
+    const existingProfile = await StudentProfile.findOne({ userId }).lean();
     let photoUrl = null;
     if (req.files?.photo) {
       photoUrl = req.files.photo[0].location; // <-- AWS S3 URL
     }
 
     const b = req.body;
+    const resolvedPhotoUrl = photoUrl || existingProfile?.photoUrl || "";
     const profileData = {
       userId,
       name: b.name,
@@ -201,7 +203,7 @@ const updateStudentProfile = async (req, res) => {
       preferredTimes: normalizeArray(b.preferredTimes),
       availability: normalizeArray(b.availability),
       goals: b.goals || "",
-      ...(photoUrl && { photoUrl }),
+      photoUrl: resolvedPhotoUrl,
     };
 
     const errors = validateStudentProfileData(profileData);
@@ -303,6 +305,7 @@ const updateTutorProfile = async (req, res) => {
       });
 
     const {
+      isAgeConfirmed,
       name,
       email,
       gender,
@@ -335,7 +338,7 @@ const updateTutorProfile = async (req, res) => {
 
     const existingProfile = await TutorProfile.findOne({ userId }).lean();
 
-    // ⭐ AWS S3 returns file.location
+    // â­ AWS S3 returns file.location
     let photoUrl = null,
       demoVideoUrl = null,
       resumeUrl = null;
@@ -350,7 +353,19 @@ const updateTutorProfile = async (req, res) => {
       resumeUrl = req.files.resume[0].location;
 
     const parsedGroupSizes = normalizeArray(groupSizes);
-    const finalDemoVideoUrl = demoVideoUrl || existingProfile?.demoVideoUrl || "";
+    const resolvedPhotoUrl = photoUrl || existingProfile?.photoUrl || "";
+    const resolvedDemoVideoUrl = demoVideoUrl || existingProfile?.demoVideoUrl || "";
+    const resolvedResumeUrl = resumeUrl || existingProfile?.resumeUrl || "";
+    const resolvedUpiId = upiId || existingProfile?.upiId || "";
+    const resolvedAccountHolderName =
+      accountHolderName || existingProfile?.accountHolderName || "";
+    const resolvedBankAccountNumber =
+      bankAccountNumber || existingProfile?.bankAccountNumber || "";
+    const resolvedIfsc = ifsc || existingProfile?.ifsc || "";
+    const resolvedIsAgeConfirmed =
+      typeof isAgeConfirmed === "undefined"
+        ? Boolean(existingProfile?.isAgeConfirmed)
+        : String(isAgeConfirmed) === "true" || isAgeConfirmed === true;
     const profileData = {
       userId,
       name,
@@ -372,28 +387,33 @@ const updateTutorProfile = async (req, res) => {
       availability: normalizeArray(availability),
       bio,
       achievements,
+      isAgeConfirmed: resolvedIsAgeConfirmed,
       addressLine1,
       addressLine2,
       city,
       state,
       pincode,
-      ...(photoUrl && { photoUrl }),
-      ...(demoVideoUrl && { demoVideoUrl }),
-      ...(resumeUrl && { resumeUrl }),
-      ...(upiId && { upiId }),
-      ...(accountHolderName && { accountHolderName }),
-      ...(bankAccountNumber && { bankAccountNumber }),
-      ...(ifsc && { ifsc }),
+      ...(resolvedPhotoUrl && { photoUrl: resolvedPhotoUrl }),
+      ...(resolvedDemoVideoUrl && { demoVideoUrl: resolvedDemoVideoUrl }),
+      ...(resolvedResumeUrl && { resumeUrl: resolvedResumeUrl }),
+      ...(resolvedUpiId && { upiId: resolvedUpiId }),
+      ...(resolvedAccountHolderName && { accountHolderName: resolvedAccountHolderName }),
+      ...(resolvedBankAccountNumber && { bankAccountNumber: resolvedBankAccountNumber }),
+      ...(resolvedIfsc && { ifsc: resolvedIfsc }),
     };
 
-    const requireDemoVideo = !user.isProfileComplete && !finalDemoVideoUrl;
     const validationPayload = {
       ...profileData,
-      demoVideoUrl: finalDemoVideoUrl,
+      photoUrl: resolvedPhotoUrl,
+      demoVideoUrl: resolvedDemoVideoUrl,
+      resumeUrl: resolvedResumeUrl,
+      upiId: resolvedUpiId,
+      accountHolderName: resolvedAccountHolderName,
+      bankAccountNumber: resolvedBankAccountNumber,
+      ifsc: resolvedIfsc,
+      isAgeConfirmed: resolvedIsAgeConfirmed,
     };
-    const errors = validateTutorProfileData(validationPayload, {
-      requireDemoVideo,
-    });
+    const errors = validateTutorProfileData(validationPayload);
     if (Object.keys(errors).length > 0) {
       return res.status(400).json({
         success: false,
@@ -411,7 +431,7 @@ const updateTutorProfile = async (req, res) => {
     const safeProfile = profile?.toObject ? profile.toObject() : profile || {};
     const isComplete = isTutorProfileComplete({
       ...safeProfile,
-      demoVideoUrl: finalDemoVideoUrl || safeProfile.demoVideoUrl || "",
+      demoVideoUrl: resolvedDemoVideoUrl || safeProfile.demoVideoUrl || "",
     });
     if (user.isProfileComplete !== isComplete) {
       user.isProfileComplete = isComplete;
