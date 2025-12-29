@@ -1767,6 +1767,7 @@ exports.getTutorNoteHistory = async (req, res) => {
       status: p.status,
       createdAt: p.createdAt,
       studentName: p.studentId?.name || "Student",
+      noteId: p.noteId?._id || p.noteId,
       noteTitle: p.noteId?.title || "",
     }));
 

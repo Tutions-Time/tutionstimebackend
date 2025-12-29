@@ -9,8 +9,6 @@ const noteSchema = new mongoose.Schema(
     classLevel: { type: String, required: true, trim: true },
     board: { type: String, required: true, trim: true },
     price: { type: Number, required: true, min: 0 },
-    keywords: { type: [String], default: [] },
-
     pdfUrl: { type: String, required: true },
     pdfKey: { type: String, required: true },
 
@@ -24,7 +22,6 @@ const noteSchema = new mongoose.Schema(
 
 noteSchema.index({ title: "text", description: "text" });
 noteSchema.index({ subject: 1, classLevel: 1, board: 1 });
-noteSchema.index({ keywords: 1 });
 
 module.exports = mongoose.model("Note", noteSchema);
 
