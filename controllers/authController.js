@@ -3,6 +3,12 @@ const otpService = require('../services/otpService');
 const tokenService = require('../services/tokenService');
 const walletService = require("../services/payments/walletService");
 const bcrypt = require('bcryptjs');
+const StudentProfile = require('../models/StudentProfile');
+const TutorProfile = require('../models/TutorProfile');
+const {
+  isStudentProfileComplete,
+  isTutorProfileComplete,
+} = require('../utils/profileValidation');
 
 // Admin credentials (Move to environment variables in production)
 const ADMIN_USERNAME = 'admin';
@@ -360,6 +366,22 @@ const getCurrentUser = async (req, res) => {
         success: false,
         message: 'User not found'
       });
+    }
+
+    if (user.role === 'student') {
+      const profile = await StudentProfile.findOne({ userId: user._id }).lean();
+      const isComplete = profile ? isStudentProfileComplete(profile) : false;
+      if (user.isProfileComplete !== isComplete) {
+        user.isProfileComplete = isComplete;
+        await user.save();
+      }
+    } else if (user.role === 'tutor') {
+      const profile = await TutorProfile.findOne({ userId: user._id }).lean();
+      const isComplete = profile ? isTutorProfileComplete(profile) : false;
+      if (user.isProfileComplete !== isComplete) {
+        user.isProfileComplete = isComplete;
+        await user.save();
+      }
     }
 
     res.status(200).json({

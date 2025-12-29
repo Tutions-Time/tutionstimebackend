@@ -19,7 +19,6 @@ const createSchema = Joi.object({
   classLevel: Joi.string().required(),
   board: Joi.string().required(),
   price: Joi.number().min(0).required(),
-  keywords: Joi.alternatives().try(Joi.array().items(Joi.string()), Joi.string()),
 });
 
 exports.createNote = async (req, res) => {
@@ -38,12 +37,6 @@ exports.createNote = async (req, res) => {
     const pdfFile = req.files.pdf[0];
     const previewFiles = (req.files.previews || []).map((f) => f);
 
-    const keywords = Array.isArray(value.keywords)
-      ? value.keywords
-      : typeof value.keywords === "string"
-      ? value.keywords.split(",").map((s) => s.trim()).filter(Boolean)
-      : [];
-
     const doc = {
       title: value.title,
       description: value.description || "",
@@ -51,7 +44,6 @@ exports.createNote = async (req, res) => {
       classLevel: value.classLevel,
       board: value.board,
       price: value.price,
-      keywords,
       pdfUrl: pdfFile.location,
       pdfKey: pdfFile.key,
       previewImageUrls: previewFiles.map((f) => f.location),
@@ -63,24 +55,6 @@ exports.createNote = async (req, res) => {
       const note = await Note.create(doc);
       return res.json({ success: true, data: note });
     } catch (errCreate) {
-      if (String(errCreate?.message || "").toLowerCase().includes("keywords") && String(errCreate?.message || "").toLowerCase().includes("text index")) {
-        try {
-          const idx = await Note.collection.getIndexes();
-          for (const [name, spec] of Object.entries(idx)) {
-            const includesKeywordsText = name.includes("keywords_text") || (Array.isArray(spec) && spec.some(([field, type]) => field === "keywords" && type === "text"));
-            if (includesKeywordsText) {
-              await Note.collection.dropIndex(name).catch(() => {});
-            }
-          }
-          await Note.collection.createIndex({ title: "text", description: "text" });
-          await Note.collection.createIndex({ subject: 1, classLevel: 1, board: 1 });
-          await Note.collection.createIndex({ keywords: 1 });
-          const note = await Note.create(doc);
-          return res.json({ success: true, data: note });
-        } catch (fixErr) {
-          console.error("createNote index fix error:", fixErr);
-        }
-      }
       throw errCreate;
     }
   } catch (err) {
@@ -116,7 +90,6 @@ const updateSchema = Joi.object({
   classLevel: Joi.string(),
   board: Joi.string(),
   price: Joi.number().min(0),
-  keywords: Joi.alternatives().try(Joi.array().items(Joi.string()), Joi.string()),
 });
 
 exports.updateNote = async (req, res) => {
@@ -130,14 +103,6 @@ exports.updateNote = async (req, res) => {
     if (!note) return res.status(404).json({ success: false, message: "Note not found" });
     if (String(note.tutorId) !== String(tutorId)) {
       return res.status(403).json({ success: false, message: "Not authorized" });
-    }
-
-    if (value.keywords) {
-      value.keywords = Array.isArray(value.keywords)
-        ? value.keywords
-        : typeof value.keywords === "string"
-        ? value.keywords.split(",").map((s) => s.trim()).filter(Boolean)
-        : [];
     }
 
     if (req.files?.pdf?.[0]) {

@@ -34,10 +34,9 @@ async function fixIndexes() {
         // ===== Notes index fix =====
         console.log('Checking Note indexes...');
         const noteIndexes = await Note.collection.getIndexes();
-        for (const [name, spec] of Object.entries(noteIndexes)) {
-            const includesKeywordsText = name.includes('keywords_text') || (Array.isArray(spec) && spec.some(([field, type]) => field === 'keywords' && type === 'text'));
-            if (includesKeywordsText) {
-                console.log(`Dropping problematic Note text index: ${name}`);
+        for (const [name] of Object.entries(noteIndexes)) {
+            if (name.includes('keywords_text') || name.includes('keywords_1')) {
+                console.log(`Dropping outdated Note index: ${name}`);
                 try {
                     await Note.collection.dropIndex(name);
                     console.log(`Dropped index ${name}`);
@@ -54,8 +53,6 @@ async function fixIndexes() {
         console.log('Ensuring Note indexes...');
         await Note.collection.createIndex({ title: 'text', description: 'text' });
         await Note.collection.createIndex({ subject: 1, classLevel: 1, board: 1 });
-        await Note.collection.createIndex({ keywords: 1 });
-
         console.log('Final Note indexes:', await Note.collection.getIndexes());
 
         // Exit the script

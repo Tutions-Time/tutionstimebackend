@@ -36,6 +36,22 @@ function addMinutesToTime(timeStr, minutesToAdd) {
   )}`;
 }
 
+function normalizeArray(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val.filter(Boolean);
+  if (typeof val === "string") {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return parsed.filter(Boolean);
+    } catch {}
+    return val
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
 async function createAdminNotification(title, message, meta = {}) {
   try {
     await AdminNotification.create({ title, message, meta });
@@ -67,13 +83,39 @@ ${JSON.stringify(meta, null, 2)}
  */
 exports.createDemoBooking = async (req, res) => {
   try {
-    const { tutorId, subject, date, time, note } = req.body;
+    const {
+      tutorId,
+      subject,
+      subjects,
+      date,
+      time,
+      note,
+      studentBoard,
+      studentLearningMode,
+    } = req.body;
     console.log("createDemoBooking req.body:", req.body);
 
-    if (!tutorId || !subject || !date || !time) {
+    const selectedSubjects = normalizeArray(subjects || subject);
+    const subjectForDisplay = selectedSubjects[0] || subject;
+
+    if (!tutorId || !selectedSubjects.length || !date || !time) {
       return res.status(400).json({
         success: false,
-        message: "tutorId, subject, date, time are required",
+        message: "tutorId, subjects, date, time are required",
+      });
+    }
+
+    const existingDemoForTutor = await Booking.findOne({
+      studentId: req.user.id,
+      tutorId,
+      type: "demo",
+      status: { $ne: "cancelled" },
+    });
+
+    if (existingDemoForTutor) {
+      return res.status(400).json({
+        success: false,
+        message: "You can book only one demo per tutor.",
       });
     }
 
@@ -85,6 +127,18 @@ exports.createDemoBooking = async (req, res) => {
     }
 
     const preferredDate = toStartOfDay(date);
+    const today = new Date();
+    const todayStart = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate()
+    );
+    if (preferredDate < todayStart) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select a date from today onwards",
+      });
+    }
 
     const avail = Array.isArray(tutorProfile.availability)
       ? tutorProfile.availability
@@ -137,10 +191,20 @@ exports.createDemoBooking = async (req, res) => {
     // Demo duration is 15 minutes
     const preferredEndTime = addMinutesToTime(time, DEMO_DURATION_MINUTES);
 
+    const studentProfile = await StudentProfile.findOne({
+      userId: req.user.id,
+    }).lean();
+    const resolvedStudentBoard = studentProfile?.board || studentBoard || "";
+    const resolvedStudentLearningMode =
+      studentProfile?.learningMode || studentLearningMode || "";
+
     const booking = await Booking.create({
       studentId: req.user.id,
       tutorId,
-      subject,
+      subject: subjectForDisplay,
+      subjects: selectedSubjects,
+      studentBoard: resolvedStudentBoard,
+      studentLearningMode: resolvedStudentLearningMode,
       preferredDate,
       preferredTime: time,
       preferredEndTime, // 15 min demo end time
@@ -151,9 +215,7 @@ exports.createDemoBooking = async (req, res) => {
     });
 
     try {
-      const student = await StudentProfile.findOne({
-        userId: req.user.id,
-      }).lean();
+      const student = studentProfile;
       const tutorUser = await User.findById(tutorId).lean();
 
       const tutorEmail = tutorProfile.email || tutorUser?.email;
@@ -161,7 +223,7 @@ exports.createDemoBooking = async (req, res) => {
       if (tutorEmail && notificationService?.sendEmail) {
         const html = emailTpl.tutorDemoRequestHTML({
           studentName: student?.name || "A student",
-          subject,
+          subject: subjectForDisplay,
           date,
           time,
         });
@@ -178,8 +240,14 @@ exports.createDemoBooking = async (req, res) => {
         await notificationService.createInApp(
           tutorId,
           "New Demo Request",
-          `${student?.name || "A student"} requested a demo for ${subject} on ${date} at ${time}`,
-          { tutorId, subject, date, time, bookingId: booking._id }
+          `${student?.name || "A student"} requested a demo for ${subjectForDisplay} on ${date} at ${time}`,
+          {
+            tutorId,
+            subject: subjectForDisplay,
+            date,
+            time,
+            bookingId: booking._id,
+          }
         );
       }
 
@@ -189,12 +257,13 @@ exports.createDemoBooking = async (req, res) => {
           student?.name || "A student"
         } requested a demo with ${
           tutorProfile?.name || "Tutor"
-        } for ${subject} on ${date} at ${time}`,
+        } for ${subjectForDisplay} on ${date} at ${time}`,
         {
           bookingId: booking._id,
           tutorId,
           studentId: req.user.id,
-          subject,
+          subject: subjectForDisplay,
+          subjects: selectedSubjects,
           date,
           time,
           type: booking.type,
@@ -232,6 +301,20 @@ exports.createDemoBookingByTutor = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "studentId, subject, date, time are required",
+      });
+    }
+
+    const existingDemoForTutor = await Booking.findOne({
+      studentId,
+      tutorId,
+      type: "demo",
+      status: { $ne: "cancelled" },
+    });
+
+    if (existingDemoForTutor) {
+      return res.status(400).json({
+        success: false,
+        message: "Only one demo per student-tutor pair is allowed.",
       });
     }
 

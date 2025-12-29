@@ -36,14 +36,10 @@ function validateBatchInput(tp, body) {
   if (!subject || !subjects.includes(subject)) errors.push("Invalid subject");
   payload.subject = subject;
 
-  const rawBoard = body.board ? String(body.board).trim() : "";
-  const boardOther = body.boardOther ? String(body.boardOther).trim() : "";
-  let board = rawBoard;
-  if (rawBoard === "Other" && boardOther) board = boardOther;
-  if (board && boards.length && rawBoard !== "Other" && !boards.includes(board)) {
+  const board = body.board ? String(body.board).trim() : "";
+  if (board && boards.length && !boards.includes(board)) {
     errors.push("Invalid board");
   }
-  if (rawBoard === "Other" && !boardOther) errors.push("boardOther is required");
   payload.board = board;
 
   const level = body.level ? String(body.level).trim() : undefined;
@@ -90,18 +86,6 @@ function validateBatchInput(tp, body) {
     errors.push("Invalid startDate (must be future)");
   }
 
-  let endDate = null;
-  if (body.endDate) {
-    const endDateRaw = new Date(body.endDate);
-    if (isNaN(endDateRaw.getTime())) {
-      errors.push("Invalid endDate");
-    } else if (endDateRaw < startDate) {
-      errors.push("endDate must be on or after startDate");
-    } else {
-      endDate = endDateRaw;
-    }
-  }
-
   // Derive Recurring Days from Availability
   // Filter availability dates that are on or after startDate
   const futureAvailability = availability
@@ -118,13 +102,11 @@ function validateBatchInput(tp, body) {
   payload.recurring = {
     days: uniqueDays,
     time: startTimeStr,
-    startDate: startDate,
-    endDate: endDate
+    startDate: startDate
   };
   
   // Remove fixedDates logic
   payload.fixedDates = [];
-  payload.endDate = endDate;
 
   if (errors.length > 0) {
     const err = new Error("Validation failed");
@@ -142,7 +124,7 @@ exports.createBatch = async (req, res) => {
     const TutorProfile = require("../models/TutorProfile");
     const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id subjects classLevels boards availability isVerified monthlyRate");
     if (!tp) return res.status(404).json({ success: false, message: "Tutor profile not found" });
-    if (!tp.isVerified) return res.status(403).json({ success: false, message: "Tutor not verified" });
+    if (!tp.isVerified) return res.status(403).json({ success: false, message: "Tutor not verified. Please complete your kyc" });
 
     let payload;
     try {
@@ -168,7 +150,6 @@ exports.createBatch = async (req, res) => {
       description: payload.description,
       published: payload.published,
       batchStartDate: payload.recurring.startDate,
-      batchEndDate: payload.endDate || null,
       enrollmentOpenAt: new Date(), // Open immediately
     });
 
@@ -222,8 +203,7 @@ exports.getCreateOptions = async (req, res) => {
     const subjects = Array.isArray(tp.subjects) ? tp.subjects : [];
     const levels = Array.isArray(tp.classLevels) ? tp.classLevels : [];
     const boards = Array.isArray(tp.boards) ? tp.boards : [];
-    const defaultBoards = ["CBSE", "ICSE", "State Board", "IB", "IGCSE"];
-    const boardsOut = boards.length ? boards : defaultBoards;
+    const boardsOut = boards;
     const availability = Array.isArray(tp.availability) ? tp.availability : [];
     
     // Normalize "now" to start of today so we include today's dates
@@ -293,7 +273,7 @@ exports.editBatch = async (req, res) => {
           groupBatchId: gb._id,
           tutorId: gb.tutorId,
           startDateTime: new Date(iso),
-          meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${idx}-${Date.now()}`,
+          meetingLink: `https://meet.jit.si/tuitionstime-${gb._id}-${idx}-${Date.now()}`,
           status: "scheduled",
         }));
         await Session.insertMany(payload);
@@ -435,7 +415,10 @@ exports.listBatches = async (req, res) => {
       const holdActiveCount = (b.holds || []).filter((h) => h.status === "active" && new Date(h.expiresAt).getTime() > now).length;
       const enrolledCount = (b.enrolled || []).length;
       const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount - holdActiveCount);
-      const isEnrolledForCurrentUser = spId ? (b.enrolled || []).some((s) => String(s) === String(spId)) : false;
+      const myEnrollment = spId ? (b.enrollmentDetails || []).find((e) => String(e.studentId) === String(spId)) : null;
+      const isEnrolledForCurrentUser = spId
+        ? (b.enrolled || []).some((s) => String(s) === String(spId))
+        : false;
       const hasActiveHoldForCurrentUser = spId ? (b.holds || []).some((h) => String(h.studentId) === String(spId) && h.status === "active" && new Date(h.expiresAt).getTime() > now) : false;
       const myPaymentId = paymentsMap[String(b._id)] || null;
       const tutor = tutorMap.get(String(b.tutorId)) || null;
@@ -450,6 +433,7 @@ exports.listBatches = async (req, res) => {
         isEnrolledForCurrentUser,
         hasActiveHoldForCurrentUser,
         myPaymentId,
+        myEnrollment,
         batchTypeLabel,
         tutor: tutor ? { id: tutor._id, name: tutor.name || "Tutor", photoUrl: tutor.photoUrl || null } : null,
       };

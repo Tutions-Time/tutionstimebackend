@@ -29,6 +29,9 @@ const bookingSchema = new mongoose.Schema(
 
     // Demo booking metadata
     subject: { type: String, required: true, trim: true },
+    subjects: { type: [String], default: [] },
+    studentBoard: { type: String, trim: true },
+    studentLearningMode: { type: String, trim: true },
     preferredDate: { type: Date, required: true },
     preferredTime: { type: String },
     preferredEndTime: { type: String },

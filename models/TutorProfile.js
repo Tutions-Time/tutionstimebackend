@@ -16,6 +16,7 @@ const tutorProfileSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     email: { type: String, trim: true, lowercase: true },
     gender: { type: String, enum: ["Male", "Female", "Other"] },
+    isAgeConfirmed: { type: Boolean, default: false },
     rating: { type: Number, min: 0, max: 5, default: 0 },
     // For average calculation
     ratingSum: { type: Number, default: 0 },
@@ -95,11 +96,7 @@ const tutorProfileSchema = new mongoose.Schema(
     // Verification
     isVerified: { type: Boolean, default: false },
 
-    // Payout details
-    upiId: { type: String, trim: true },
-    accountHolderName: { type: String, trim: true },
-    bankAccountNumber: { type: String, trim: true },
-    ifsc: { type: String, trim: true },
+    // Payout details (managed outside tutor profile)
     razorpayxContactId: { type: String },
     razorpayxFundAccountId: { type: String },
   },

@@ -439,7 +439,7 @@ exports.createSubscriptionOrder = async (req, res) => {
 exports.createGroupOrder = async (req, res) => {
   try {
     const { batchId, reservationId, couponCode } = req.body;
-    const months = 1;
+    const months = Number(req.body?.months ?? 1);
     const userId = req.user.id;
     const StudentProfile = require("../models/StudentProfile");
     const TutorProfile = require("../models/TutorProfile");
@@ -467,14 +467,28 @@ exports.createGroupOrder = async (req, res) => {
     const isEnrolled = gb.enrolled.some(id => String(id) === String(sp._id));
     if (!hold && !isEnrolled) return res.status(409).json({ success: false, message: "Seat reservation expired or missing" });
 
-    let amountINR = Number(gb.pricePerStudent || 0);
+    if (!Number.isInteger(months) || months < 1 || months > 60) {
+      return res.status(400).json({ success: false, message: "Invalid months" });
+    }
+
+    let amountINR = Number(gb.pricePerStudent || 0) * months;
     const { discount } = await applyCouponIfValid({ code: (couponCode || "").trim(), type: "group", amount: amountINR, userId });
     if (discount > 0) amountINR = Math.max(0, amountINR - discount);
     const amountInPaise = Math.round(amountINR * 100);
 
     // Calculate period (full batch)
-    let startDate = (gb.batchStartDate && new Date(gb.batchStartDate) > now) ? new Date(gb.batchStartDate) : new Date();
-    const endDate = gb.batchEndDate ? new Date(gb.batchEndDate) : null;
+    const currentEnrollment = (gb.enrollmentDetails || []).find((e) => String(e.studentId) === String(sp._id));
+    const nowDate = new Date();
+    const batchStart = gb.batchStartDate ? new Date(gb.batchStartDate) : null;
+    const enrollmentValidUntil = currentEnrollment?.validUntil ? new Date(currentEnrollment.validUntil) : null;
+    let startDate = nowDate;
+    if (enrollmentValidUntil && enrollmentValidUntil > nowDate) {
+      startDate = enrollmentValidUntil;
+    } else if (batchStart && batchStart > nowDate) {
+      startDate = batchStart;
+    }
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + months);
 
     // Wallet-only payment if balance suffices
     try {
@@ -489,7 +503,7 @@ exports.createGroupOrder = async (req, res) => {
           currency: "INR",
           gateway: "wallet",
           status: "paid",
-          notes: `Group batch checkout for ${batchId}, Full batch, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
+          notes: `Group batch checkout for ${batchId}, Months:${months}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
           periodStart: startDate,
           periodEnd: endDate
         });
@@ -576,7 +590,7 @@ exports.createGroupOrder = async (req, res) => {
       gateway: "razorpay",
       gatewayOrderId: order.id,
       status: "created",
-      notes: `Group batch checkout for ${batchId}, Full batch, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
+      notes: `Group batch checkout for ${batchId}, Months:${months}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
       periodStart: startDate,
       periodEnd: endDate
     });
@@ -1753,6 +1767,7 @@ exports.getTutorNoteHistory = async (req, res) => {
       status: p.status,
       createdAt: p.createdAt,
       studentName: p.studentId?.name || "Student",
+      noteId: p.noteId?._id || p.noteId,
       noteTitle: p.noteId?.title || "",
     }));
 

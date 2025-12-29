@@ -1,6 +1,13 @@
-const User = require("../models/User");
+﻿const User = require("../models/User");
 const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
+const {
+  normalizeArray,
+  validateStudentProfileData,
+  validateTutorProfileData,
+  isStudentProfileComplete,
+  isTutorProfileComplete,
+} = require("../utils/profileValidation");
                                                          
 /* ------------------------------------------------------------
    GET USER PROFILE
@@ -146,103 +153,86 @@ const updateStudentProfile = async (req, res) => {
         message: "Only students can update student profiles",
       });
 
-    const parseArray = (raw) => {
-      if (!raw) return [];
-      if (Array.isArray(raw)) return raw;
-      if (typeof raw === "string") {
-        try {
-          const v = JSON.parse(raw);
-          if (Array.isArray(v)) return v;
-        } catch {}
-        return raw
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-      }
-      return [];
-    };
-
-    // ⭐ S3 path
+    // â­ S3 path
+    const existingProfile = await StudentProfile.findOne({ userId }).lean();
     let photoUrl = null;
     if (req.files?.photo) {
       photoUrl = req.files.photo[0].location; // <-- AWS S3 URL
     }
 
-    const b = req.body;
+      const b = req.body;
+      const resolveOther = (value, other) => {
+        if (value === "Other" && String(other || "").trim()) {
+          return String(other).trim();
+        }
+        return value;
+      };
+    const resolvedPhotoUrl = photoUrl || existingProfile?.photoUrl || "";
+      const resolvedGender = resolveOther(b.gender || "", b.genderOther);
+      const resolvedBoard = resolveOther(b.board || "", b.boardOther);
+      const resolvedClassLevel = resolveOther(b.classLevel || "", b.classLevelOther);
+      const resolvedStream = resolveOther(b.stream || "", b.streamOther);
+      const resolvedProgram = resolveOther(b.program || "", b.programOther);
+      const resolvedDiscipline = resolveOther(b.discipline || "", b.disciplineOther);
+      const resolvedYearSem = resolveOther(b.yearSem || "", b.yearSemOther);
+      const resolvedExam = resolveOther(b.exam || "", b.examOther);
+      const resolvedTargetYear = resolveOther(b.targetYear || "", b.targetYearOther);
+      const resolvedTutorGenderPref = resolveOther(
+        b.tutorGenderPref || "",
+        b.tutorGenderOther
+      );
 
-    if (!b.name || !b.email)
-      return res
-        .status(400)
-        .json({ success: false, message: "Name and email are required" });
+      const profileData = {
+        userId,
+        name: b.name,
+        email: b.email,
+        altPhone: b.altPhone || "",
+        gender: resolvedGender || "",
+        genderOther: resolvedGender === "Other" ? b.genderOther || "" : "",
+        addressLine1: b.addressLine1 || "",
+        addressLine2: b.addressLine2 || "",
+        city: b.city || "",
+        state: b.state || "",
+        pincode: b.pincode || "",
+        learningMode: b.learningMode || "",
+        track: b.track || "",
+        board: resolvedBoard || "",
+        boardOther: resolvedBoard === "Other" ? b.boardOther || "" : "",
+        classLevel: resolvedClassLevel || "",
+        classLevelOther:
+          resolvedClassLevel === "Other" ? b.classLevelOther || "" : "",
+        stream: resolvedStream || "",
+        streamOther: resolvedStream === "Other" ? b.streamOther || "" : "",
+        program: resolvedProgram || "",
+        programOther: resolvedProgram === "Other" ? b.programOther || "" : "",
+        discipline: resolvedDiscipline || "",
+        disciplineOther:
+          resolvedDiscipline === "Other" ? b.disciplineOther || "" : "",
+        yearSem: resolvedYearSem || "",
+        yearSemOther: resolvedYearSem === "Other" ? b.yearSemOther || "" : "",
+        exam: resolvedExam || "",
+        examOther: resolvedExam === "Other" ? b.examOther || "" : "",
+        targetYear: resolvedTargetYear || "",
+        targetYearOther:
+          resolvedTargetYear === "Other" ? b.targetYearOther || "" : "",
+        subjects: normalizeArray(b.subjects),
+        tutorGenderPref: resolvedTutorGenderPref || "No Preference",
+        tutorGenderOther:
+          resolvedTutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
+      preferredTimes: normalizeArray(b.preferredTimes),
+      availability: normalizeArray(b.availability),
+      goals: b.goals || "",
+      photoUrl: resolvedPhotoUrl,
+    };
 
-    if (b.track === "school" && !b.classLevel)
-      return res
-        .status(400)
-        .json({ success: false, message: "classLevel is required for school track" });
-
-    if (b.track === "college" && (!b.program || !b.discipline || !b.yearSem))
+    const errors = validateStudentProfileData(profileData);
+    if (Object.keys(errors).length > 0) {
       return res.status(400).json({
         success: false,
-        message: "program, discipline and yearSem are required for college track",
-      });
-
-    if (b.track === "competitive" && !b.exam)
-      return res.status(400).json({
-        success: false,
-        message: "exam is required for competitive track",
-      });
-
-    if (!["Online", "Offline", "Both"].includes(b.learningMode || "")) {
-      return res.status(400).json({
-        success: false,
-        message: "learningMode must be Online, Offline, or Both",
+        message: "Validation failed",
+        errors,
       });
     }
-
-    const parsedGroupSizes = parseArray(groupSizes);
-    const profileData = {
-      userId,
-      name: b.name,
-      email: b.email,
-      altPhone: b.altPhone || "",
-      gender: b.gender || "",
-      genderOther: b.gender === "Other" ? b.genderOther || "" : "",
-      addressLine1: b.addressLine1 || "",
-      addressLine2: b.addressLine2 || "",
-      city: b.city || "",
-      state: b.state || "",
-      pincode: b.pincode || "",
-      learningMode: b.learningMode || "",
-      track: b.track || "",
-      board: b.board || "",
-      boardOther: b.board === "Other" ? b.boardOther || "" : "",
-      classLevel: b.classLevel || "",
-      classLevelOther: b.classLevel === "Other" ? b.classLevelOther || "" : "",
-      stream: b.stream || "",
-      streamOther: b.stream === "Other" ? b.streamOther || "" : "",
-      program: b.program || "",
-      programOther: b.program === "Other" ? b.programOther || "" : "",
-      discipline: b.discipline || "",
-      disciplineOther: b.discipline === "Other" ? b.disciplineOther || "" : "",
-      yearSem: b.yearSem || "",
-      yearSemOther: b.yearSem === "Other" ? b.yearSemOther || "" : "",
-      exam: b.exam || "",
-      examOther: b.exam === "Other" ? b.examOther || "" : "",
-      targetYear: b.targetYear || "",
-      targetYearOther: b.targetYear === "Other" ? b.targetYearOther || "" : "",
-      subjects: parseArray(b.subjects),
-      subjectOther: (() => {
-        const subs = parseArray(b.subjects);
-        return subs.includes("Other") ? b.subjectOther || "" : "";
-      })(),
-      tutorGenderPref: b.tutorGenderPref || "No Preference",
-      tutorGenderOther:
-        b.tutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
-      preferredTimes: parseArray(b.preferredTimes),
-      availability: parseArray(b.availability),
-      goals: b.goals || "",
-      ...(photoUrl && { photoUrl }),
-    };
 
     const profile = await StudentProfile.findOneAndUpdate(
       { userId },
@@ -250,8 +240,9 @@ const updateStudentProfile = async (req, res) => {
       { new: true, upsert: true }
     );
 
-    if (!user.isProfileComplete) {
-      user.isProfileComplete = true;
+    const isComplete = isStudentProfileComplete(profile);
+    if (user.isProfileComplete !== isComplete) {
+      user.isProfileComplete = isComplete;
       await user.save();
     }
 
@@ -333,6 +324,7 @@ const updateTutorProfile = async (req, res) => {
       });
 
     const {
+      isAgeConfirmed,
       name,
       email,
       gender,
@@ -357,20 +349,11 @@ const updateTutorProfile = async (req, res) => {
       city,
       state,
       pincode,
-      upiId,
-      accountHolderName,
-      bankAccountNumber,
-      ifsc,
     } = req.body;
 
-    if (!name || !email || !gender || !qualification || !subjects || !hourlyRate || !bio) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields",
-      });
-    }
+    const existingProfile = await TutorProfile.findOne({ userId }).lean();
 
-    // ⭐ AWS S3 returns file.location
+    // â­ AWS S3 returns file.location
     let photoUrl = null,
       demoVideoUrl = null,
       resumeUrl = null;
@@ -384,51 +367,75 @@ const updateTutorProfile = async (req, res) => {
     if (req.files?.resume)
       resumeUrl = req.files.resume[0].location;
 
-    const parseArray = (val) => {
-      try {
-        if (!val) return [];
-        const parsed = JSON.parse(val);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    };
+      const parsedGroupSizes = normalizeArray(groupSizes);
+      const sanitizeOther = (arr) => {
+        if (!Array.isArray(arr)) return arr;
+        if (arr.includes("Other") && arr.length > 1) {
+          return arr.filter((v) => v !== "Other");
+        }
+        return arr;
+      };
+    const resolvedPhotoUrl = photoUrl || existingProfile?.photoUrl || "";
+    const resolvedDemoVideoUrl = demoVideoUrl || existingProfile?.demoVideoUrl || "";
+    const resolvedResumeUrl = resumeUrl || existingProfile?.resumeUrl || "";
+    const resolvedIsAgeConfirmed =
+      typeof isAgeConfirmed === "undefined"
+        ? Boolean(existingProfile?.isAgeConfirmed)
+        : String(isAgeConfirmed) === "true" || isAgeConfirmed === true;
+      const normalizedSubjects = sanitizeOther(normalizeArray(subjects));
+      const normalizedBoards = sanitizeOther(normalizeArray(boards));
+      const normalizedClassLevels = normalizeArray(classLevels);
+      const normalizedExams = normalizeArray(exams);
+      const normalizedStudentTypes = normalizeArray(studentTypes);
+      const normalizedAvailability = normalizeArray(availability);
 
-    const parsedGroupSizes = parseArray(groupSizes);
-    const profileData = {
-      userId,
-      name,
-      email,
-      gender,
-      qualification,
-      specialization,
-      experience: Number(experience) || 0,
-      subjects: parseArray(subjects),
-      classLevels: parseArray(classLevels),
-      boards: parseArray(boards),
-      exams: parseArray(exams),
-      studentTypes: parseArray(studentTypes),
-      groupSize: groupSize || parsedGroupSizes[0] || "",
-      groupSizes: parsedGroupSizes,
-      teachingMode,
-      hourlyRate: parseFloat(hourlyRate) || 0,
-      monthlyRate: parseFloat(monthlyRate) || 0,
-      availability: parseArray(availability),
+      const profileData = {
+        userId,
+        name,
+        email,
+        gender,
+        qualification,
+        specialization,
+        experience: Number(experience) || 0,
+        subjects: normalizedSubjects,
+        classLevels: normalizedClassLevels,
+        boards: normalizedBoards,
+        exams: normalizedExams,
+        studentTypes: normalizedStudentTypes,
+        groupSize: groupSize || parsedGroupSizes[0] || "",
+        groupSizes: parsedGroupSizes,
+        teachingMode,
+        hourlyRate: parseFloat(hourlyRate) || 0,
+        monthlyRate: parseFloat(monthlyRate) || 0,
+        availability: normalizedAvailability,
       bio,
       achievements,
+      isAgeConfirmed: resolvedIsAgeConfirmed,
       addressLine1,
       addressLine2,
       city,
       state,
       pincode,
-      ...(photoUrl && { photoUrl }),
-      ...(demoVideoUrl && { demoVideoUrl }),
-      ...(resumeUrl && { resumeUrl }),
-      ...(upiId && { upiId }),
-      ...(accountHolderName && { accountHolderName }),
-      ...(bankAccountNumber && { bankAccountNumber }),
-      ...(ifsc && { ifsc }),
+      ...(resolvedPhotoUrl && { photoUrl: resolvedPhotoUrl }),
+      ...(resolvedDemoVideoUrl && { demoVideoUrl: resolvedDemoVideoUrl }),
+      ...(resolvedResumeUrl && { resumeUrl: resolvedResumeUrl }),
     };
+
+    const validationPayload = {
+      ...profileData,
+      photoUrl: resolvedPhotoUrl,
+      demoVideoUrl: resolvedDemoVideoUrl,
+      resumeUrl: resolvedResumeUrl,
+      isAgeConfirmed: resolvedIsAgeConfirmed,
+    };
+    const errors = validateTutorProfileData(validationPayload);
+    if (Object.keys(errors).length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors,
+      });
+    }
 
     const profile = await TutorProfile.findOneAndUpdate(
       { userId },
@@ -436,8 +443,13 @@ const updateTutorProfile = async (req, res) => {
       { new: true, upsert: true }
     );
 
-    if (!user.isProfileComplete) {
-      user.isProfileComplete = true;
+    const safeProfile = profile?.toObject ? profile.toObject() : profile || {};
+    const isComplete = isTutorProfileComplete({
+      ...safeProfile,
+      demoVideoUrl: resolvedDemoVideoUrl || safeProfile.demoVideoUrl || "",
+    });
+    if (user.isProfileComplete !== isComplete) {
+      user.isProfileComplete = isComplete;
       await user.save();
     }
 
