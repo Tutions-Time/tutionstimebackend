@@ -96,8 +96,6 @@ const validateStudentProfileData = (data) => {
 
   const subjects = normalizeArray(data.subjects);
   if (!subjects.length) errors.subjects = "Select at least one subject";
-  if (subjects.includes("Other") && isEmpty(data.subjectOther))
-    errors.subjectOther = "Please specify subject";
 
   if (isEmpty(data.tutorGenderPref))
     errors.tutorGenderPref = "Tutor gender preference is required";

@@ -193,10 +193,6 @@ const updateStudentProfile = async (req, res) => {
       targetYear: b.targetYear || "",
       targetYearOther: b.targetYear === "Other" ? b.targetYearOther || "" : "",
       subjects: normalizeArray(b.subjects),
-      subjectOther: (() => {
-        const subs = normalizeArray(b.subjects);
-        return subs.includes("Other") ? b.subjectOther || "" : "";
-      })(),
       tutorGenderPref: b.tutorGenderPref || "No Preference",
       tutorGenderOther:
         b.tutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
