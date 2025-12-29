@@ -160,42 +160,65 @@ const updateStudentProfile = async (req, res) => {
       photoUrl = req.files.photo[0].location; // <-- AWS S3 URL
     }
 
-    const b = req.body;
+      const b = req.body;
+      const resolveOther = (value, other) => {
+        if (value === "Other" && String(other || "").trim()) {
+          return String(other).trim();
+        }
+        return value;
+      };
     const resolvedPhotoUrl = photoUrl || existingProfile?.photoUrl || "";
-    const profileData = {
-      userId,
-      name: b.name,
-      email: b.email,
-      altPhone: b.altPhone || "",
-      gender: b.gender || "",
-      genderOther: b.gender === "Other" ? b.genderOther || "" : "",
-      addressLine1: b.addressLine1 || "",
-      addressLine2: b.addressLine2 || "",
-      city: b.city || "",
-      state: b.state || "",
-      pincode: b.pincode || "",
-      learningMode: b.learningMode || "",
-      track: b.track || "",
-      board: b.board || "",
-      boardOther: b.board === "Other" ? b.boardOther || "" : "",
-      classLevel: b.classLevel || "",
-      classLevelOther: b.classLevel === "Other" ? b.classLevelOther || "" : "",
-      stream: b.stream || "",
-      streamOther: b.stream === "Other" ? b.streamOther || "" : "",
-      program: b.program || "",
-      programOther: b.program === "Other" ? b.programOther || "" : "",
-      discipline: b.discipline || "",
-      disciplineOther: b.discipline === "Other" ? b.disciplineOther || "" : "",
-      yearSem: b.yearSem || "",
-      yearSemOther: b.yearSem === "Other" ? b.yearSemOther || "" : "",
-      exam: b.exam || "",
-      examOther: b.exam === "Other" ? b.examOther || "" : "",
-      targetYear: b.targetYear || "",
-      targetYearOther: b.targetYear === "Other" ? b.targetYearOther || "" : "",
-      subjects: normalizeArray(b.subjects),
-      tutorGenderPref: b.tutorGenderPref || "No Preference",
-      tutorGenderOther:
-        b.tutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
+      const resolvedGender = resolveOther(b.gender || "", b.genderOther);
+      const resolvedBoard = resolveOther(b.board || "", b.boardOther);
+      const resolvedClassLevel = resolveOther(b.classLevel || "", b.classLevelOther);
+      const resolvedStream = resolveOther(b.stream || "", b.streamOther);
+      const resolvedProgram = resolveOther(b.program || "", b.programOther);
+      const resolvedDiscipline = resolveOther(b.discipline || "", b.disciplineOther);
+      const resolvedYearSem = resolveOther(b.yearSem || "", b.yearSemOther);
+      const resolvedExam = resolveOther(b.exam || "", b.examOther);
+      const resolvedTargetYear = resolveOther(b.targetYear || "", b.targetYearOther);
+      const resolvedTutorGenderPref = resolveOther(
+        b.tutorGenderPref || "",
+        b.tutorGenderOther
+      );
+
+      const profileData = {
+        userId,
+        name: b.name,
+        email: b.email,
+        altPhone: b.altPhone || "",
+        gender: resolvedGender || "",
+        genderOther: resolvedGender === "Other" ? b.genderOther || "" : "",
+        addressLine1: b.addressLine1 || "",
+        addressLine2: b.addressLine2 || "",
+        city: b.city || "",
+        state: b.state || "",
+        pincode: b.pincode || "",
+        learningMode: b.learningMode || "",
+        track: b.track || "",
+        board: resolvedBoard || "",
+        boardOther: resolvedBoard === "Other" ? b.boardOther || "" : "",
+        classLevel: resolvedClassLevel || "",
+        classLevelOther:
+          resolvedClassLevel === "Other" ? b.classLevelOther || "" : "",
+        stream: resolvedStream || "",
+        streamOther: resolvedStream === "Other" ? b.streamOther || "" : "",
+        program: resolvedProgram || "",
+        programOther: resolvedProgram === "Other" ? b.programOther || "" : "",
+        discipline: resolvedDiscipline || "",
+        disciplineOther:
+          resolvedDiscipline === "Other" ? b.disciplineOther || "" : "",
+        yearSem: resolvedYearSem || "",
+        yearSemOther: resolvedYearSem === "Other" ? b.yearSemOther || "" : "",
+        exam: resolvedExam || "",
+        examOther: resolvedExam === "Other" ? b.examOther || "" : "",
+        targetYear: resolvedTargetYear || "",
+        targetYearOther:
+          resolvedTargetYear === "Other" ? b.targetYearOther || "" : "",
+        subjects: normalizeArray(b.subjects),
+        tutorGenderPref: resolvedTutorGenderPref || "No Preference",
+        tutorGenderOther:
+          resolvedTutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
       preferredTimes: normalizeArray(b.preferredTimes),
       availability: normalizeArray(b.availability),
       goals: b.goals || "",
@@ -344,7 +367,14 @@ const updateTutorProfile = async (req, res) => {
     if (req.files?.resume)
       resumeUrl = req.files.resume[0].location;
 
-    const parsedGroupSizes = normalizeArray(groupSizes);
+      const parsedGroupSizes = normalizeArray(groupSizes);
+      const sanitizeOther = (arr) => {
+        if (!Array.isArray(arr)) return arr;
+        if (arr.includes("Other") && arr.length > 1) {
+          return arr.filter((v) => v !== "Other");
+        }
+        return arr;
+      };
     const resolvedPhotoUrl = photoUrl || existingProfile?.photoUrl || "";
     const resolvedDemoVideoUrl = demoVideoUrl || existingProfile?.demoVideoUrl || "";
     const resolvedResumeUrl = resumeUrl || existingProfile?.resumeUrl || "";
@@ -352,25 +382,32 @@ const updateTutorProfile = async (req, res) => {
       typeof isAgeConfirmed === "undefined"
         ? Boolean(existingProfile?.isAgeConfirmed)
         : String(isAgeConfirmed) === "true" || isAgeConfirmed === true;
-    const profileData = {
-      userId,
-      name,
-      email,
-      gender,
-      qualification,
-      specialization,
-      experience: Number(experience) || 0,
-      subjects: normalizeArray(subjects),
-      classLevels: normalizeArray(classLevels),
-      boards: normalizeArray(boards),
-      exams: normalizeArray(exams),
-      studentTypes: normalizeArray(studentTypes),
-      groupSize: groupSize || parsedGroupSizes[0] || "",
-      groupSizes: parsedGroupSizes,
-      teachingMode,
-      hourlyRate: parseFloat(hourlyRate) || 0,
-      monthlyRate: parseFloat(monthlyRate) || 0,
-      availability: normalizeArray(availability),
+      const normalizedSubjects = sanitizeOther(normalizeArray(subjects));
+      const normalizedBoards = sanitizeOther(normalizeArray(boards));
+      const normalizedClassLevels = normalizeArray(classLevels);
+      const normalizedExams = normalizeArray(exams);
+      const normalizedStudentTypes = normalizeArray(studentTypes);
+      const normalizedAvailability = normalizeArray(availability);
+
+      const profileData = {
+        userId,
+        name,
+        email,
+        gender,
+        qualification,
+        specialization,
+        experience: Number(experience) || 0,
+        subjects: normalizedSubjects,
+        classLevels: normalizedClassLevels,
+        boards: normalizedBoards,
+        exams: normalizedExams,
+        studentTypes: normalizedStudentTypes,
+        groupSize: groupSize || parsedGroupSizes[0] || "",
+        groupSizes: parsedGroupSizes,
+        teachingMode,
+        hourlyRate: parseFloat(hourlyRate) || 0,
+        monthlyRate: parseFloat(monthlyRate) || 0,
+        availability: normalizedAvailability,
       bio,
       achievements,
       isAgeConfirmed: resolvedIsAgeConfirmed,
