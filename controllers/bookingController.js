@@ -105,6 +105,20 @@ exports.createDemoBooking = async (req, res) => {
       });
     }
 
+    const existingDemoForTutor = await Booking.findOne({
+      studentId: req.user.id,
+      tutorId,
+      type: "demo",
+      status: { $ne: "cancelled" },
+    });
+
+    if (existingDemoForTutor) {
+      return res.status(400).json({
+        success: false,
+        message: "You can book only one demo per tutor.",
+      });
+    }
+
     const tutorProfile = await TutorProfile.findOne({ userId: tutorId }).lean();
     if (!tutorProfile) {
       return res
@@ -287,6 +301,20 @@ exports.createDemoBookingByTutor = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "studentId, subject, date, time are required",
+      });
+    }
+
+    const existingDemoForTutor = await Booking.findOne({
+      studentId,
+      tutorId,
+      type: "demo",
+      status: { $ne: "cancelled" },
+    });
+
+    if (existingDemoForTutor) {
+      return res.status(400).json({
+        success: false,
+        message: "Only one demo per student-tutor pair is allowed.",
       });
     }
 
