@@ -44,22 +44,6 @@ const adminLogin = async (req, res) => {
       });
     }
 
-    if (user.role === 'student') {
-      const profile = await StudentProfile.findOne({ userId: user._id }).lean();
-      const isComplete = profile ? isStudentProfileComplete(profile) : false;
-      if (user.isProfileComplete !== isComplete) {
-        user.isProfileComplete = isComplete;
-        await user.save();
-      }
-    } else if (user.role === 'tutor') {
-      const profile = await TutorProfile.findOne({ userId: user._id }).lean();
-      const isComplete = profile ? isTutorProfileComplete(profile) : false;
-      if (user.isProfileComplete !== isComplete) {
-        user.isProfileComplete = isComplete;
-        await user.save();
-      }
-    }
-
     // Generate tokens
     const adminUser = {
       id: 'admin',
