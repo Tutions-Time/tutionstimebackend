@@ -36,14 +36,10 @@ function validateBatchInput(tp, body) {
   if (!subject || !subjects.includes(subject)) errors.push("Invalid subject");
   payload.subject = subject;
 
-  const rawBoard = body.board ? String(body.board).trim() : "";
-  const boardOther = body.boardOther ? String(body.boardOther).trim() : "";
-  let board = rawBoard;
-  if (rawBoard === "Other" && boardOther) board = boardOther;
-  if (board && boards.length && rawBoard !== "Other" && !boards.includes(board)) {
+  const board = body.board ? String(body.board).trim() : "";
+  if (board && boards.length && !boards.includes(board)) {
     errors.push("Invalid board");
   }
-  if (rawBoard === "Other" && !boardOther) errors.push("boardOther is required");
   payload.board = board;
 
   const level = body.level ? String(body.level).trim() : undefined;
@@ -207,8 +203,7 @@ exports.getCreateOptions = async (req, res) => {
     const subjects = Array.isArray(tp.subjects) ? tp.subjects : [];
     const levels = Array.isArray(tp.classLevels) ? tp.classLevels : [];
     const boards = Array.isArray(tp.boards) ? tp.boards : [];
-    const defaultBoards = ["CBSE", "ICSE", "State Board", "IB", "IGCSE"];
-    const boardsOut = boards.length ? boards : defaultBoards;
+    const boardsOut = boards;
     const availability = Array.isArray(tp.availability) ? tp.availability : [];
     
     // Normalize "now" to start of today so we include today's dates
