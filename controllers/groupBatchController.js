@@ -278,7 +278,7 @@ exports.editBatch = async (req, res) => {
           groupBatchId: gb._id,
           tutorId: gb.tutorId,
           startDateTime: new Date(iso),
-          meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${idx}-${Date.now()}`,
+          meetingLink: `https://meet.jit.si/tuitionstime-${gb._id}-${idx}-${Date.now()}`,
           status: "scheduled",
         }));
         await Session.insertMany(payload);
