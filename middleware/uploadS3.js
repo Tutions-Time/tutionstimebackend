@@ -17,6 +17,13 @@ const useS3 = Boolean(S3_BUCKET && S3_REGION && S3_ACCESS_KEY_ID && S3_SECRET_AC
 const uploadsDir = path.join(process.cwd(), "uploads");
 try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch (_) {}
 
+const MAX_FILE_SIZES = {
+  photo: 10 * 1024 * 1024,
+  resume: 10 * 1024 * 1024,
+  demoVideo: 200 * 1024 * 1024,
+};
+const GLOBAL_MAX_FILE_SIZE = 200 * 1024 * 1024;
+
 // Memory storage for S3; disk for fallback
 const storage = useS3 ? multer.memoryStorage() : multer.diskStorage({
   destination: function (_req, file, cb) {
@@ -31,7 +38,7 @@ const storage = useS3 ? multer.memoryStorage() : multer.diskStorage({
   },
 });
 
-const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
+const upload = multer({ storage, limits: { fileSize: GLOBAL_MAX_FILE_SIZE } });
 
 // Initialize S3 client if configured
 let s3 = null;
@@ -107,6 +114,7 @@ function wrapMw(mw) {
     mw(req, res, async (err) => {
       if (err) return next(err);
       try {
+        enforceFileSizeLimits(req);
         await ensureLocations(req);
         next();
       } catch (e) {
@@ -114,6 +122,30 @@ function wrapMw(mw) {
       }
     });
   };
+}
+
+function enforceFileSizeLimits(req) {
+  if (!req) return;
+  const toMb = (bytes) => Math.round(bytes / (1024 * 1024));
+  const check = (file) => {
+    if (!file || typeof file.size !== "number") return;
+    const limit = MAX_FILE_SIZES[file.fieldname];
+    if (!limit) return;
+    if (file.size > limit) {
+      const err = new Error(
+        `${file.fieldname} exceeds ${toMb(limit)}MB limit`
+      );
+      err.statusCode = 413;
+      throw err;
+    }
+  };
+
+  if (req.file) check(req.file);
+  if (req.files) {
+    Object.values(req.files)
+      .filter(Array.isArray)
+      .forEach((arr) => arr.forEach(check));
+  }
 }
 
 const uploadS3 = {
