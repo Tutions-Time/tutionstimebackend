@@ -105,6 +105,20 @@ exports.createDemoBooking = async (req, res) => {
       });
     }
 
+    const existingActiveDemo = await Booking.findOne({
+      studentId: req.user.id,
+      type: "demo",
+      status: { $in: ["pending", "confirmed"] },
+    });
+
+    if (existingActiveDemo) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "You already have an active demo. Complete it before booking another.",
+      });
+    }
+
     const existingDemoForTutor = await Booking.findOne({
       studentId: req.user.id,
       tutorId,
@@ -301,6 +315,20 @@ exports.createDemoBookingByTutor = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "studentId, subject, date, time are required",
+      });
+    }
+
+    const existingActiveDemo = await Booking.findOne({
+      studentId,
+      type: "demo",
+      status: { $in: ["pending", "confirmed"] },
+    });
+
+    if (existingActiveDemo) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Student already has an active demo. Complete it before booking another.",
       });
     }
 
