@@ -74,6 +74,9 @@ function validateBatchInput(tp, body) {
   if (expireAfterMin < 0 || expireAfterMin > 240) errors.push("Invalid expireAfterMin");
   payload.accessWindow = { joinBeforeMin, expireAfterMin };
 
+  // Published flag
+  payload.published = Boolean(body.published);
+
   // Class Start Time (HH:mm)
   const startTimeStr = String(body.classStartTime || "").trim();
   if (!startTimeStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/)) {
