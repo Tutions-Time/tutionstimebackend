@@ -21,6 +21,8 @@ const MAX_FILE_SIZES = {
   photo: 10 * 1024 * 1024,
   resume: 10 * 1024 * 1024,
   demoVideo: 200 * 1024 * 1024,
+  pdf: 150 * 1024 * 1024,
+  notes: 150 * 1024 * 1024,
 };
 const GLOBAL_MAX_FILE_SIZE = 200 * 1024 * 1024;
 
