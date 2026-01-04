@@ -15,6 +15,7 @@ const scheduleRecurringSchema = new mongoose.Schema(
   {
     days: [{ type: String, enum: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] }],
     time: { type: String },
+    endTime: { type: String },
     startDate: { type: Date },
     endDate: { type: Date }
   },

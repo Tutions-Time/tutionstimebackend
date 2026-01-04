@@ -80,10 +80,32 @@ function validateBatchInput(tp, body) {
     errors.push("Invalid classStartTime");
   }
 
+  // Class End Time (HH:mm)
+  const endTimeStr = String(body.classEndTime || "").trim();
+  if (!endTimeStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/)) {
+    errors.push("Invalid classEndTime");
+  } else if (startTimeStr.match(/^([01]?\d|2[0-3]):([0-5]\d)$/)) {
+    const [sh, sm] = startTimeStr.split(":").map(Number);
+    const [eh, em] = endTimeStr.split(":").map(Number);
+    const startMin = sh * 60 + sm;
+    const endMin = eh * 60 + em;
+    if (endMin <= startMin) {
+      errors.push("classEndTime must be after classStartTime");
+    }
+  }
+
   // Start Date
   const startDate = new Date(body.startDate);
   if (isNaN(startDate.getTime()) || startDate < now) {
     errors.push("Invalid startDate (must be future)");
+  }
+
+  // End Date
+  const endDate = new Date(body.endDate);
+  if (isNaN(endDate.getTime())) {
+    errors.push("Invalid endDate");
+  } else if (!isNaN(startDate.getTime()) && endDate < startDate) {
+    errors.push("endDate must be on or after startDate");
   }
 
   // Derive Recurring Days from Availability
@@ -102,7 +124,9 @@ function validateBatchInput(tp, body) {
   payload.recurring = {
     days: uniqueDays,
     time: startTimeStr,
-    startDate: startDate
+    endTime: endTimeStr,
+    startDate: startDate,
+    endDate: endDate
   };
   
   // Remove fixedDates logic
@@ -150,6 +174,7 @@ exports.createBatch = async (req, res) => {
       description: payload.description,
       published: payload.published,
       batchStartDate: payload.recurring.startDate,
+      batchEndDate: payload.recurring.endDate,
       enrollmentOpenAt: new Date(), // Open immediately
     });
 
@@ -161,8 +186,11 @@ exports.createBatch = async (req, res) => {
     let current = new Date(gb.recurring.startDate);
     const endLimit = new Date();
     endLimit.setDate(endLimit.getDate() + 30);
-    if (gb.recurring?.endDate && gb.recurring.endDate < endLimit) {
-      endLimit.setTime(new Date(gb.recurring.endDate).getTime());
+    if (gb.recurring?.endDate) {
+      const endDate = new Date(gb.recurring.endDate);
+      if (!isNaN(endDate.getTime()) && endDate < endLimit) {
+        endLimit.setTime(endDate.getTime());
+      }
     }
     
     const sessions = [];
