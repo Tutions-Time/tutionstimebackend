@@ -377,9 +377,8 @@ exports.myBatches = async (req, res) => {
     
     const now = Date.now();
     const data = items.map((b) => {
-      const holdActiveCount = (b.holds || []).filter((h) => h.status === "active" && new Date(h.expiresAt).getTime() > now).length;
       const enrolledCount = (b.enrolled || []).length;
-      const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount - holdActiveCount);
+      const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount);
       return { ...b, liveSeats };
     });
 
@@ -440,9 +439,8 @@ exports.listBatches = async (req, res) => {
       }
     } catch (_) {}
     const data = items.map((b) => {
-      const holdActiveCount = (b.holds || []).filter((h) => h.status === "active" && new Date(h.expiresAt).getTime() > now).length;
       const enrolledCount = (b.enrolled || []).length;
-      const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount - holdActiveCount);
+      const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount);
       const myEnrollment = spId ? (b.enrollmentDetails || []).find((e) => String(e.studentId) === String(spId)) : null;
       const isEnrolledForCurrentUser = spId
         ? (b.enrolled || []).some((s) => String(s) === String(spId))
@@ -479,9 +477,8 @@ exports.getBatch = async (req, res) => {
     const b = await GroupBatch.findById(id).lean();
     if (!b) return res.status(404).json({ success: false, message: "Batch not found" });
     const now = Date.now();
-    const holdActive = (b.holds || []).filter((h) => h.status === "active" && new Date(h.expiresAt).getTime() > now).length;
     const enrolledCount = (b.enrolled || []).length;
-    const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount - holdActive);
+    const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount);
 
     let myEnrollment = null;
     try {
