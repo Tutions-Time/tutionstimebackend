@@ -1,4 +1,4 @@
-const axios = require('axios');
+const twilio = require('twilio');
 
 // Using a more persistent object for development
 let otpStore = {};
@@ -12,6 +12,13 @@ const generateOTP = () => {
   // Development default OTP
   // return Math.floor(100000 + Math.random() * 900000).toString();
   return "123456";
+};
+
+const normalizePhone = (phone) => {
+  const trimmed = String(phone || "").trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.startsWith("+")) return trimmed;
+  return `+91${trimmed}`;
 };
 
 const storeOTP = (phone, purpose) => {
@@ -99,50 +106,35 @@ const verifyOTP = (requestId, providedOTP, phone) => {
   };
 };
 
-// BulkSMS integration
-const bulkSmsUsername = process.env.BULKSMS_USERNAME;
-const bulkSmsPassword = process.env.BULKSMS_PASSWORD;
-const bulkSmsFrom = process.env.BULKSMS_FROM;
+// Twilio integration
+const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
+const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
 
 const sendOTP = async (phone, otp) => {
-  if (!bulkSmsUsername || !bulkSmsPassword) {
-    // Development fallback if BulkSMS credentials are not set
+  const normalizedPhone = normalizePhone(phone);
+  if (!twilioAccountSid || !twilioAuthToken || !twilioFrom) {
+    // Development fallback if Twilio credentials are not set
     console.log("==================================");
-    console.log("BulkSMS credentials missing, logging OTP instead.");
-    console.log(`Phone: ${phone}`);
+    console.log("Twilio credentials missing, logging OTP instead.");
+    console.log(`Phone: ${normalizedPhone}`);
     console.log(`OTP: ${otp}`);
     console.log(`Time: ${new Date().toISOString()}`);
     console.log("==================================");
     return true;
   }
 
-  const payload = {
-    to: [phone],
-    body: `Your OTP is ${otp}`
-  };
-
-  if (bulkSmsFrom) {
-    const cleanedFrom = bulkSmsFrom.replace(/[^A-Za-z0-9]/g, '');
-    if (cleanedFrom.length > 0 && cleanedFrom.length <= 11) {
-      payload.from = cleanedFrom;
-    } else {
-      console.log('BulkSMS from value is invalid, sending without from.');
-    }
-  }
+  const client = twilio(twilioAccountSid, twilioAuthToken);
 
   try {
-    await axios.post('https://api.bulksms.com/v1/messages', payload, {
-      auth: {
-        username: bulkSmsUsername,
-        password: bulkSmsPassword
-      },
-      headers: {
-        'Content-Type': 'application/json'
-      }
+    await client.messages.create({
+      to: normalizedPhone,
+      from: twilioFrom,
+      body: `Your OTP is ${otp}`
     });
     return true;
   } catch (error) {
-    console.log('BulkSMS send failed:', error.response?.data || error.message);
+    console.log('Twilio send failed:', error.message || error);
     return false;
   }
 };
