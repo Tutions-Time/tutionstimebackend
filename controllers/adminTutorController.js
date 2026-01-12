@@ -324,7 +324,9 @@ exports.getTutorJourney = async (req, res) => {
     // ----- Notes -----
     const noteSummary = { total: 0 };
     if (tutorProfileId) {
-      noteSummary.total = await Note.countDocuments({ tutorId: tutorProfileId });
+      noteSummary.total = await Note.countDocuments({
+        tutorId: { $in: [tutorProfileId, tutorObjId] },
+      });
     }
 
     // ----- Payments -----

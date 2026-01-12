@@ -53,11 +53,16 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    // Add user data to request
-    req.user = {
+    const nextUser = {
       id: verification.decoded.userId,
       role: user.role
     };
+    if (user.role === 'tutor') {
+      const TutorProfile = require('../models/TutorProfile');
+      const profile = await TutorProfile.findOne({ userId: verification.decoded.userId }).select('_id').lean();
+      if (profile?._id) nextUser.profileId = profile._id;
+    }
+    req.user = nextUser;
     
     next();
   } catch (error) {
