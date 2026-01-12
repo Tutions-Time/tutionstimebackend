@@ -372,6 +372,7 @@ exports.getTutorJourney = async (req, res) => {
           name: tutorProfile?.name || 'Unknown Tutor',
           email: tutorProfile?.email || '',
           phone: tutorUser.phone || '',
+          rating: tutorProfile?.rating || 0,
           status: tutorUser.status || 'active',
           joinedAt: tutorUser.createdAt,
         },
