@@ -116,6 +116,7 @@ exports.getAllTutors = async (req, res) => {
       email: t.profile?.email || '',
       phone: t.phone || '',
       profilePhoto: t.profile?.photoUrl || null,
+      profileComplete: !!t.isProfileComplete,
       kyc: t.profile?.kycStatus || 'pending',
       aadhaarUrls: t.profile?.aadhaarUrls || [],
       panUrl: t.profile?.panUrl || null,
