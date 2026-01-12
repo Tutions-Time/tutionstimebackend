@@ -1,4 +1,5 @@
 const tokenService = require('../services/tokenService');
+const User = require('../models/User');
 
 const authenticate = async (req, res, next) => {
   try {
@@ -27,10 +28,35 @@ const authenticate = async (req, res, next) => {
       });
     }
     
+    if (verification.decoded.role === 'admin') {
+      req.user = {
+        id: verification.decoded.userId,
+        role: 'admin'
+      };
+      return next();
+    }
+
+    const user = await User.findById(verification.decoded.userId).select('status role');
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found',
+        error: 'UNAUTHORIZED'
+      });
+    }
+
+    if (user.status === 'inactive') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is inactive. Please contact support.',
+        error: 'INACTIVE'
+      });
+    }
+
     // Add user data to request
     req.user = {
       id: verification.decoded.userId,
-      role: verification.decoded.role
+      role: user.role
     };
     
     next();

@@ -309,6 +309,13 @@ const verifyOTP = async (req, res) => {
       }
     }
 
+    if (user.status === 'inactive') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is inactive. Please contact support.'
+      });
+    }
+
     // Generate tokens
     const accessToken = tokenService.generateAccessToken(user._id, user.role);
     const refreshToken = tokenService.generateRefreshToken(user._id);
