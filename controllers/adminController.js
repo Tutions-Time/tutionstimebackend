@@ -288,17 +288,36 @@ const getUserById = async (req, res) => {
     }
     
     let profile;
+    let roleDetails = {};
+    let referralCodeStr = null;
+    const userObj = user.toObject ? user.toObject() : user;
+    
     if (user.role === 'student') {
-      profile = await StudentProfile.findOne({ userId });
+      profile = await StudentProfile.findOne({ userId }).lean();
     } else if (user.role === 'tutor') {
-      profile = await TutorProfile.findOne({ userId });
+      profile = await TutorProfile.findOne({ userId }).lean();
+      if (profile) {
+        roleDetails = {
+          kycStatus: profile.kycStatus || 'pending',
+          hasKyc: !!(profile.aadhaarUrls?.length || profile.panUrl),
+          isVerified: profile.status === 'approved',
+        };
+      }
     }
+    
+    try {
+      const ReferralCode = require('../models/ReferralCode');
+      const mine = await ReferralCode.findOne({ ownerUserId: userId }).lean();
+      referralCodeStr = mine?.code || null;
+    } catch (_) {}
     
     res.status(200).json({
       success: true,
       data: {
-        user,
-        profile: profile || null
+        user: { ...userObj, id: user._id },
+        profile: profile || null,
+        referralCode: referralCodeStr,
+        roleDetails
       }
     });
   } catch (error) {
