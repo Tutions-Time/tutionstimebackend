@@ -216,6 +216,16 @@ exports.getTutorJourney = async (req, res) => {
     const tutorProfile = await TutorProfile.findOne({ userId: id }).select('name email rating').lean();
     const tutorProfileId = tutorProfile?._id || null;
     const tutorObjId = new mongoose.Types.ObjectId(id);
+    const section = String(req.query.section || '').toLowerCase();
+    const defaultRecentLimit = 6;
+    const limitParam = String(req.query.limit || '').toLowerCase();
+    const parsedLimit = limitParam === 'all'
+      ? null
+      : Math.max(1, Number(limitParam) || defaultRecentLimit);
+    const getLimitFor = (name) => {
+      if (section && section !== name) return defaultRecentLimit;
+      return parsedLimit === null ? null : parsedLimit;
+    };
 
     const buildUserPhoneMap = async (userIds) => {
       if (!userIds.length) return new Map();
@@ -277,11 +287,12 @@ exports.getTutorJourney = async (req, res) => {
         demoStats[g._id] = g.count || 0;
       }
     });
-    const latestDemos = await Booking.find(demoMatch)
+    const demoLimit = getLimitFor('demos');
+    let demoQuery = Booking.find(demoMatch)
       .sort({ createdAt: -1 })
-      .limit(5)
-      .select('subject status preferredDate preferredTime regularClassId createdAt studentId note')
-      .lean();
+      .select('subject status preferredDate preferredTime regularClassId createdAt studentId note');
+    if (demoLimit) demoQuery = demoQuery.limit(demoLimit);
+    const latestDemos = await demoQuery.lean();
 
     const demoUserIds = latestDemos.map((d) => d.studentId).filter(Boolean);
     const demoPhoneMap = await buildUserPhoneMap(demoUserIds);
@@ -333,11 +344,12 @@ exports.getTutorJourney = async (req, res) => {
         }
       });
 
-      latestSessions = await Session.find({ tutorId: tutorProfileId })
+      const sessionLimit = getLimitFor('sessions');
+      let sessionQuery = Session.find({ tutorId: tutorProfileId })
         .sort({ startDateTime: -1 })
-        .limit(5)
-        .select('status startDateTime groupBatchId regularClassId createdAt studentId')
-        .lean();
+        .select('status startDateTime groupBatchId regularClassId createdAt studentId');
+      if (sessionLimit) sessionQuery = sessionQuery.limit(sessionLimit);
+      latestSessions = await sessionQuery.lean();
     }
 
     // ----- Regular classes -----
@@ -363,11 +375,12 @@ exports.getTutorJourney = async (req, res) => {
       batchSummary.active = await GroupBatch.countDocuments({ tutorId: tutorProfileId, status: 'active' });
       batchSummary.cancelled = await GroupBatch.countDocuments({ tutorId: tutorProfileId, status: 'cancelled' });
 
-      recentBatches = await GroupBatch.find({ tutorId: tutorProfileId })
+      const batchLimit = getLimitFor('batches');
+      let batchQuery = GroupBatch.find({ tutorId: tutorProfileId })
         .sort({ createdAt: -1 })
-        .limit(5)
-        .select('subject batchType status batchStartDate batchEndDate seatCap enrolled createdAt')
-        .lean();
+        .select('subject batchType status batchStartDate batchEndDate seatCap enrolled createdAt');
+      if (batchLimit) batchQuery = batchQuery.limit(batchLimit);
+      recentBatches = await batchQuery.lean();
     }
 
     // ----- Notes -----
@@ -407,21 +420,23 @@ exports.getTutorJourney = async (req, res) => {
         }
       });
 
-      recentPayments = await Payment.find({ tutorId: tutorProfileId })
+      const paymentLimit = getLimitFor('payments');
+      let paymentQuery = Payment.find({ tutorId: tutorProfileId })
         .sort({ createdAt: -1 })
-        .limit(5)
-        .select('type status amount currency refundTotal createdAt studentId regularClassId groupBatchId noteId notes')
-        .lean();
+        .select('type status amount currency refundTotal createdAt studentId regularClassId groupBatchId noteId notes');
+      if (paymentLimit) paymentQuery = paymentQuery.limit(paymentLimit);
+      recentPayments = await paymentQuery.lean();
     }
 
     // ----- Notes (details) -----
     let recentNotes = [];
     if (tutorProfileId) {
-      recentNotes = await Note.find({ tutorId: tutorProfileId })
+      const noteLimit = getLimitFor('notes');
+      let noteQuery = Note.find({ tutorId: tutorProfileId })
         .sort({ createdAt: -1 })
-        .limit(5)
-        .select('title subject classLevel board price createdAt')
-        .lean();
+        .select('title subject classLevel board price createdAt');
+      if (noteLimit) noteQuery = noteQuery.limit(noteLimit);
+      recentNotes = await noteQuery.lean();
     }
 
     // ----- Student lookups -----
