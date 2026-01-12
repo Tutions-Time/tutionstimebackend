@@ -45,10 +45,10 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    if (user.status === 'inactive') {
+    if (user.status === 'inactive' || user.status === 'suspended') {
       return res.status(403).json({
         success: false,
-        message: 'Your account is inactive. Please contact support.',
+        message: 'Your account is blocked. Please contact support.',
         error: 'INACTIVE'
       });
     }

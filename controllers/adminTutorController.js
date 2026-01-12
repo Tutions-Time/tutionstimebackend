@@ -115,6 +115,7 @@ exports.getAllTutors = async (req, res) => {
       name: t.profile?.name || 'Unknown Tutor',
       email: t.profile?.email || '',
       phone: t.phone || '',
+      profilePhoto: t.profile?.photoUrl || null,
       kyc: t.profile?.kycStatus || 'pending',
       aadhaarUrls: t.profile?.aadhaarUrls || [],
       panUrl: t.profile?.panUrl || null,
