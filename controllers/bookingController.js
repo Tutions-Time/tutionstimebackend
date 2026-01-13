@@ -1670,6 +1670,13 @@ exports.startRegularFromDemo = async (req, res) => {
       });
     }
 
+    if (!booking.demoFeedback || !booking.demoFeedback.createdAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Please submit demo feedback before subscribing",
+      });
+    }
+
     // Prevent duplicate regular class creation for same demo
     if (booking.regularClassId) {
       const rc = await RegularClass.findById(booking.regularClassId);
