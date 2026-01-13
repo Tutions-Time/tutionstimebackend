@@ -22,7 +22,7 @@ router.post(
  */
 router.post(
   '/tutor/demo',
-  checkRole(['tutor']),
+  checkRole(['student', 'tutor']),
   bookingController.createDemoBookingByTutor
 );
 
@@ -44,6 +44,16 @@ router.get(
   '/tutor',
   checkRole(['tutor']),
   bookingController.getTutorBookings
+);
+
+/**
+ * GET /api/bookings/:id
+ * Get booking by id (student/tutor/admin)
+ */
+router.get(
+  '/:id',
+  checkRole(['student', 'tutor', 'admin']),
+  bookingController.getBookingById
 );
 
 /**
@@ -76,6 +86,26 @@ router.post(
   '/:id/feedback',
   checkRole(['student']),
   bookingController.giveDemoFeedback
+);
+
+/**
+ * POST /api/bookings/:id/demo/join
+ * Record demo attendance join (student/tutor)
+ */
+router.post(
+  '/:id/demo/join',
+  checkRole(['student', 'tutor']),
+  bookingController.recordDemoJoin
+);
+
+/**
+ * POST /api/bookings/:id/demo/end
+ * Record demo meeting end (student/tutor)
+ */
+router.post(
+  '/:id/demo/end',
+  checkRole(['student', 'tutor']),
+  bookingController.recordDemoEnd
 );
 
 /**

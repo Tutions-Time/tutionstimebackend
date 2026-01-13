@@ -5,16 +5,21 @@ const RegularClass = require("../models/RegularClass");
 const Session = require("../models/Session");
 const Payment = require("../models/Payment");
 const User = require('../models/User');
+const DemoAttendance = require("../models/DemoAttendance");
 const notificationService = require('../services/notificationService');
 const emailTpl = require('../templates/emailTemplates');
 const AdminNotification = require('../models/AdminNotification');
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
 
-// Demo duration in minutes (business rule)
+// Demo duration in minutes (business rule for preferred end time)
 const DEMO_DURATION_MINUTES = 15;
-// Optional buffer after end time before auto-completing
-const AUTO_COMPLETE_BUFFER_MIN = 5;
+const DEMO_NO_SHOW_GRACE_MINUTES = 10;
+const DEMO_NO_SHOW_COMMENTS = [
+  "Student was not available for the demo.",
+  "Tutor did not join the demo.",
+  "Demo expired because no one joined.",
+];
 
 function toStartOfDay(dateStr) {
   const d = new Date(dateStr);
@@ -34,6 +39,75 @@ function addMinutesToTime(timeStr, minutesToAdd) {
     2,
     "0"
   )}`;
+}
+
+function getBookingStartDateTime(booking) {
+  if (!booking?.preferredDate || !booking?.preferredTime) return null;
+  const base = new Date(booking.preferredDate);
+  const [hStr, mStr] = String(booking.preferredTime).split(":");
+  const h = Number(hStr);
+  const m = Number(mStr);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return new Date(base.getFullYear(), base.getMonth(), base.getDate(), h, m, 0);
+}
+
+async function applyNoShowFeedback(booking, comment) {
+  if (booking.demoFeedback) return false;
+  booking.demoFeedback = {
+    teaching: 1,
+    communication: 1,
+    understanding: 1,
+    overall: 1,
+    comment,
+    likedTutor: false,
+    createdAt: new Date(),
+  };
+  await booking.save();
+  return true;
+}
+
+async function autoExpireNoShowIfNeeded(booking, attendance, options = {}) {
+  if (!booking) return false;
+  if (booking.status !== "confirmed") return false;
+
+  const startAt = getBookingStartDateTime(booking);
+  if (!startAt) return false;
+
+  const now = new Date();
+  const graceEndsAt = new Date(startAt.getTime() + DEMO_NO_SHOW_GRACE_MINUTES * 60 * 1000);
+  if (now < graceEndsAt) return false;
+
+  const studentJoined = !!attendance?.studentJoinedAt;
+  const tutorJoined = !!attendance?.tutorJoinedAt;
+  if (studentJoined && tutorJoined) return false;
+
+  let comment = "";
+  if (tutorJoined && !studentJoined) {
+    comment = "Student was not available for the demo.";
+  } else if (studentJoined && !tutorJoined) {
+    comment = "Tutor did not join the demo.";
+  } else if (options.allowNoJoin) {
+    comment = "Demo expired because no one joined.";
+  } else {
+    return false;
+  }
+
+  booking.status = "cancelled";
+  await booking.save();
+  await applyNoShowFeedback(booking, comment);
+
+  await createAdminNotification(
+    "Demo auto-expired (no show)",
+    comment,
+    {
+      bookingId: booking._id,
+      tutorId: booking.tutorId,
+      studentId: booking.studentId,
+      status: booking.status,
+    }
+  );
+
+  return true;
 }
 
 function normalizeArray(val) {
@@ -116,20 +190,6 @@ exports.createDemoBooking = async (req, res) => {
         success: false,
         message:
           "You already have an active demo. Complete it before booking another.",
-      });
-    }
-
-    const existingDemoForTutor = await Booking.findOne({
-      studentId: req.user.id,
-      tutorId,
-      type: "demo",
-      status: { $ne: "cancelled" },
-    });
-
-    if (existingDemoForTutor) {
-      return res.status(400).json({
-        success: false,
-        message: "You can book only one demo per tutor.",
       });
     }
 
@@ -332,20 +392,6 @@ exports.createDemoBookingByTutor = async (req, res) => {
       });
     }
 
-    const existingDemoForTutor = await Booking.findOne({
-      studentId,
-      tutorId,
-      type: "demo",
-      status: { $ne: "cancelled" },
-    });
-
-    if (existingDemoForTutor) {
-      return res.status(400).json({
-        success: false,
-        message: "Only one demo per student-tutor pair is allowed.",
-      });
-    }
-
     // Tutor profile (who is sending request)
     const tutorProfile = await TutorProfile.findOne({ userId: tutorId }).lean();
     if (!tutorProfile) {
@@ -519,6 +565,7 @@ exports.getStudentBookings = async (req, res) => {
         $or: [
           { "demoFeedback.likedTutor": { $ne: false } },
           { demoFeedback: { $exists: false } },
+          { "demoFeedback.comment": { $in: DEMO_NO_SHOW_COMMENTS } },
         ],
       };
     } else if (type === "regular") {
@@ -536,6 +583,7 @@ exports.getStudentBookings = async (req, res) => {
             $or: [
               { "demoFeedback.likedTutor": { $ne: false } },
               { demoFeedback: { $exists: false } },
+              { "demoFeedback.comment": { $in: DEMO_NO_SHOW_COMMENTS } },
             ],
           },
         ],
@@ -1090,7 +1138,6 @@ exports.addFeedback = async (req, res) => {
 
     booking.rating = rating;
     booking.feedback = feedback || "";
-    if (booking.status === "confirmed") booking.status = "completed";
 
     await booking.save();
 
@@ -1274,6 +1321,14 @@ exports.giveDemoFeedback = async (req, res) => {
       });
     }
 
+    const isValidScore = (n) => Number.isFinite(n) && n >= 1 && n <= 5;
+    if (![teaching, communication, understanding].every(isValidScore)) {
+      return res.status(400).json({
+        success: false,
+        message: "Scores must be between 1 and 5",
+      });
+    }
+
     const booking = await Booking.findById(bookingId);
     if (!booking) {
       return res
@@ -1295,10 +1350,10 @@ exports.giveDemoFeedback = async (req, res) => {
       });
     }
 
-    if (!["confirmed", "completed"].includes(booking.status)) {
+    if (booking.status !== "completed") {
       return res.status(400).json({
         success: false,
-        message: "Feedback allowed only after confirmed/completed demo",
+        message: "Feedback allowed only after completed demo",
       });
     }
 
@@ -1321,7 +1376,6 @@ exports.giveDemoFeedback = async (req, res) => {
       likedTutor: !!likedTutor,
       createdAt: new Date(),
     };
-    booking.status = "completed";
     await booking.save();
 
     // update tutor rating (TutorProfile is keyed by userId)
@@ -1941,65 +1995,193 @@ exports.startRegularFromDemo = async (req, res) => {
   }
 };
 
-/**
- * 🔁 Auto-complete past demos:
- * - type = 'demo'
- * - status = 'confirmed'
- * - now > preferredDate + preferredTime + DEMO_DURATION_MINUTES + buffer
- *
- * Call this from server.js using setInterval, e.g.:
- *   const { autoCompletePastDemos } = require('./controllers/bookingController');
- *   setInterval(autoCompletePastDemos, 5 * 60 * 1000);
- */
-exports.autoCompletePastDemos = async function autoCompletePastDemos() {
+const getOrCreateDemoAttendance = async (booking) => {
+  let attendance = await DemoAttendance.findOne({ bookingId: booking._id });
+  if (!attendance) {
+    attendance = await DemoAttendance.create({
+      bookingId: booking._id,
+      tutorId: booking.tutorId,
+      studentId: booking.studentId,
+    });
+  }
+  return attendance;
+};
+
+const attemptDemoCompletion = async (booking, attendance) => {
+  if (
+    attendance.studentJoinedAt &&
+    attendance.tutorJoinedAt &&
+    attendance.meetingEndedAt &&
+    attendance.studentJoinedAt <= attendance.meetingEndedAt &&
+    attendance.tutorJoinedAt <= attendance.meetingEndedAt
+  ) {
+    if (!attendance.completedAt) {
+      attendance.completedAt = new Date();
+      await attendance.save();
+    }
+    if (booking.status !== "completed") {
+      booking.status = "completed";
+      await booking.save();
+    }
+    return true;
+  }
+  return false;
+};
+
+exports.recordDemoJoin = async (req, res) => {
   try {
+    const { id } = req.params;
+
+    const booking = await Booking.findById(id);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    if (booking.type !== "demo") {
+      return res.status(400).json({ success: false, message: "Only demo bookings are allowed" });
+    }
+
+    const role = req.user.role;
+    if (!["student", "tutor"].includes(role)) {
+      return res.status(403).json({ success: false, message: "Not authorized" });
+    }
+
+    if (role === "student" && String(booking.studentId) !== String(req.user.id)) {
+      return res.status(403).json({ success: false, message: "Not authorized for this booking" });
+    }
+    if (role === "tutor" && String(booking.tutorId) !== String(req.user.id)) {
+      return res.status(403).json({ success: false, message: "Not authorized for this booking" });
+    }
+
+    const attendance = await getOrCreateDemoAttendance(booking);
     const now = new Date();
 
-    const confirmedDemos = await Booking.find({
-      type: "demo",
-      status: "confirmed",
-    });
-
-    if (!confirmedDemos.length) return;
-
-    for (const booking of confirmedDemos) {
-      if (!booking.preferredDate || !booking.preferredTime) continue;
-
-      // Build demo start DateTime
-      const [hourStr, minuteStr] = booking.preferredTime.split(":");
-      const startDateTime = new Date(booking.preferredDate);
-      startDateTime.setHours(
-        parseInt(hourStr, 10),
-        parseInt(minuteStr, 10),
-        0,
-        0
-      );
-
-      // Demo end = start + 15 min + buffer
-      const endDateTime = new Date(
-        startDateTime.getTime() +
-          (DEMO_DURATION_MINUTES + AUTO_COMPLETE_BUFFER_MIN) * 60 * 1000
-      );
-
-      // If current time is past endDateTime, auto-complete
-      if (now >= endDateTime) {
-        booking.status = "completed";
-        await booking.save();
-
-        await createAdminNotification(
-          "Demo auto-completed",
-          `Demo ${booking._id} auto-completed after scheduled end time`,
-          {
-            bookingId: booking._id,
-            tutorId: booking.tutorId,
-            studentId: booking.studentId,
-            preferredDate: booking.preferredDate,
-            preferredTime: booking.preferredTime,
-          }
-        );
-      }
+    if (role === "student" && !attendance.studentJoinedAt) {
+      attendance.studentJoinedAt = now;
     }
+    if (role === "tutor" && !attendance.tutorJoinedAt) {
+      attendance.tutorJoinedAt = now;
+    }
+
+    await attendance.save();
+    await attemptDemoCompletion(booking, attendance);
+    await autoExpireNoShowIfNeeded(booking, attendance);
+    return res.json({
+      success: true,
+      data: {
+        studentJoinedAt: attendance.studentJoinedAt,
+        tutorJoinedAt: attendance.tutorJoinedAt,
+        meetingEndedAt: attendance.meetingEndedAt,
+        completedAt: attendance.completedAt,
+      },
+    });
   } catch (err) {
-    console.error("autoCompletePastDemos error:", err.message);
+    console.error("recordDemoJoin error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
+exports.recordDemoEnd = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await Booking.findById(id);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    if (booking.type !== "demo") {
+      return res.status(400).json({ success: false, message: "Only demo bookings are allowed" });
+    }
+
+    const role = req.user.role;
+    if (!["student", "tutor"].includes(role)) {
+      return res.status(403).json({ success: false, message: "Not authorized" });
+    }
+
+    if (role === "student" && String(booking.studentId) !== String(req.user.id)) {
+      return res.status(403).json({ success: false, message: "Not authorized for this booking" });
+    }
+    if (role === "tutor" && String(booking.tutorId) !== String(req.user.id)) {
+      return res.status(403).json({ success: false, message: "Not authorized for this booking" });
+    }
+
+    const attendance = await getOrCreateDemoAttendance(booking);
+    if (!attendance.meetingEndedAt) {
+      attendance.meetingEndedAt = new Date();
+      await attendance.save();
+    }
+
+    const completed = await attemptDemoCompletion(booking, attendance);
+    await autoExpireNoShowIfNeeded(booking, attendance);
+
+    return res.json({
+      success: true,
+      data: {
+        studentJoinedAt: attendance.studentJoinedAt,
+        tutorJoinedAt: attendance.tutorJoinedAt,
+        meetingEndedAt: attendance.meetingEndedAt,
+        completedAt: attendance.completedAt,
+        completed,
+      },
+    });
+  } catch (err) {
+    console.error("recordDemoEnd error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.getBookingById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const booking = await Booking.findById(id).lean();
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    const role = req.user.role;
+    const userId = req.user.id;
+    if (role === "admin") {
+      return res.json({ success: true, data: booking });
+    }
+    if (role === "student" && String(booking.studentId) === String(userId)) {
+      return res.json({ success: true, data: booking });
+    }
+    if (role === "tutor" && String(booking.tutorId) === String(userId)) {
+      return res.json({ success: true, data: booking });
+    }
+
+    return res.status(403).json({ success: false, message: "Not authorized" });
+  } catch (err) {
+    console.error("getBookingById error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.autoExpireDemoNoShows = async () => {
+  const now = new Date();
+  const candidates = await Booking.find({
+    type: "demo",
+    status: "confirmed",
+    preferredDate: { $lte: now },
+  });
+
+  let checked = 0;
+  let expired = 0;
+
+  for (const booking of candidates) {
+    const startAt = getBookingStartDateTime(booking);
+    if (!startAt) continue;
+    if (now < new Date(startAt.getTime() + DEMO_NO_SHOW_GRACE_MINUTES * 60 * 1000)) {
+      continue;
+    }
+
+    const attendance = await DemoAttendance.findOne({ bookingId: booking._id });
+    checked += 1;
+    const didExpire = await autoExpireNoShowIfNeeded(booking, attendance, { allowNoJoin: true });
+    if (didExpire) expired += 1;
+  }
+
+  return { checked, expired };
+};
+

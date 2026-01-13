@@ -1,6 +1,7 @@
 const Session = require("../models/Session");
 const RegularClass = require("../models/RegularClass");
 const TutorProfile = require("../models/TutorProfile");
+const Booking = require("../models/Booking");
 
 function startOfDay(d) {
   const x = new Date(d);
@@ -142,22 +143,42 @@ exports.getTutorProgressSummary = async (req, res) => {
     // rating from profile
     const tp = await TutorProfile.findOne({ userId }).select("rating ratingCount").lean();
 
-    // rubric averages (only completed sessions with feedback)
+    // rubric averages (completed sessions + demo feedback in window)
     const withFeedback = completed.filter((s) => s.sessionFeedback && typeof s.sessionFeedback.teaching === "number");
+    const demoBookings = await Booking.find({
+      tutorId: userId,
+      "demoFeedback.createdAt": { $gte: from, $lt: to },
+    })
+      .select("demoFeedback createdAt")
+      .lean();
+
+    const sessionFeedbackItems = withFeedback.map((s) => ({
+      ...s.sessionFeedback,
+      createdAt: s.sessionFeedback.createdAt || s.startDateTime,
+    }));
+    const demoFeedbackItems = demoBookings
+      .map((b) =>
+        b.demoFeedback
+          ? { ...b.demoFeedback, createdAt: b.demoFeedback.createdAt || b.createdAt }
+          : null
+      )
+      .filter(Boolean);
+    const feedbackItems = [...sessionFeedbackItems, ...demoFeedbackItems];
+
     const avg = (arr, key) => {
-      const vals = arr.map((x) => x.sessionFeedback[key]).filter((n) => typeof n === "number");
+      const vals = arr.map((x) => x[key]).filter((n) => typeof n === "number");
       if (!vals.length) return 0;
       return vals.reduce((a, b) => a + b, 0) / vals.length;
     };
     const rubricAverages = {
-      teaching: avg(withFeedback, "teaching"),
-      communication: avg(withFeedback, "communication"),
-      understanding: avg(withFeedback, "understanding"),
+      teaching: avg(feedbackItems, "teaching"),
+      communication: avg(feedbackItems, "communication"),
+      understanding: avg(feedbackItems, "understanding"),
     };
 
     // recent comments (latest 10 in window)
-    const recentComments = withFeedback
-      .map((s) => ({ c: (s.sessionFeedback.comment || "").trim(), t: s.sessionFeedback.createdAt || s.startDateTime }))
+    const recentComments = feedbackItems
+      .map((s) => ({ c: (s.comment || "").trim(), t: s.createdAt }))
       .filter((x) => !!x.c)
       .sort((a, b) => new Date(b.t).getTime() - new Date(a.t).getTime())
       .slice(0, 10)
@@ -312,9 +333,28 @@ exports.getTutorWeeklySummary = async (req, res) => {
     const completed = sessions.filter((s) => s.status === "completed");
     const present = sessions.filter((s) => s.attendance === "present");
     const withFeedback = completed.filter((s) => s.sessionFeedback && s.sessionFeedback.createdAt);
+    const demoBookings = await Booking.find({
+      tutorId: userId,
+      "demoFeedback.createdAt": { $gte: from, $lt: to },
+    })
+      .select("demoFeedback createdAt")
+      .lean();
+
+    const sessionFeedbackItems = withFeedback.map((s) => ({
+      ...s.sessionFeedback,
+      createdAt: s.sessionFeedback.createdAt || s.startDateTime,
+    }));
+    const demoFeedbackItems = demoBookings
+      .map((b) =>
+        b.demoFeedback
+          ? { ...b.demoFeedback, createdAt: b.demoFeedback.createdAt || b.createdAt }
+          : null
+      )
+      .filter(Boolean);
+    const feedbackItems = [...sessionFeedbackItems, ...demoFeedbackItems];
 
     const avg = (arr, key) => {
-      const vals = arr.map((x) => x.sessionFeedback[key]).filter((n) => typeof n === "number");
+      const vals = arr.map((x) => x[key]).filter((n) => typeof n === "number");
       if (!vals.length) return 0;
       return vals.reduce((a, b) => a + b, 0) / vals.length;
     };
@@ -325,8 +365,8 @@ exports.getTutorWeeklySummary = async (req, res) => {
       recordings: completed.filter((s) => !!s.recordingUrl).length,
     };
 
-    const topComments = withFeedback
-      .map((s) => ({ c: (s.sessionFeedback.comment || "").trim(), t: s.sessionFeedback.createdAt || s.startDateTime }))
+    const topComments = feedbackItems
+      .map((s) => ({ c: (s.comment || "").trim(), t: s.createdAt }))
       .filter((x) => !!x.c)
       .sort((a, b) => new Date(b.t).getTime() - new Date(a.t).getTime())
       .slice(0, 10)
@@ -340,9 +380,9 @@ exports.getTutorWeeklySummary = async (req, res) => {
         completed: completed.length,
         attendanceConsistency: sessions.length ? Math.round((present.length / sessions.length) * 100) : 0,
         rubricAverages: {
-          teaching: avg(withFeedback, "teaching"),
-          communication: avg(withFeedback, "communication"),
-          understanding: avg(withFeedback, "understanding"),
+          teaching: avg(feedbackItems, "teaching"),
+          communication: avg(feedbackItems, "communication"),
+          understanding: avg(feedbackItems, "understanding"),
         },
         materials,
         topComments,

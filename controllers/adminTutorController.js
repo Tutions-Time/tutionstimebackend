@@ -290,7 +290,7 @@ exports.getTutorJourney = async (req, res) => {
     const demoLimit = getLimitFor('demos');
     let demoQuery = Booking.find(demoMatch)
       .sort({ createdAt: -1 })
-      .select('subject status preferredDate preferredTime regularClassId createdAt studentId note');
+      .select('subject status preferredDate preferredTime regularClassId createdAt studentId note demoFeedback');
     if (demoLimit) demoQuery = demoQuery.limit(demoLimit);
     const latestDemos = await demoQuery.lean();
 
