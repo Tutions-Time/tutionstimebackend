@@ -16,4 +16,10 @@ router.patch('/:id/read', adminNotificationController.markAsRead);
 // PATCH /api/admin/notifications/read-all
 router.patch('/read-all', adminNotificationController.markAllAsRead);
 
+// DELETE /api/admin/notifications/:id
+router.delete('/:id', adminNotificationController.deleteNotification);
+
+// DELETE /api/admin/notifications
+router.delete('/', adminNotificationController.deleteAll);
+
 module.exports = router;
