@@ -8,6 +8,7 @@ const User = require('../models/User');
 const notificationService = require('../services/notificationService');
 const emailTpl = require('../templates/emailTemplates');
 const AdminNotification = require('../models/AdminNotification');
+const wsHub = require('../services/wsHub');
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
 
@@ -54,7 +55,8 @@ function normalizeArray(val) {
 
 async function createAdminNotification(title, message, meta = {}) {
   try {
-    await AdminNotification.create({ title, message, meta });
+    const notif = await AdminNotification.create({ title, message, meta });
+    wsHub.sendToRole("admin", { type: "admin_notification", data: notif });
 
     if (ADMIN_EMAIL && notificationService?.sendEmail) {
       const html = `
@@ -116,20 +118,6 @@ exports.createDemoBooking = async (req, res) => {
         success: false,
         message:
           "You already have an active demo. Complete it before booking another.",
-      });
-    }
-
-    const existingDemoForTutor = await Booking.findOne({
-      studentId: req.user.id,
-      tutorId,
-      type: "demo",
-      status: { $ne: "cancelled" },
-    });
-
-    if (existingDemoForTutor) {
-      return res.status(400).json({
-        success: false,
-        message: "You can book only one demo per tutor.",
       });
     }
 

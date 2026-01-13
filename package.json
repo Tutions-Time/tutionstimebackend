@@ -28,6 +28,7 @@
     "nodemailer": "^7.0.10",
     "razorpay": "^2.9.6",
     "twilio": "^4.10.0",
+    "ws": "^8.18.0",
     "winston": "^3.8.2"
   },
   "devDependencies": {

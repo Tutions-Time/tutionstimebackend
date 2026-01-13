@@ -7,6 +7,7 @@ router.use(authenticate);
 
 router.get('/', ctrl.listMine);
 router.patch('/:id/read', ctrl.markRead);
+router.patch('/read-all', ctrl.markAllRead);
 router.get('/preferences', ctrl.getPreferences);
 router.put('/preferences', ctrl.updatePreferences);
 

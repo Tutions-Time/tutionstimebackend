@@ -23,6 +23,18 @@ exports.markRead = async (req, res) => {
   }
 };
 
+exports.markAllRead = async (req, res) => {
+  try {
+    await Notification.updateMany(
+      { userId: req.user.id, read: { $ne: true } },
+      { $set: { read: true } }
+    );
+    res.status(200).json({ success: true, message: 'All notifications marked as read' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to update notifications' });
+  }
+};
+
 exports.getPreferences = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('notificationPrefs').lean();
