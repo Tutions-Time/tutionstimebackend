@@ -1,4 +1,4 @@
-const twilio = require('twilio');
+const axios = require("axios");
 
 // Using a more persistent object for development
 let otpStore = {};
@@ -19,6 +19,15 @@ const normalizePhone = (phone) => {
   if (!trimmed) return trimmed;
   if (trimmed.startsWith("+")) return trimmed;
   return `+91${trimmed}`;
+};
+
+const normalizePhoneForMsg91 = (phone) => {
+  const raw = String(phone || "").trim();
+  if (!raw) return raw;
+  const digits = raw.replace(/[^\d]/g, "");
+  if (!digits) return "";
+  if (digits.length === 10) return `91${digits}`;
+  return digits;
 };
 
 const storeOTP = (phone, purpose) => {
@@ -106,35 +115,37 @@ const verifyOTP = (requestId, providedOTP, phone) => {
   };
 };
 
-// Twilio integration
-const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
-const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
-const twilioFrom = process.env.TWILIO_PHONE_NUMBER;
+// MSG91 OTP integration
+const msg91AuthKey = process.env.MSG91_AUTH_KEY;
+const msg91TemplateId = process.env.MSG91_OTP_TEMPLATE_ID;
+const msg91ApiBase = process.env.MSG91_API_BASE || "https://control.msg91.com/api";
 
 const sendOTP = async (phone, otp) => {
-  const normalizedPhone = normalizePhone(phone);
-  if (!twilioAccountSid || !twilioAuthToken || !twilioFrom) {
-    // Development fallback if Twilio credentials are not set
+  const normalizedPhone = normalizePhoneForMsg91(phone);
+  if (!msg91AuthKey || !msg91TemplateId) {
+    // Development fallback if MSG91 credentials are not set
     console.log("==================================");
-    console.log("Twilio credentials missing, logging OTP instead.");
-    console.log(`Phone: ${normalizedPhone}`);
+    console.log("MSG91 credentials missing, logging OTP instead.");
+    console.log(`Phone: ${normalizePhone(phone)}`);
     console.log(`OTP: ${otp}`);
     console.log(`Time: ${new Date().toISOString()}`);
     console.log("==================================");
     return true;
   }
 
-  const client = twilio(twilioAccountSid, twilioAuthToken);
-
   try {
-    await client.messages.create({
-      to: normalizedPhone,
-      from: twilioFrom,
-      body: `Your OTP is ${otp}`
+    await axios.get(`${msg91ApiBase}/v5/otp`, {
+      params: {
+        authkey: msg91AuthKey,
+        template_id: msg91TemplateId,
+        mobile: normalizedPhone,
+        otp,
+        otp_expiry: 5,
+      },
     });
     return true;
   } catch (error) {
-    console.log('Twilio send failed:', error.message || error);
+    console.log("MSG91 send failed:", error?.response?.data || error.message || error);
     return false;
   }
 };
