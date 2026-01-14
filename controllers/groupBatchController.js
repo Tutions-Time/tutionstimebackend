@@ -35,6 +35,13 @@ function normalizeDayList(input) {
   return [];
 }
 
+function addDays(date, days) {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
 function validateBatchInput(tp, body) {
   const errors = [];
   const todayStart = new Date();
@@ -189,7 +196,8 @@ exports.createBatch = async (req, res) => {
       published: payload.published,
       batchStartDate: payload.recurring.startDate,
       batchEndDate: payload.recurring.endDate,
-      enrollmentOpenAt: new Date(), // Open immediately
+      enrollmentOpenAt: payload.recurring.startDate,
+      enrollmentCloseAt: addDays(payload.recurring.startDate, 7),
     });
 
     // Generate sessions between start and end dates
@@ -359,6 +367,8 @@ exports.editBatch = async (req, res) => {
       };
       gb.batchStartDate = startDate;
       gb.batchEndDate = endDate;
+      gb.enrollmentOpenAt = startDate;
+      gb.enrollmentCloseAt = addDays(startDate, 7);
 
       const now = new Date();
       await Session.deleteMany({
