@@ -16,6 +16,8 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
 const DEMO_DURATION_MINUTES = 15;
 // Optional buffer after end time before auto-completing
 const AUTO_COMPLETE_BUFFER_MIN = 5;
+// Booking timezone offset (minutes), default IST
+const BOOKING_TZ_OFFSET_MIN = Number(process.env.BOOKING_TZ_OFFSET_MIN || 330);
 
 function toStartOfDay(dateStr) {
   const d = new Date(dateStr);
@@ -35,6 +37,25 @@ function addMinutesToTime(timeStr, minutesToAdd) {
     2,
     "0"
   )}`;
+}
+
+function getBookingStartDateTime(booking) {
+  if (!booking?.preferredDate || !booking?.preferredTime) return null;
+  const baseUtc = new Date(booking.preferredDate);
+  const [hourStr, minuteStr] = String(booking.preferredTime).split(":");
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+
+  const shifted = new Date(baseUtc.getTime() + BOOKING_TZ_OFFSET_MIN * 60000);
+  const year = shifted.getUTCFullYear();
+  const month = shifted.getUTCMonth();
+  const day = shifted.getUTCDate();
+  const utcMs =
+    Date.UTC(year, month, day, hour, minute, 0, 0) -
+    BOOKING_TZ_OFFSET_MIN * 60000;
+
+  return new Date(utcMs);
 }
 
 function normalizeArray(val) {
@@ -1960,15 +1981,9 @@ exports.autoCompletePastDemos = async function autoCompletePastDemos() {
     for (const booking of confirmedDemos) {
       if (!booking.preferredDate || !booking.preferredTime) continue;
 
-      // Build demo start DateTime
-      const [hourStr, minuteStr] = booking.preferredTime.split(":");
-      const startDateTime = new Date(booking.preferredDate);
-      startDateTime.setHours(
-        parseInt(hourStr, 10),
-        parseInt(minuteStr, 10),
-        0,
-        0
-      );
+      // Build demo start DateTime using booking timezone
+      const startDateTime = getBookingStartDateTime(booking);
+      if (!startDateTime) continue;
 
       // Demo end = start + 15 min + buffer
       const endDateTime = new Date(
