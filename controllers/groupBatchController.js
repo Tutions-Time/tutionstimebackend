@@ -23,13 +23,25 @@ function toDayName(d) {
   return map[new Date(d).getDay()];
 }
 
+function normalizeDayList(input) {
+  if (!input) return [];
+  if (Array.isArray(input)) return input.filter(Boolean);
+  if (typeof input === "string") {
+    return input
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
 function validateBatchInput(tp, body) {
   const errors = [];
-  const now = Date.now();
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
   const subjects = Array.isArray(tp.subjects) ? tp.subjects : [];
   const levels = Array.isArray(tp.classLevels) ? tp.classLevels : [];
   const boards = Array.isArray(tp.boards) ? tp.boards : [];
-  const availability = Array.isArray(tp.availability) ? tp.availability : [];
   const payload = {};
 
   const subject = String(body.subject || "").trim();
@@ -99,7 +111,7 @@ function validateBatchInput(tp, body) {
 
   // Start Date
   const startDate = new Date(body.startDate);
-  if (isNaN(startDate.getTime()) || startDate < now) {
+  if (isNaN(startDate.getTime()) || startDate < todayStart) {
     errors.push("Invalid startDate (must be future)");
   }
 
@@ -111,16 +123,15 @@ function validateBatchInput(tp, body) {
     errors.push("endDate must be on or after startDate");
   }
 
-  // Derive Recurring Days from Availability
-  // Filter availability dates that are on or after startDate
-  const futureAvailability = availability
-    .map(d => new Date(d))
-    .filter(d => !isNaN(d.getTime()) && d >= startDate);
-  
-  const uniqueDays = [...new Set(futureAvailability.map(d => toDayName(d)))];
-  
+  const rawDays =
+    normalizeDayList(body.recurringDays) || normalizeDayList(body.days);
+  const allowedDays = new Set(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
+  const uniqueDays = [
+    ...new Set(rawDays.filter((d) => allowedDays.has(d))),
+  ];
+
   if (uniqueDays.length === 0) {
-    errors.push("No available days found in profile on or after start date");
+    errors.push("Please select at least one weekday");
   }
 
   payload.scheduleType = "recurring";
@@ -132,7 +143,7 @@ function validateBatchInput(tp, body) {
     endDate: endDate
   };
   
-  // Remove fixedDates logic
+  // No fixedDates for recurring schedule
   payload.fixedDates = [];
 
   if (errors.length > 0) {
@@ -181,20 +192,13 @@ exports.createBatch = async (req, res) => {
       enrollmentOpenAt: new Date(), // Open immediately
     });
 
-    // Generate sessions for next 30 days
+    // Generate sessions between start and end dates
     const daysMap = { "Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6 };
     const targetDays = (gb.recurring.days || []).map(d => daysMap[d]);
     const [startHour, startMinute] = gb.recurring.time.split(":").map(Number);
     
     let current = new Date(gb.recurring.startDate);
-    const endLimit = new Date();
-    endLimit.setDate(endLimit.getDate() + 30);
-    if (gb.recurring?.endDate) {
-      const endDate = new Date(gb.recurring.endDate);
-      if (!isNaN(endDate.getTime()) && endDate < endLimit) {
-        endLimit.setTime(endDate.getTime());
-      }
-    }
+    const endLimit = new Date(gb.recurring.endDate);
     
     const sessions = [];
     while (current <= endLimit) {
@@ -235,19 +239,9 @@ exports.getCreateOptions = async (req, res) => {
     const levels = Array.isArray(tp.classLevels) ? tp.classLevels : [];
     const boards = Array.isArray(tp.boards) ? tp.boards : [];
     const boardsOut = boards;
-    const availability = Array.isArray(tp.availability) ? tp.availability : [];
-    
-    // Normalize "now" to start of today so we include today's dates
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-
-    const futureDates = availability
-      .map((x) => new Date(x))
-      .filter((d) => !isNaN(d.getTime()) && d.getTime() >= now.getTime())
-      .map((d) => d.toISOString());
     const batchTypes = ["revision", "normal class"];
     const scheduleTypes = ["recurring"];
-    res.json({ success: true, data: { subjects, levels, boards: boardsOut, availabilityDates: futureDates, batchTypes, scheduleTypes, monthlyRate: tp.monthlyRate } });
+    res.json({ success: true, data: { subjects, levels, boards: boardsOut, availabilityDates: [], batchTypes, scheduleTypes, monthlyRate: tp.monthlyRate } });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
@@ -288,6 +282,114 @@ exports.editBatch = async (req, res) => {
         }));
         if (sessions.length) await Session.insertMany(sessions);
       }
+    }
+
+    const hasRecurringChange =
+      update.startDate ||
+      update.endDate ||
+      update.classStartTime ||
+      update.classEndTime ||
+      update.recurringDays ||
+      update.days;
+
+    if (hasRecurringChange) {
+      const startDateRaw = update.startDate || gb.recurring?.startDate;
+      const endDateRaw = update.endDate || gb.recurring?.endDate;
+      const classStartTime = update.classStartTime || gb.recurring?.time;
+      const classEndTime = update.classEndTime || gb.recurring?.endTime;
+      const recurringDays =
+        normalizeDayList(update.recurringDays) ||
+        normalizeDayList(update.days) ||
+        gb.recurring?.days ||
+        [];
+
+      const startDate = new Date(startDateRaw);
+      const endDate = new Date(endDateRaw);
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      if (
+        !classStartTime ||
+        !classEndTime ||
+        !/^\d{1,2}:\d{2}$/.test(String(classStartTime)) ||
+        !/^\d{1,2}:\d{2}$/.test(String(classEndTime))
+      ) {
+        return res.status(422).json({
+          success: false,
+          message: "Validation failed",
+          errors: ["Invalid class time"],
+        });
+      }
+
+      if (
+        !Array.isArray(recurringDays) ||
+        recurringDays.length === 0
+      ) {
+        return res.status(422).json({
+          success: false,
+          message: "Validation failed",
+          errors: ["Please select at least one weekday"],
+        });
+      }
+
+      if (isNaN(startDate.getTime()) || startDate < todayStart) {
+        return res.status(422).json({
+          success: false,
+          message: "Validation failed",
+          errors: ["Invalid startDate (must be future)"],
+        });
+      }
+
+      if (isNaN(endDate.getTime()) || endDate < startDate) {
+        return res.status(422).json({
+          success: false,
+          message: "Validation failed",
+          errors: ["endDate must be on or after startDate"],
+        });
+      }
+
+      gb.scheduleType = "recurring";
+      gb.fixedDates = [];
+      gb.recurring = {
+        days: recurringDays,
+        time: String(classStartTime),
+        endTime: String(classEndTime),
+        startDate,
+        endDate,
+      };
+      gb.batchStartDate = startDate;
+      gb.batchEndDate = endDate;
+
+      const now = new Date();
+      await Session.deleteMany({
+        groupBatchId: gb._id,
+        startDateTime: { $gte: now },
+      });
+
+      const daysMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+      const targetDays = recurringDays.map((d) => daysMap[d]).filter((d) => d !== undefined);
+      const [startHour, startMinute] = String(classStartTime).split(":").map(Number);
+
+      let current = new Date(startDate);
+      const sessions = [];
+      while (current <= endDate) {
+        if (targetDays.includes(current.getDay())) {
+          const sessionDate = new Date(current);
+          sessionDate.setHours(startHour, startMinute, 0, 0);
+          if (sessionDate > now) {
+            sessions.push({
+              groupBatchId: gb._id,
+              tutorId: gb.tutorId,
+              startDateTime: sessionDate,
+              meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${sessions.length}-${Date.now()}`,
+              status: "scheduled",
+            });
+          }
+        }
+        current.setDate(current.getDate() + 1);
+      }
+
+      if (sessions.length) await Session.insertMany(sessions);
     }
 
     // Auto-sync: ensure a session exists for every fixed date (create missing)
