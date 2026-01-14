@@ -46,7 +46,7 @@ const bookingSchema = new mongoose.Schema(
     // Flow state
     status: {
       type: String,
-      enum: ['pending', 'confirmed', 'cancelled', 'completed'],
+      enum: ['pending', 'confirmed', 'cancelled', 'completed', 'expired'],
       default: 'pending',
     },
     type: { type: String, enum: ['demo', 'regular'], default: 'demo' },
@@ -56,6 +56,10 @@ const bookingSchema = new mongoose.Schema(
 
     // Structured demo feedback
     demoFeedback: feedbackSchema,
+
+    // Demo join tracking
+    studentJoinedAt: { type: Date, default: null },
+    tutorJoinedAt: { type: Date, default: null },
 
     // Link to regular class if upgraded
     regularClassId: {

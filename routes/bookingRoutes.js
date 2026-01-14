@@ -69,6 +69,26 @@ router.patch(
 );
 
 /**
+ * POST /api/bookings/:id/join
+ * Student joins demo meeting
+ */
+router.post(
+  '/:id/join',
+  checkRole(['student']),
+  bookingController.markStudentJoined
+);
+
+/**
+ * POST /api/bookings/:id/tutor-join
+ * Tutor joins demo meeting
+ */
+router.post(
+  '/:id/tutor-join',
+  checkRole(['tutor']),
+  bookingController.markTutorJoined
+);
+
+/**
  * POST /api/bookings/:id/feedback
  * Student gives structured demo feedback
  */
