@@ -359,7 +359,8 @@ exports.createDemoBooking = async (req, res) => {
 exports.createDemoBookingByTutor = async (req, res) => {
   try {
     const tutorId = req.user.id; // logged-in tutor
-    const { studentId, subject, date, time, note } = req.body;
+    const { studentId, subject, date, time, note, studentLearningMode } =
+      req.body;
     console.log("createDemoBookingByTutor req.body:", req.body);
 
     if (!studentId || !subject || !date || !time) {
@@ -477,10 +478,14 @@ exports.createDemoBookingByTutor = async (req, res) => {
     const preferredEndTime = addMinutesToTime(time, DEMO_DURATION_MINUTES);
 
     // ✅ Create booking – IMPORTANT mapping
+    const resolvedStudentLearningMode =
+      studentProfile?.learningMode || studentLearningMode || "";
+
     const booking = await Booking.create({
       studentId, // receiver
       tutorId, // sender
       subject,
+      studentLearningMode: resolvedStudentLearningMode,
       preferredDate,
       preferredTime: time,
       preferredEndTime, // 15 min demo end time
