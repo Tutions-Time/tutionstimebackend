@@ -92,6 +92,19 @@ const sendOTP = async (req, res) => {
     // Send OTP via SMS (mock in development)
     const sent = await otpService.sendOTP(phone, otp);
 
+    if (!sent) {
+      console.error('Send OTP Error: failed to send SMS', {
+        phone,
+        purpose,
+        requestId,
+        time: new Date().toISOString(),
+      });
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send OTP SMS. Please try again.',
+      });
+    }
+
     res.status(200).json({
       success: true,
       message: 'OTP sent successfully',

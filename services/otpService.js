@@ -22,6 +22,7 @@ const normalizePhone = (phone) => {
 };
 
 const normalizePhoneForMsg91 = (phone) => {
+  console.log()
   const raw = String(phone || "").trim();
   if (!raw) return raw;
   const digits = raw.replace(/[^\d]/g, "");
@@ -121,13 +122,12 @@ const msg91TemplateId = process.env.MSG91_OTP_TEMPLATE_ID;
 const msg91ApiBase = process.env.MSG91_API_BASE || "https://control.msg91.com/api";
 
 const sendOTP = async (phone, otp) => {
+  console,log("otp is sending")
   const normalizedPhone = normalizePhoneForMsg91(phone);
   if (!msg91AuthKey || !msg91TemplateId) {
-    // Development fallback if MSG91 credentials are not set
     console.log("==================================");
-    console.log("MSG91 credentials missing, logging OTP instead.");
-    console.log(`Phone: ${normalizePhone(phone)}`);
-    console.log(`OTP: ${otp}`);
+    console.log("MSG91 credentials missing, OTP will not be sent via SMS.");
+    console.log(`Phone (normalized): ${normalizePhone(phone)}`);
     console.log(`Time: ${new Date().toISOString()}`);
     console.log("==================================");
     return true;
@@ -145,7 +145,14 @@ const sendOTP = async (phone, otp) => {
     });
     return true;
   } catch (error) {
-    console.log("MSG91 send failed:", error?.response?.data || error.message || error);
+    console.log("==================================");
+    console.log("MSG91 OTP send failed");
+    console.log(`Phone (raw): ${phone}`);
+    console.log(`Phone (normalized for MSG91): ${normalizedPhone}`);
+    console.log(`Template ID: ${msg91TemplateId}`);
+    console.log("Error:", error?.response?.data || error.message || error);
+    console.log(`Time: ${new Date().toISOString()}`);
+    console.log("==================================");
     return false;
   }
 };
