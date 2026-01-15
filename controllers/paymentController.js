@@ -2655,6 +2655,11 @@ exports.getAdminRevenueTimeseries = async (req, res) => {
       { $group: { _id: bucketFmt, total: { $sum: "$amount" }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } },
     ]);
+    const groups = await Payment.aggregate([
+      { $match: { ...matchBase, type: "group" } },
+      { $group: { _id: bucketFmt, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ]);
     // Referral totals from wallet transactions (credits for referral rewards/bonuses)
     const Transaction = require("../models/Transaction");
     const refs = await Transaction.aggregate([
@@ -2663,32 +2668,46 @@ exports.getAdminRevenueTimeseries = async (req, res) => {
       { $sort: { _id: 1 } },
     ]);
     const seriesDates = new Set([...
-      subs.map((x) => x._id), ...notes.map((x) => x._id), ...refs.map((x) => x._id)
+      subs.map((x) => x._id),
+      ...notes.map((x) => x._id),
+      ...groups.map((x) => x._id),
+      ...refs.map((x) => x._id),
     ]);
     const commissionPercent = 25;
     const merged = Array.from(seriesDates).sort().map((d) => {
       const s = subs.find((x) => x._id === d);
       const n = notes.find((x) => x._id === d);
+      const g = groups.find((x) => x._id === d);
       const subTotal = s?.total || 0;
       const noteTotal = n?.total || 0;
+      const groupTotal = g?.total || 0;
       const refTotal = (refs.find((x) => x._id === d)?.total) || 0;
-      const commissionTotal = Math.round((subTotal * commissionPercent) / 100);
+      const commissionTotal = Math.round(((subTotal + noteTotal + groupTotal) * commissionPercent) / 100);
       return {
         date: d,
         subscriptionTotal: subTotal,
         subscriptionCount: s?.count || 0,
         noteTotal,
         noteCount: n?.count || 0,
+        groupTotal,
+        groupCount: g?.count || 0,
         referralTotal: refTotal,
         referralCount: (refs.find((x) => x._id === d)?.count) || 0,
         commissionTotal,
       };
     });
+    const refundAgg = await Payment.aggregate([
+      { $match: { createdAt: { $gte: start, $lte: end }, refundTotal: { $gt: 0 } } },
+      { $group: { _id: null, total: { $sum: "$refundTotal" } } },
+    ]);
+    const refundTotal = refundAgg?.[0]?.total || 0;
     const totals = {
       subscriptionTotal: merged.reduce((sum, x) => sum + x.subscriptionTotal, 0),
       noteTotal: merged.reduce((sum, x) => sum + x.noteTotal, 0),
+      groupTotal: merged.reduce((sum, x) => sum + (x.groupTotal || 0), 0),
       referralTotal: merged.reduce((sum, x) => sum + (x.referralTotal || 0), 0),
       commissionTotal: merged.reduce((sum, x) => sum + x.commissionTotal, 0),
+      refundTotal,
     };
     return res.json({ success: true, data: { series: merged, totals, period: { from: start, to: end } } });
   } catch (err) {
