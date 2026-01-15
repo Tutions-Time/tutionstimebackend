@@ -5,6 +5,7 @@ const Session = require('../models/Session');
 const Payment = require('../models/Payment');
 const AdminWallet = require('../models/AdminWallet');
 const RegularClass = require('../models/RegularClass');
+const Booking = require('../models/Booking');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
@@ -624,6 +625,74 @@ const listAdminSessions = async (req, res) => {
   }
 };
 
+const listAdminBookings = async (req, res) => {
+  try {
+    const { status, startDate, endDate, page = 1, limit = 50 } = req.query;
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Number(limit));
+    const skip = Math.max(0, (pageNum - 1) * limitNum);
+
+    const andClauses = [{ type: 'demo' }];
+    if (status) andClauses.push({ status });
+    if (startDate || endDate) {
+      const range = {};
+      if (startDate) range.$gte = new Date(startDate);
+      if (endDate) range.$lte = new Date(endDate);
+      andClauses.push({ preferredDate: range });
+    }
+    const filter = andClauses.length ? { $and: andClauses } : {};
+
+    const total = await Booking.countDocuments(filter);
+    const bookings = await Booking.find(filter)
+      .sort({ preferredDate: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .lean();
+
+    if (!bookings.length) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        pagination: { total: 0, page: pageNum, limit: limitNum, pages: 0 },
+      });
+    }
+
+    const studentUserIds = bookings.map((b) => b.studentId).filter(Boolean);
+    const tutorUserIds = bookings.map((b) => b.tutorId).filter(Boolean);
+
+    const [studentProfiles, tutorProfiles] = await Promise.all([
+      StudentProfile.find({ userId: { $in: studentUserIds } })
+        .select('userId name email')
+        .lean(),
+      TutorProfile.find({ userId: { $in: tutorUserIds } })
+        .select('userId name email')
+        .lean(),
+    ]);
+
+    const studentMap = new Map(studentProfiles.map((p) => [String(p.userId), p]));
+    const tutorMap = new Map(tutorProfiles.map((p) => [String(p.userId), p]));
+
+    const data = bookings.map((b) => ({
+      _id: b._id,
+      status: b.status,
+      subject: b.subject,
+      preferredDate: b.preferredDate,
+      preferredTime: b.preferredTime,
+      meetingLink: b.meetingLink,
+      student: studentMap.get(String(b.studentId)) || null,
+      tutor: tutorMap.get(String(b.tutorId)) || null,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
 module.exports = {
   getAllUsers,
   getUserById,
@@ -632,5 +701,6 @@ module.exports = {
   getDashboardStats,
   getDashboardActivity,
   listAdminSessions,
+  listAdminBookings,
   migrateUploadsToS3
 };

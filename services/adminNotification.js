@@ -1,12 +1,14 @@
 const AdminNotification = require("../models/AdminNotification");
-const notificationService = require("../services/notificationService");
+const notificationService = require("./notificationService");
+const wsHub = require("./wsHub");
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
 
 async function createAdminNotification(title, message, meta = {}) {
   try {
-    if (process.env.NODE_ENV === 'test') return;
-    await AdminNotification.create({ title, message, meta });
+    if (process.env.NODE_ENV === "test") return;
+    const notif = await AdminNotification.create({ title, message, meta });
+    wsHub.sendToRole("admin", { type: "admin_notification", data: notif });
 
     if (ADMIN_EMAIL && notificationService?.sendEmail) {
       const html = `
@@ -17,7 +19,7 @@ async function createAdminNotification(title, message, meta = {}) {
       await notificationService.sendEmail(ADMIN_EMAIL, title, html);
     }
   } catch (err) {
-    if (process.env.NODE_ENV !== 'test') {
+    if (process.env.NODE_ENV !== "test") {
       console.error("Error creating admin notification:", err);
     }
   }

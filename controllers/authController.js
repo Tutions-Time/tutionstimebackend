@@ -92,6 +92,19 @@ const sendOTP = async (req, res) => {
     // Send OTP via SMS (mock in development)
     const sent = await otpService.sendOTP(phone, otp);
 
+    if (!sent) {
+      console.error('Send OTP Error: failed to send SMS', {
+        phone,
+        purpose,
+        requestId,
+        time: new Date().toISOString(),
+      });
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send OTP SMS. Please try again.',
+      });
+    }
+
     res.status(200).json({
       success: true,
       message: 'OTP sent successfully',
@@ -307,6 +320,13 @@ const verifyOTP = async (req, res) => {
           message: 'User not found'
         });
       }
+    }
+
+    if (user.status === 'inactive' || user.status === 'suspended') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is blocked. Please contact support.'
+      });
     }
 
     // Generate tokens

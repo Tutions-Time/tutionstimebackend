@@ -1,4 +1,5 @@
 const tokenService = require('../services/tokenService');
+const User = require('../models/User');
 
 const authenticate = async (req, res, next) => {
   try {
@@ -27,11 +28,41 @@ const authenticate = async (req, res, next) => {
       });
     }
     
-    // Add user data to request
-    req.user = {
+    if (verification.decoded.role === 'admin') {
+      req.user = {
+        id: verification.decoded.userId,
+        role: 'admin'
+      };
+      return next();
+    }
+
+    const user = await User.findById(verification.decoded.userId).select('status role');
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found',
+        error: 'UNAUTHORIZED'
+      });
+    }
+
+    if (user.status === 'inactive' || user.status === 'suspended') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is blocked. Please contact support.',
+        error: 'INACTIVE'
+      });
+    }
+
+    const nextUser = {
       id: verification.decoded.userId,
-      role: verification.decoded.role
+      role: user.role
     };
+    if (user.role === 'tutor') {
+      const TutorProfile = require('../models/TutorProfile');
+      const profile = await TutorProfile.findOne({ userId: verification.decoded.userId }).select('_id').lean();
+      if (profile?._id) nextUser.profileId = profile._id;
+    }
+    req.user = nextUser;
     
     next();
   } catch (error) {

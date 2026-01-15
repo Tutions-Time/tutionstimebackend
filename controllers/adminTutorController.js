@@ -8,6 +8,7 @@ const GroupBatch = require('../models/GroupBatch');
 const RegularClass = require('../models/RegularClass');
 const Note = require('../models/Note');
 const Transaction = require('../models/Transaction');
+const StudentProfile = require('../models/StudentProfile');
 
 // ✅ Get all tutors with joined KYC and performance info
 exports.getAllTutors = async (req, res) => {
@@ -115,6 +116,8 @@ exports.getAllTutors = async (req, res) => {
       name: t.profile?.name || 'Unknown Tutor',
       email: t.profile?.email || '',
       phone: t.phone || '',
+      profilePhoto: t.profile?.photoUrl || null,
+      profileComplete: !!t.isProfileComplete,
       kyc: t.profile?.kycStatus || 'pending',
       aadhaarUrls: t.profile?.aadhaarUrls || [],
       panUrl: t.profile?.panUrl || null,
@@ -213,6 +216,51 @@ exports.getTutorJourney = async (req, res) => {
     const tutorProfile = await TutorProfile.findOne({ userId: id }).select('name email rating').lean();
     const tutorProfileId = tutorProfile?._id || null;
     const tutorObjId = new mongoose.Types.ObjectId(id);
+    const section = String(req.query.section || '').toLowerCase();
+    const defaultRecentLimit = 6;
+    const limitParam = String(req.query.limit || '').toLowerCase();
+    const parsedLimit = limitParam === 'all'
+      ? null
+      : Math.max(1, Number(limitParam) || defaultRecentLimit);
+    const getLimitFor = (name) => {
+      if (section && section !== name) return defaultRecentLimit;
+      return parsedLimit === null ? null : parsedLimit;
+    };
+
+    const buildUserPhoneMap = async (userIds) => {
+      if (!userIds.length) return new Map();
+      const users = await User.find({ _id: { $in: userIds } }).select('phone').lean();
+      return new Map(users.map((u) => [String(u._id), u.phone || '']));
+    };
+
+    const buildStudentProfileMapByUserId = async (userIds) => {
+      if (!userIds.length) return new Map();
+      const profiles = await StudentProfile.find({ userId: { $in: userIds } })
+        .select('userId name email photoUrl altPhone')
+        .lean();
+      return new Map(profiles.map((p) => [String(p.userId), p]));
+    };
+
+    const buildStudentProfileMapById = async (profileIds) => {
+      if (!profileIds.length) return new Map();
+      const profiles = await StudentProfile.find({ _id: { $in: profileIds } })
+        .select('userId name email photoUrl altPhone')
+        .lean();
+      return new Map(profiles.map((p) => [String(p._id), p]));
+    };
+
+    const formatStudentFromProfile = (profile, phoneMap) => {
+      if (!profile) return null;
+      return {
+        id: profile._id,
+        userId: profile.userId,
+        name: profile.name || 'Unknown Student',
+        email: profile.email || '',
+        phone: phoneMap.get(String(profile.userId)) || '',
+        photoUrl: profile.photoUrl || null,
+        altPhone: profile.altPhone || '',
+      };
+    };
 
     // ----- Demo bookings -----
     const demoMatch = { tutorId: tutorObjId, type: 'demo' };
@@ -239,11 +287,25 @@ exports.getTutorJourney = async (req, res) => {
         demoStats[g._id] = g.count || 0;
       }
     });
-    const latestDemos = await Booking.find(demoMatch)
+    const demoLimit = getLimitFor('demos');
+    let demoQuery = Booking.find(demoMatch)
       .sort({ createdAt: -1 })
-      .limit(5)
-      .select('subject status preferredDate preferredTime regularClassId createdAt')
-      .lean();
+      .select('subject status preferredDate preferredTime regularClassId createdAt studentId note demoFeedback');
+    if (demoLimit) demoQuery = demoQuery.limit(demoLimit);
+    const latestDemos = await demoQuery.lean();
+
+    const demoUserIds = latestDemos.map((d) => d.studentId).filter(Boolean);
+    const demoPhoneMap = await buildUserPhoneMap(demoUserIds);
+    const demoProfileMap = await buildStudentProfileMapByUserId(demoUserIds);
+    const demosWithStudents = latestDemos.map((d) => {
+      const profile = demoProfileMap.get(String(d.studentId));
+      return {
+        ...d,
+        student: profile
+          ? formatStudentFromProfile(profile, demoPhoneMap)
+          : { id: d.studentId, name: 'Unknown Student', phone: demoPhoneMap.get(String(d.studentId)) || '' },
+      };
+    });
 
     // ----- Sessions (1:1 and group) -----
     const sessionStats = {
@@ -282,11 +344,12 @@ exports.getTutorJourney = async (req, res) => {
         }
       });
 
-      latestSessions = await Session.find({ tutorId: tutorProfileId })
+      const sessionLimit = getLimitFor('sessions');
+      let sessionQuery = Session.find({ tutorId: tutorProfileId })
         .sort({ startDateTime: -1 })
-        .limit(5)
-        .select('status startDateTime groupBatchId regularClassId createdAt')
-        .lean();
+        .select('status startDateTime groupBatchId regularClassId createdAt studentId');
+      if (sessionLimit) sessionQuery = sessionQuery.limit(sessionLimit);
+      latestSessions = await sessionQuery.lean();
     }
 
     // ----- Regular classes -----
@@ -312,17 +375,20 @@ exports.getTutorJourney = async (req, res) => {
       batchSummary.active = await GroupBatch.countDocuments({ tutorId: tutorProfileId, status: 'active' });
       batchSummary.cancelled = await GroupBatch.countDocuments({ tutorId: tutorProfileId, status: 'cancelled' });
 
-      recentBatches = await GroupBatch.find({ tutorId: tutorProfileId })
+      const batchLimit = getLimitFor('batches');
+      let batchQuery = GroupBatch.find({ tutorId: tutorProfileId })
         .sort({ createdAt: -1 })
-        .limit(5)
-        .select('subject batchType status batchStartDate batchEndDate seatCap enrolled createdAt')
-        .lean();
+        .select('subject batchType status batchStartDate batchEndDate seatCap enrolled createdAt');
+      if (batchLimit) batchQuery = batchQuery.limit(batchLimit);
+      recentBatches = await batchQuery.lean();
     }
 
     // ----- Notes -----
     const noteSummary = { total: 0 };
     if (tutorProfileId) {
-      noteSummary.total = await Note.countDocuments({ tutorId: tutorProfileId });
+      noteSummary.total = await Note.countDocuments({
+        tutorId: { $in: [tutorProfileId, tutorObjId] },
+      });
     }
 
     // ----- Payments -----
@@ -354,12 +420,133 @@ exports.getTutorJourney = async (req, res) => {
         }
       });
 
-      recentPayments = await Payment.find({ tutorId: tutorProfileId })
+      const paymentLimit = getLimitFor('payments');
+      let paymentQuery = Payment.find({ tutorId: tutorProfileId })
         .sort({ createdAt: -1 })
-        .limit(5)
-        .select('type status amount currency refundTotal createdAt')
-        .lean();
+        .select('type status amount currency refundTotal createdAt studentId regularClassId groupBatchId noteId notes');
+      if (paymentLimit) paymentQuery = paymentQuery.limit(paymentLimit);
+      recentPayments = await paymentQuery.lean();
     }
+
+    // ----- Notes (details) -----
+    let recentNotes = [];
+    if (tutorProfileId) {
+      const noteLimit = getLimitFor('notes');
+      let noteQuery = Note.find({ tutorId: tutorProfileId })
+        .sort({ createdAt: -1 })
+        .select('title subject classLevel board price createdAt');
+      if (noteLimit) noteQuery = noteQuery.limit(noteLimit);
+      recentNotes = await noteQuery.lean();
+    }
+
+    // ----- Student lookups -----
+    const sessionStudentIds = latestSessions.map((s) => s.studentId).filter(Boolean);
+    const sessionStudentMap = await buildStudentProfileMapById(sessionStudentIds);
+    const sessionUserIds = Array.from(sessionStudentMap.values())
+      .map((p) => p.userId)
+      .filter(Boolean);
+    const sessionPhoneMap = await buildUserPhoneMap(sessionUserIds);
+
+    const batchIdsFromSessions = latestSessions.map((s) => s.groupBatchId).filter(Boolean);
+    const recentBatchIds = recentBatches.map((b) => b._id).filter(Boolean);
+    const allBatchIds = Array.from(new Set([...batchIdsFromSessions, ...recentBatchIds].map(String)));
+    const batchDetails = allBatchIds.length
+      ? await GroupBatch.find({ _id: { $in: allBatchIds } })
+          .select('subject batchType status batchStartDate batchEndDate seatCap enrolled')
+          .lean()
+      : [];
+    const batchMap = new Map(batchDetails.map((b) => [String(b._id), b]));
+    const batchStudentIds = batchDetails.flatMap((b) => b.enrolled || []);
+    const batchStudentMap = await buildStudentProfileMapById(batchStudentIds);
+    const batchUserIds = Array.from(batchStudentMap.values())
+      .map((p) => p.userId)
+      .filter(Boolean);
+    const batchPhoneMap = await buildUserPhoneMap(batchUserIds);
+
+    const enrichBatchStudents = (batch) => {
+      const students = (batch?.enrolled || [])
+        .map((id) => {
+          const profile = batchStudentMap.get(String(id));
+          return formatStudentFromProfile(profile, batchPhoneMap);
+        })
+        .filter(Boolean);
+      return {
+        id: batch?._id || null,
+        subject: batch?.subject || '',
+        batchType: batch?.batchType || '',
+        status: batch?.status || '',
+        batchStartDate: batch?.batchStartDate,
+        batchEndDate: batch?.batchEndDate,
+        seatCap: batch?.seatCap || 0,
+        enrolledCount: students.length,
+        students,
+      };
+    };
+
+    const sessionsWithStudents = latestSessions.map((s) => {
+      const studentProfile = s.studentId ? sessionStudentMap.get(String(s.studentId)) : null;
+      const student = formatStudentFromProfile(studentProfile, sessionPhoneMap);
+      const batch = s.groupBatchId ? batchMap.get(String(s.groupBatchId)) : null;
+      return {
+        ...s,
+        student,
+        batch: batch ? enrichBatchStudents(batch) : null,
+      };
+    });
+
+    const batchesWithStudents = recentBatches.map((b) => {
+      const batch = batchMap.get(String(b._id)) || b;
+      const info = enrichBatchStudents(batch);
+      return {
+        ...b,
+        enrolledCount: info.enrolledCount,
+        students: info.students,
+      };
+    });
+
+    const paymentStudentIds = recentPayments.map((p) => p.studentId).filter(Boolean);
+    const paymentStudentMap = await buildStudentProfileMapById(paymentStudentIds);
+    const paymentUserIds = Array.from(paymentStudentMap.values())
+      .map((p) => p.userId)
+      .filter(Boolean);
+    const paymentPhoneMap = await buildUserPhoneMap(paymentUserIds);
+
+    const paymentClassIds = recentPayments.map((p) => p.regularClassId).filter(Boolean);
+    const paymentBatchIds = recentPayments.map((p) => p.groupBatchId).filter(Boolean);
+    const paymentNoteIds = recentPayments.map((p) => p.noteId).filter(Boolean);
+
+    const [paymentClasses, paymentBatches, paymentNotes] = await Promise.all([
+      paymentClassIds.length
+        ? RegularClass.find({ _id: { $in: paymentClassIds } }).select('subject').lean()
+        : [],
+      paymentBatchIds.length
+        ? GroupBatch.find({ _id: { $in: paymentBatchIds } }).select('subject').lean()
+        : [],
+      paymentNoteIds.length ? Note.find({ _id: { $in: paymentNoteIds } }).select('title').lean() : [],
+    ]);
+
+    const classMap = new Map(paymentClasses.map((c) => [String(c._id), c]));
+    const paymentBatchMap = new Map(paymentBatches.map((b) => [String(b._id), b]));
+    const noteMap = new Map(paymentNotes.map((n) => [String(n._id), n]));
+
+    const paymentsWithStudents = recentPayments.map((p) => {
+      const studentProfile = p.studentId ? paymentStudentMap.get(String(p.studentId)) : null;
+      const student = formatStudentFromProfile(studentProfile, paymentPhoneMap);
+      const note = p.noteId ? noteMap.get(String(p.noteId)) : null;
+      const batch = p.groupBatchId ? paymentBatchMap.get(String(p.groupBatchId)) : null;
+      const klass = p.regularClassId ? classMap.get(String(p.regularClassId)) : null;
+      const reason =
+        (note && `Note: ${note.title}`) ||
+        (batch && `Batch: ${batch.subject}`) ||
+        (klass && `Class: ${klass.subject}`) ||
+        p.notes ||
+        '';
+      return {
+        ...p,
+        student,
+        reason,
+      };
+    });
 
     return res.status(200).json({
       success: true,
@@ -370,6 +557,7 @@ exports.getTutorJourney = async (req, res) => {
           name: tutorProfile?.name || 'Unknown Tutor',
           email: tutorProfile?.email || '',
           phone: tutorUser.phone || '',
+          rating: tutorProfile?.rating || 0,
           status: tutorUser.status || 'active',
           joinedAt: tutorUser.createdAt,
         },
@@ -380,10 +568,11 @@ exports.getTutorJourney = async (req, res) => {
         notes: noteSummary,
         payments: paymentSummary,
         recent: {
-          demos: latestDemos,
-          sessions: latestSessions,
-          batches: recentBatches,
-          payments: recentPayments,
+          demos: demosWithStudents,
+          sessions: sessionsWithStudents,
+          batches: batchesWithStudents,
+          payments: paymentsWithStudents,
+          notes: recentNotes,
         },
       },
     });

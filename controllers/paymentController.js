@@ -14,6 +14,21 @@ const ReferralCode = require("../models/ReferralCode");
 const ReferralUse = require("../models/ReferralUse");
 const Session = require("../models/Session");
 
+const HOLD_DAYS = Number(process.env.TUTOR_FUND_HOLD_DAYS || 30);
+const HOLD_MS = HOLD_DAYS * 24 * 60 * 60 * 1000;
+
+function computeReleaseDate(baseDate = new Date()) {
+  return new Date(baseDate.getTime() + HOLD_MS);
+}
+
+function scheduleFundRelease(payment, baseDate = new Date()) {
+  const releaseDate = computeReleaseDate(baseDate);
+  payment.releaseAt = releaseDate;
+  payment.fundReleaseDate = releaseDate;
+  payment.fundReleaseStatus = "pending";
+  payment.fundReleasedAt = null;
+}
+
 async function applyCouponIfValid({ code, type, amount, userId }) {
   if (!code) return { discount: 0, coupon: null };
   const c = await Coupon.findOne({ code });
@@ -343,8 +358,7 @@ exports.createSubscriptionOrder = async (req, res) => {
         } catch (_) {}
 
         const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
-        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-        paymentDoc.releaseAt = releaseAt;
+        scheduleFundRelease(paymentDoc, baseDate);
         paymentDoc.walletProcessed = true;
         await paymentDoc.save();
 
@@ -934,8 +948,7 @@ exports.razorpayWebhook = async (req, res) => {
 
             // Schedule release after 30 days of period end (or startDate)
             const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
-            const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-            payment.releaseAt = releaseAt;
+            scheduleFundRelease(payment, baseDate);
             payment.walletProcessed = true;
             await payment.save();
           }
@@ -1010,8 +1023,7 @@ exports.razorpayWebhook = async (req, res) => {
             });
 
             const baseDate = new Date();
-            const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-            payment.releaseAt = releaseAt;
+            scheduleFundRelease(payment, baseDate);
             payment.walletProcessed = true;
             await payment.save();
           }
@@ -1263,8 +1275,7 @@ exports.verifyPayment = async (req, res) => {
             });
 
             const baseDate = rc2.currentPeriodEnd || rc2.startDate || new Date();
-            const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-            payment.releaseAt = releaseAt;
+            scheduleFundRelease(payment, baseDate);
             payment.walletProcessed = true;
             await payment.save();
 
@@ -1357,8 +1368,7 @@ exports.verifyPayment = async (req, res) => {
 
           // 4) Schedule release and mark processed
           const baseDate = new Date();
-          const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-          payment.releaseAt = releaseAt;
+          scheduleFundRelease(payment, baseDate);
           payment.walletProcessed = true;
           await payment.save();
 
@@ -1547,8 +1557,7 @@ exports.verifyGroupPayment = async (req, res) => {
         });
 
         const baseDate = new Date();
-        const releaseAt = new Date(baseDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-        payment.releaseAt = releaseAt;
+        scheduleFundRelease(payment, baseDate);
         payment.walletProcessed = true;
         await payment.save();
 
@@ -1778,20 +1787,41 @@ exports.getTutorNoteHistory = async (req, res) => {
 };
 
 // Admin: combined payment history (subscription + note + group + payout) with pagination & filters
+const BASE_REVENUE_STATUSES = ["paid", "settled"];
+
+const buildPaymentDateFilter = ({ from, to }) => {
+  const q = {};
+  if (from || to) {
+    q.createdAt = {};
+    if (from) q.createdAt.$gte = new Date(from);
+    if (to) q.createdAt.$lte = new Date(to);
+  }
+  return q;
+};
+
+const computeAdminAmount = (payment) => {
+  const srcAmount = Number(payment.amount || 0);
+  if (!srcAmount) return 0;
+  if (["subscription", "note", "group"].includes(payment.type)) {
+    if (typeof payment.commissionAmount === "number") {
+      return Math.round(payment.commissionAmount);
+    }
+    return Math.round((srcAmount * 25) / 100);
+  }
+  return 0;
+};
+
 exports.listAllPaymentsHistory = async (req, res) => {
   try {
     const { from, to, status, type, page = 1, limit = 50, student, tutor } = req.query;
     const pageNum = Math.max(1, Number(page));
     const limitNum = Math.max(1, Number(limit));
 
+    const paymentStatusFilter = status ? status : { $in: BASE_REVENUE_STATUSES };
     const baseRange = (q = {}) => {
-      if (from || to) {
-        q.createdAt = {};
-        if (from) q.createdAt.$gte = new Date(from);
-        if (to) q.createdAt.$lte = new Date(to);
-      }
-      if (status) q.status = status;
-      return q;
+      const filter = { ...q, ...buildPaymentDateFilter({ from, to }) };
+      filter.status = paymentStatusFilter;
+      return filter;
     };
 
     const include = (t) => !type || type === t;
@@ -1834,7 +1864,10 @@ exports.listAllPaymentsHistory = async (req, res) => {
     // Referral transactions (credits to referrer or referred student)
     const Transaction = require("../models/Transaction");
     const refTxs = include("referral")
-      ? await Transaction.find(baseRange({ 'reference.type': 'referral' }))
+      ? await Transaction.find({
+          ...buildPaymentDateFilter({ from, to }),
+          'reference.type': 'referral'
+        })
           .sort({ createdAt: -1 })
           .populate({ path: 'userId', select: 'role' })
           .lean()
@@ -1874,25 +1907,37 @@ exports.listAllPaymentsHistory = async (req, res) => {
       return { couponCode: cm && cm[1] ? cm[1].trim() : "", couponDiscount: dm && dm[1] ? Number(dm[1]) : 0 };
     };
 
-    const toRow = (p, extra = {}) => ({
-      _id: p._id,
-      type: p.type,
-      amount: p.amount,
-      currency: p.currency,
-      status: p.status,
-      gateway: p.gateway,
-      gatewayOrderId: p.gatewayOrderId,
-      gatewayPaymentId: p.gatewayPaymentId,
-      createdAt: p.createdAt,
-      studentName: p.studentId?.name || "Student",
-      tutorName: p.tutorId?.name || "Tutor",
-      couponCode: (cuMap[String(p._id)]?.couponId?.code) || parseNotes(p.notes).couponCode || "",
-      couponDiscount: (cuMap[String(p._id)]?.amountDiscounted) ?? parseNotes(p.notes).couponDiscount ?? 0,
-      referralCode: ruMap[String(p._id)]?.referralCodeId?.code || "",
-      referralAmount: ruMap[String(p._id)]?.amountGranted || 0,
-      referralRewardGranted: Boolean(ruMap[String(p._id)]?.rewardGranted),
-      ...extra,
-    });
+    const toRow = (p, extra = {}) => {
+      const tutorNet = p.tutorNetAmount ?? Math.max(0, Number(p.amount || 0) - Number(p.commissionAmount || 0));
+      const releaseStatus = p.fundReleaseStatus || "pending";
+      const pendingReleaseAmount = releaseStatus !== "released" ? tutorNet : 0;
+      const adminAmount = computeAdminAmount(p);
+      return {
+        _id: p._id,
+        type: p.type,
+        amount: p.amount,
+        currency: p.currency,
+        status: p.status,
+        gateway: p.gateway,
+        gatewayOrderId: p.gatewayOrderId,
+        gatewayPaymentId: p.gatewayPaymentId,
+        createdAt: p.createdAt,
+        studentName: p.studentId?.name || "Student",
+        tutorName: p.tutorId?.name || "Tutor",
+        adminAmount,
+        couponCode: (cuMap[String(p._id)]?.couponId?.code) || parseNotes(p.notes).couponCode || "",
+        couponDiscount: (cuMap[String(p._id)]?.amountDiscounted) ?? parseNotes(p.notes).couponDiscount ?? 0,
+        referralCode: ruMap[String(p._id)]?.referralCodeId?.code || "",
+        referralAmount: ruMap[String(p._id)]?.amountGranted || 0,
+        referralRewardGranted: Boolean(ruMap[String(p._id)]?.rewardGranted),
+        tutorNetAmount: tutorNet,
+        fundReleaseStatus: releaseStatus,
+        fundReleaseDate: p.fundReleaseDate,
+        fundReleasedAt: p.fundReleasedAt,
+        pendingReleaseAmount,
+        ...extra,
+      };
+    };
 
     let mapSub = subs.map((p) => toRow(p, {
       subject: p.regularClassId?.subject || "",
@@ -1924,6 +1969,11 @@ exports.listAllPaymentsHistory = async (req, res) => {
       referralCode: (byReferrer[String(t.userId?._id || t.userId)]?.referralCodeId?.code) || (byReferred[String(t.userId?._id || t.userId)]?.referralCodeId?.code) || '',
       referralAmount: t.amount,
       referralRewardGranted: t.status === 'completed',
+      adminAmount: 0,
+      fundReleaseStatus: 'released',
+      fundReleaseDate: t.createdAt,
+      fundReleasedAt: t.createdAt,
+      pendingReleaseAmount: 0,
     }));
 
     const nameMatch = (n, q) => (q ? String(n || "").toLowerCase().includes(String(q).toLowerCase()) : true);
@@ -2655,6 +2705,11 @@ exports.getAdminRevenueTimeseries = async (req, res) => {
       { $group: { _id: bucketFmt, total: { $sum: "$amount" }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } },
     ]);
+    const groups = await Payment.aggregate([
+      { $match: { ...matchBase, type: "group" } },
+      { $group: { _id: bucketFmt, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ]);
     // Referral totals from wallet transactions (credits for referral rewards/bonuses)
     const Transaction = require("../models/Transaction");
     const refs = await Transaction.aggregate([
@@ -2663,32 +2718,52 @@ exports.getAdminRevenueTimeseries = async (req, res) => {
       { $sort: { _id: 1 } },
     ]);
     const seriesDates = new Set([...
-      subs.map((x) => x._id), ...notes.map((x) => x._id), ...refs.map((x) => x._id)
+      subs.map((x) => x._id),
+      ...notes.map((x) => x._id),
+      ...groups.map((x) => x._id),
+      ...refs.map((x) => x._id),
     ]);
     const commissionPercent = 25;
     const merged = Array.from(seriesDates).sort().map((d) => {
       const s = subs.find((x) => x._id === d);
       const n = notes.find((x) => x._id === d);
+      const g = groups.find((x) => x._id === d);
       const subTotal = s?.total || 0;
       const noteTotal = n?.total || 0;
+      const groupTotal = g?.total || 0;
       const refTotal = (refs.find((x) => x._id === d)?.total) || 0;
-      const commissionTotal = Math.round((subTotal * commissionPercent) / 100);
+      const commissionTotal = Math.round(((subTotal + noteTotal + groupTotal) * commissionPercent) / 100);
       return {
         date: d,
         subscriptionTotal: subTotal,
         subscriptionCount: s?.count || 0,
         noteTotal,
         noteCount: n?.count || 0,
+        groupTotal,
+        groupCount: g?.count || 0,
         referralTotal: refTotal,
         referralCount: (refs.find((x) => x._id === d)?.count) || 0,
         commissionTotal,
       };
     });
+    const refundAgg = await Payment.aggregate([
+      { $match: { createdAt: { $gte: start, $lte: end }, refundTotal: { $gt: 0 } } },
+      { $group: { _id: null, total: { $sum: "$refundTotal" } } },
+    ]);
+    const refundTotal = refundAgg?.[0]?.total || 0;
+    const pendingReleaseAgg = await Payment.aggregate([
+      { $match: { status: "paid", fundReleaseStatus: "pending" } },
+      { $group: { _id: null, total: { $sum: "$tutorNetAmount" } } },
+    ]);
+    const pendingReleaseTotal = pendingReleaseAgg?.[0]?.total || 0;
     const totals = {
       subscriptionTotal: merged.reduce((sum, x) => sum + x.subscriptionTotal, 0),
       noteTotal: merged.reduce((sum, x) => sum + x.noteTotal, 0),
+      groupTotal: merged.reduce((sum, x) => sum + (x.groupTotal || 0), 0),
       referralTotal: merged.reduce((sum, x) => sum + (x.referralTotal || 0), 0),
       commissionTotal: merged.reduce((sum, x) => sum + x.commissionTotal, 0),
+      refundTotal,
+      pendingReleaseTotal,
     };
     return res.json({ success: true, data: { series: merged, totals, period: { from: start, to: end } } });
   } catch (err) {

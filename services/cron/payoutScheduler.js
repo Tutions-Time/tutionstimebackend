@@ -60,7 +60,10 @@ async function runPayoutRelease() {
       const tutorUserIdSub = tpSub?.userId || sub.tutorId;
       await walletService.releasePendingToAvailable(tutorUserIdSub, "tutor", tutorNetAmount, "Payout released", { type: "payout", id: payout._id });
 
-      await Payment.updateOne({ _id: sub._id }, { payoutGenerated: true, payoutId: payout._id });
+      await Payment.updateOne(
+        { _id: sub._id },
+        { payoutGenerated: true, payoutId: payout._id, fundReleaseStatus: "released", fundReleasedAt: new Date() }
+      );
 
       await RegularClass.updateOne({ _id: sub.regularClassId }, { tutorPaymentStatus: "released" });
 
@@ -102,7 +105,10 @@ async function runPayoutRelease() {
       const tutorUserId = tp?.userId || np.tutorId;
       await walletService.releasePendingToAvailable(tutorUserId, "tutor", tutorNetAmount, "Payout released", { type: "payout", id: payout._id });
 
-      await Payment.updateOne({ _id: np._id }, { payoutGenerated: true, payoutId: payout._id });
+      await Payment.updateOne(
+        { _id: np._id },
+        { payoutGenerated: true, payoutId: payout._id, fundReleaseStatus: "released", fundReleasedAt: new Date() }
+      );
 
       await createAdminNotification(
         "Tutor payout auto-released",
@@ -142,7 +148,10 @@ async function runPayoutRelease() {
       const tutorUserId = tp?.userId || gp.tutorId;
       await walletService.releasePendingToAvailable(tutorUserId, "tutor", tutorNetAmount, "Payout released", { type: "payout", id: payout._id });
 
-      await Payment.updateOne({ _id: gp._id }, { payoutGenerated: true, payoutId: payout._id });
+      await Payment.updateOne(
+        { _id: gp._id },
+        { payoutGenerated: true, payoutId: payout._id, fundReleaseStatus: "released", fundReleasedAt: new Date() }
+      );
 
       await createAdminNotification(
         "Tutor payout auto-released",

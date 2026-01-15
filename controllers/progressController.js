@@ -155,9 +155,24 @@ exports.getTutorProgressSummary = async (req, res) => {
       understanding: avg(withFeedback, "understanding"),
     };
 
-    // recent comments (latest 10 in window)
-    const recentComments = withFeedback
-      .map((s) => ({ c: (s.sessionFeedback.comment || "").trim(), t: s.sessionFeedback.createdAt || s.startDateTime }))
+    const Booking = require("../models/Booking");
+    const demoBookings = await Booking.find({
+      tutorId: userId,
+      "demoFeedback.createdAt": { $gte: from, $lt: to },
+    })
+      .select("demoFeedback createdAt")
+      .lean();
+
+    const recentComments = [
+      ...withFeedback.map((s) => ({
+        c: (s.sessionFeedback.comment || "").trim(),
+        t: s.sessionFeedback.createdAt || s.startDateTime,
+      })),
+      ...demoBookings.map((b) => ({
+        c: (b.demoFeedback?.comment || "").trim(),
+        t: b.demoFeedback?.createdAt || b.createdAt,
+      })),
+    ]
       .filter((x) => !!x.c)
       .sort((a, b) => new Date(b.t).getTime() - new Date(a.t).getTime())
       .slice(0, 10)

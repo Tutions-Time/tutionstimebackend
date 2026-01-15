@@ -1,27 +1,24 @@
-require('dotenv').config();
-const nodemailer = require('nodemailer');
-const axios = require('axios');
-const Notification = require('../models/Notification');
-const DeviceToken = require('../models/DeviceToken');
-const User = require('../models/User');
-const StudentProfile = require('../models/StudentProfile');
-const TutorProfile = require('../models/TutorProfile');
+require("dotenv").config();
+const nodemailer = require("nodemailer");
+const axios = require("axios");
+const Notification = require("../models/Notification");
+const DeviceToken = require("../models/DeviceToken");
+const User = require("../models/User");
+const StudentProfile = require("../models/StudentProfile");
+const TutorProfile = require("../models/TutorProfile");
+const wsHub = require("./wsHub");
 
-// --- In-App Notification (optional) ---
 exports.createInApp = async (userId, title, body, meta = {}) => {
   try {
-    await Notification.create({ userId, title, body, meta });
+    const notif = await Notification.create({ userId, title, body, meta });
+    wsHub.sendToUser(userId, { type: "notification", data: notif });
   } catch (e) {
-    console.error('❌ createInApp error:', e.message);
+    console.error("createInApp error:", e.message);
   }
 };
 
-// --- Gmail-only Transporter ---
-// console.log('📨 Using Gmail SMTP for emails');
-    // console.log('✅ .env loaded, SMTP_USER =', process.env.SMTP_USER);
-
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
+  host: process.env.SMTP_HOST || "smtp.gmail.com",
   port: Number(process.env.SMTP_PORT) || 465,
   secure: true,
   auth: {
@@ -30,44 +27,39 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// --- Send Email Function ---
 exports.sendEmail = async (to, subject, text, html = null) => {
-  if (!transporter) return console.error('❌ No transporter configured');
-  if (!to) return console.warn('⚠️ Missing recipient email');
-
-  // console.log('📧 Preparing to send email:', { to, subject });
+  if (!transporter) return console.error("No transporter configured");
+  if (!to) return console.warn("Missing recipient email");
 
   try {
     const mailOptions = {
-      from: process.env.FROM_EMAIL || 'TuitionTime <no-reply@tuitiontime.com>',
+      from: process.env.FROM_EMAIL || "TuitionTime <no-reply@tuitiontime.com>",
       to,
       subject,
       text,
-      html: html || `<p>${text.replace(/\n/g, '<br/>')}</p>`,
+      html: html || `<p>${text.replace(/\n/g, "<br/>")}</p>`,
     };
 
     const info = await transporter.sendMail(mailOptions);
-    // console.log(`✅ Email sent successfully to ${to}: ${info.messageId}`);
     return info;
   } catch (err) {
-    console.error('❌ Email send failed:', err.message);
+    console.error("Email send failed:", err.message);
   }
 };
 
-// --- SMS Placeholder (optional) ---
 exports.sendSMS = async (to, text) => {
-  console.log('📱 SMS =>', { to, text });
+  console.log("SMS =>", { to, text });
 };
 
 async function resolveEmailForUser(userId) {
   try {
     const user = await User.findById(userId).lean();
-    if (user?.role === 'student') {
-      const sp = await StudentProfile.findOne({ userId }).select('email').lean();
+    if (user?.role === "student") {
+      const sp = await StudentProfile.findOne({ userId }).select("email").lean();
       return sp?.email || null;
     }
-    if (user?.role === 'tutor') {
-      const tp = await TutorProfile.findOne({ userId }).select('email').lean();
+    if (user?.role === "tutor") {
+      const tp = await TutorProfile.findOne({ userId }).select("email").lean();
       return tp?.email || null;
     }
     return null;
@@ -83,26 +75,27 @@ async function sendPushToUser(userId, title, body, meta = {}) {
 
     const serverKey = process.env.FCM_SERVER_KEY;
     if (!serverKey) return;
-    const registrationIds = tokens.map(t => String(t.token));
+    const registrationIds = tokens.map((t) => String(t.token));
     const payload = {
       registration_ids: registrationIds,
       notification: { title, body },
       data: meta || {},
     };
-    await axios.post('https://fcm.googleapis.com/fcm/send', payload, {
+    await axios.post("https://fcm.googleapis.com/fcm/send", payload, {
       headers: { Authorization: `key=${serverKey}` },
     });
   } catch (e) {
-    console.error('push send error:', e.message);
+    console.error("push send error:", e.message);
   }
 }
 
 exports.notifyUser = async (userId, title, body, meta = {}) => {
   try {
-    const user = await User.findById(userId).select('notificationPrefs role').lean();
+    const user = await User.findById(userId).select("notificationPrefs role").lean();
     const prefs = user?.notificationPrefs || { email: true, push: true, inapp: true };
     if (prefs.inapp) {
-      await Notification.create({ userId, title, body, meta });
+      const notif = await Notification.create({ userId, title, body, meta });
+      wsHub.sendToUser(userId, { type: "notification", data: notif });
     }
     if (prefs.email) {
       const email = await resolveEmailForUser(userId);
@@ -114,6 +107,6 @@ exports.notifyUser = async (userId, title, body, meta = {}) => {
       await sendPushToUser(userId, title, body, meta);
     }
   } catch (e) {
-    console.error('notifyUser error:', e.message);
+    console.error("notifyUser error:", e.message);
   }
 };

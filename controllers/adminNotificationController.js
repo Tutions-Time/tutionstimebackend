@@ -68,3 +68,44 @@ exports.markAllAsRead = async (req, res) => {
     });
   }
 };
+
+// DELETE /api/admin/notifications/:id
+exports.deleteNotification = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const notif = await AdminNotification.findByIdAndDelete(id);
+    if (!notif) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found',
+      });
+    }
+    res.status(200).json({
+      success: true,
+      message: 'Notification deleted',
+    });
+  } catch (err) {
+    console.error('deleteNotification error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete notification',
+    });
+  }
+};
+
+// DELETE /api/admin/notifications
+exports.deleteAll = async (_req, res) => {
+  try {
+    await AdminNotification.deleteMany({});
+    res.status(200).json({
+      success: true,
+      message: 'All notifications deleted',
+    });
+  } catch (err) {
+    console.error('deleteAll error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete notifications',
+    });
+  }
+};
