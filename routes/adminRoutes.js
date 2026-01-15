@@ -34,6 +34,7 @@ router.put('/tutors/:id/kyc',  adminTutorController.updateKycStatus);
 // ✅ Update tutor account status (active / suspended)
 router.put('/tutors/:id/status',  adminTutorController.updateTutorStatus);
 router.get('/bookings/:id', getBookingByIdForAdmin);
+router.get('/bookings', adminController.listAdminBookings);
 
 router.get('/dashboard/stats', adminController.getDashboardStats);
 router.get('/dashboard/activity', adminController.getDashboardActivity);
