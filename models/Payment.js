@@ -57,11 +57,14 @@ const paymentSchema = new mongoose.Schema(
   },
 
   // Payout tracking for subscriptions
-  payoutGenerated: { type: Boolean, default: false },
-  payoutId: { type: mongoose.Schema.Types.ObjectId, ref: "Payment" },
-  releaseAt: { type: Date },
+    payoutGenerated: { type: Boolean, default: false },
+    payoutId: { type: mongoose.Schema.Types.ObjectId, ref: "Payment" },
+    releaseAt: { type: Date },
+    fundReleaseStatus: { type: String, enum: ["pending", "released"], default: "pending" },
+    fundReleaseDate: { type: Date },
+    fundReleasedAt: { type: Date },
 
-  walletProcessed: { type: Boolean, default: false },
+    walletProcessed: { type: Boolean, default: false },
 
     notes: { type: String },
     refundTotal: { type: Number, default: 0 },
