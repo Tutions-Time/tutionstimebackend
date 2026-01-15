@@ -62,6 +62,30 @@ function getBookingStartDateTime(booking) {
   return new Date(utcMs);
 }
 
+function getBookingEndDateTime(booking) {
+  if (!booking?.preferredDate) return null;
+  const targetTime = booking.preferredEndTime || null;
+  if (targetTime) {
+    const [hourStr, minuteStr] = String(targetTime).split(":");
+    const hour = Number(hourStr);
+    const minute = Number(minuteStr);
+    if (Number.isFinite(hour) && Number.isFinite(minute)) {
+      const baseUtc = new Date(booking.preferredDate);
+      const shifted = new Date(baseUtc.getTime() + BOOKING_TZ_OFFSET_MIN * 60000);
+      const year = shifted.getUTCFullYear();
+      const month = shifted.getUTCMonth();
+      const day = shifted.getUTCDate();
+      const utcMs =
+        Date.UTC(year, month, day, hour, minute, 0, 0) -
+        BOOKING_TZ_OFFSET_MIN * 60000;
+      return new Date(utcMs);
+    }
+  }
+  const start = getBookingStartDateTime(booking);
+  if (!start) return null;
+  return minutesAfter(start, DEMO_DURATION_MINUTES);
+}
+
 function normalizeArray(val) {
   if (!val) return [];
   if (Array.isArray(val)) return val.filter(Boolean);
@@ -1244,7 +1268,6 @@ exports.addFeedback = async (req, res) => {
 
     booking.rating = rating;
     booking.feedback = feedback || "";
-    if (booking.status === "confirmed") booking.status = "completed";
 
     await booking.save();
 
@@ -1475,7 +1498,6 @@ exports.giveDemoFeedback = async (req, res) => {
       likedTutor: !!likedTutor,
       createdAt: new Date(),
     };
-    booking.status = "completed";
     await booking.save();
 
     // update tutor rating (TutorProfile is keyed by userId)
@@ -2156,8 +2178,13 @@ exports.autoCompletePastDemos = async function autoCompletePastDemos() {
             new Date(booking.tutorJoinedAt).getTime()
           )
         );
-        const base = latestJoin.getTime() < startDateTime.getTime() ? startDateTime : latestJoin;
-        const completeAt = minutesAfter(base, DEMO_COMPLETE_AFTER_JOIN_MIN);
+        const preferredEndDateTime = getBookingEndDateTime(booking);
+        const base = preferredEndDateTime
+          ? preferredEndDateTime
+          : latestJoin.getTime() < startDateTime.getTime()
+          ? startDateTime
+          : latestJoin;
+        const completeAt = minutesAfter(base, AUTO_COMPLETE_BUFFER_MIN);
         if (now >= completeAt) {
           booking.status = "completed";
           await booking.save();
