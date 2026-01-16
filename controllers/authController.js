@@ -89,8 +89,8 @@ const sendOTP = async (req, res) => {
     // Generate and store OTP
     const { otp, requestId, expiresAt } = otpService.storeOTP(phone, purpose);
 
-    // Send OTP via SMS (mock in development)
-    const sent = await otpService.sendOTP(phone, otp);
+    // Send OTP via SMS
+    const sent = await otpService.sendOTP(phone, otp, requestId);
 
     if (!sent) {
       console.error('Send OTP Error: failed to send SMS', {
