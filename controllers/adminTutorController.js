@@ -345,11 +345,32 @@ exports.getTutorJourney = async (req, res) => {
       });
 
       const sessionLimit = getLimitFor('sessions');
-      let sessionQuery = Session.find({ tutorId: tutorProfileId })
+      let oneToOneLimit = sessionLimit === null ? null : Math.max(1, Math.ceil((sessionLimit || 6) / 2));
+      let batchLimit =
+        sessionLimit === null
+          ? null
+          : Math.max(1, (sessionLimit || 6) - oneToOneLimit);
+
+      const oneToOneQuery = Session.find({
+        tutorId: tutorProfileId,
+        groupBatchId: { $in: [null, undefined] },
+      })
         .sort({ startDateTime: -1 })
         .select('status startDateTime groupBatchId regularClassId createdAt studentId');
-      if (sessionLimit) sessionQuery = sessionQuery.limit(sessionLimit);
-      latestSessions = await sessionQuery.lean();
+      if (oneToOneLimit) oneToOneQuery.limit(oneToOneLimit);
+      const batchQuery = Session.find({
+        tutorId: tutorProfileId,
+        groupBatchId: { $ne: null },
+      })
+        .sort({ startDateTime: -1 })
+        .select('status startDateTime groupBatchId regularClassId createdAt studentId');
+      if (batchLimit) batchQuery.limit(batchLimit);
+
+      const [oneToOneSessions, batchSessions] = await Promise.all([
+        oneToOneQuery.lean(),
+        batchQuery.lean(),
+      ]);
+      latestSessions = [...oneToOneSessions, ...batchSessions];
     }
 
     // ----- Regular classes -----

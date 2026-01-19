@@ -1964,7 +1964,7 @@ exports.listAllPaymentsHistory = async (req, res) => {
         gatewayOrderId: p.gatewayOrderId,
         gatewayPaymentId: p.gatewayPaymentId,
         createdAt: p.createdAt,
-        studentName: p.studentId?.name || "Student",
+        studentName: p.studentId?.name || "Students",
         tutorName: p.tutorId?.name || "Tutor",
         adminAmount,
         couponCode: (cuMap[String(p._id)]?.couponId?.code) || parseNotes(p.notes).couponCode || "",

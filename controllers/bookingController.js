@@ -1999,12 +1999,22 @@ exports.startRegularFromDemo = async (req, res) => {
     // planType = billingType (your schema supports these values)
     const planType = billingType;
 
+    const studentProfileDoc = await StudentProfile.findOne({
+      userId: booking.studentId,
+    })
+      .select("_id")
+      .lean();
+    const studentProfileId = studentProfileDoc?._id || booking.studentId;
+    console.log("Student Profile ID:", studentProfileId);
+
     // -------------------------------
     // 3️⃣ Tutor profile + availability
     // -------------------------------
     const tutorProfile = await TutorProfile.findOne({
       userId: booking.tutorId,
     }).lean();
+    const tutorProfileId = tutorProfile?._id || booking.tutorId;
+    console.log("Tutor Profile ID:", tutorProfileId);
 
     if (!tutorProfile) {
       return res.status(404).json({
@@ -2055,8 +2065,8 @@ exports.startRegularFromDemo = async (req, res) => {
     // 5️⃣ Create Regular Class
     // -------------------------------
     const rc = await RegularClass.create({
-      studentId: booking.studentId,
-      tutorId: booking.tutorId,
+      studentId: studentProfileId,
+      tutorId: tutorProfileId,
       subject: booking.subject,
       planType,
       classCount: billingType === "hourly" ? Number(numberOfClasses) : null, // 🔥 store class count
@@ -2080,8 +2090,8 @@ exports.startRegularFromDemo = async (req, res) => {
     // -------------------------------
     const payment = await Payment.create({
       regularClassId: rc._id,
-      studentId: booking.studentId,
-      tutorId: booking.tutorId,
+      studentId: studentProfileId,
+      tutorId: tutorProfileId,
       type: "subscription",
       amount: totalAmountINR,
       currency: "INR",
