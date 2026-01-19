@@ -448,7 +448,7 @@ exports.createDemoBookingByTutor = async (req, res) => {
       studentId,
       tutorId,
       type: "demo",
-      status: { $ne: "cancelled" },
+      status: { $in: ["pending", "confirmed"] },
     });
 
     if (existingDemoForTutor) {
