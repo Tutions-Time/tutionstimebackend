@@ -3,6 +3,7 @@ const razorpay = require("../services/payments/razorpay");
 const Payment = require("../models/Payment");
 const RegularClass = require("../models/RegularClass");
 const TutorProfile = require("../models/TutorProfile");
+const StudentProfileModel = require("../models/StudentProfile");
 const Note = require("../models/Note");
 const { createAdminNotification } = require("../services/adminNotification");
 const walletService = require("../services/payments/walletService");
@@ -27,6 +28,12 @@ function scheduleFundRelease(payment, baseDate = new Date()) {
   payment.fundReleaseDate = releaseDate;
   payment.fundReleaseStatus = "pending";
   payment.fundReleasedAt = null;
+}
+
+async function resolveProfileName(model, id, fallback) {
+  if (!id) return fallback;
+  const doc = await model.findById(id).select("name").lean();
+  return doc?.name || fallback;
 }
 
 async function applyCouponIfValid({ code, type, amount, userId }) {
@@ -968,9 +975,19 @@ exports.razorpayWebhook = async (req, res) => {
         } catch (_) {}
       }
 
+      const studentNameForNotif = await resolveProfileName(
+        StudentProfileModel,
+        (rc && rc.studentId) || payment.studentId,
+        "Student"
+      );
+      const tutorNameForNotif = await resolveProfileName(
+        TutorProfile,
+        (rc && rc.tutorId) || payment.tutorId,
+        "Tutor"
+      );
       await createAdminNotification(
         "Subscription payment received",
-        `Payment ${payment._id} captured`,
+        `Subscription payment captured for ${studentNameForNotif} (Tutor: ${tutorNameForNotif})`,
         {
           paymentId: payment._id,
           regularClassId: payment.regularClassId,
@@ -1403,9 +1420,19 @@ exports.verifyPayment = async (req, res) => {
       }
     }
 
+    const studentNameForNotif = await resolveProfileName(
+      StudentProfileModel,
+      payment.studentId,
+      "Student"
+    );
+    const tutorNameForNotif = await resolveProfileName(
+      TutorProfile,
+      payment.tutorId,
+      "Tutor"
+    );
     await createAdminNotification(
       payment.type === "note" ? "Note purchase verified" : "Subscription payment verified",
-      `Payment ${payment._id} verified via client callback`,
+      `Payment for ${studentNameForNotif} (Tutor: ${tutorNameForNotif}) verified via client callback`,
       {
         paymentId: payment._id,
         regularClassId: payment.regularClassId,
@@ -1500,7 +1527,7 @@ exports.verifyGroupPayment = async (req, res) => {
 
     await createAdminNotification(
       "Group batch payment verified",
-      `Payment ${payment._id} verified and enrollment finalized`,
+      `Payment for ${sp?.name || "Student"} verified and enrollment finalized`,
       { paymentId: payment._id, batchId: gb._id, studentId: sp._id }
     );
     try {
