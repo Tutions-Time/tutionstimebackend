@@ -22,7 +22,6 @@ const normalizePhone = (phone) => {
 };
 
 const normalizePhoneForMsg91 = (phone) => {
-  console.log()
   const raw = String(phone || "").trim();
   if (!raw) return raw;
   const digits = raw.replace(/[^\d]/g, "");
@@ -121,12 +120,20 @@ const msg91AuthKey = process.env.MSG91_AUTH_KEY;
 const msg91TemplateId = process.env.MSG91_OTP_TEMPLATE_ID;
 const msg91ApiBase = process.env.MSG91_API_BASE || "https://control.msg91.com/api";
 
-const sendOTP = async (phone, otp) => {
-  console,log("otp is sending")
+const sendOTP = async (phone, otp, requestId) => {
   const normalizedPhone = normalizePhoneForMsg91(phone);
+  console.log("otp is sending via MSG91", {
+    phone: normalizePhone(phone),
+    normalizedPhone,
+    time: new Date().toISOString(),
+  });
+
   if (!msg91AuthKey || !msg91TemplateId) {
     console.log("==================================");
-    console.log("MSG91 credentials missing, OTP will not be sent via SMS.");
+    console.log("MSG91 credentials missing. OTP SMS was not sent.", {
+      hasAuthKey: !!msg91AuthKey,
+      hasTemplateId: !!msg91TemplateId,
+    });
     console.log(`Phone (normalized): ${normalizePhone(phone)}`);
     console.log(`Time: ${new Date().toISOString()}`);
     console.log("==================================");
@@ -134,7 +141,7 @@ const sendOTP = async (phone, otp) => {
   }
 
   try {
-    await axios.get(`${msg91ApiBase}/v5/otp`, {
+    const response = await axios.get(`${msg91ApiBase}/v5/otp`, {
       params: {
         authkey: msg91AuthKey,
         template_id: msg91TemplateId,
@@ -143,16 +150,42 @@ const sendOTP = async (phone, otp) => {
         otp_expiry: 5,
       },
     });
-    return true;
+
+    const status = response?.status;
+    const data = response?.data;
+    const msg91ReqId = data?.request_id;
+
+    console.log("MSG91 OTP send response", {
+      status,
+      type: data?.type,
+      message: data?.message,
+    });
+    if (msg91ReqId) {
+      console.log("MSG91 request_id", msg91ReqId);
+    }
+    if (requestId && otpStore[requestId]) {
+      otpStore[requestId].msg91RequestId = msg91ReqId || null;
+      saveOTPStore();
+    }
+
+    return status >= 200 && status < 300;
   } catch (error) {
     console.log("==================================");
     console.log("MSG91 OTP send failed");
     console.log(`Phone (raw): ${phone}`);
     console.log(`Phone (normalized for MSG91): ${normalizedPhone}`);
-    console.log(`Template ID: ${msg91TemplateId}`);
-    console.log("Error:", error?.response?.data || error.message || error);
+    console.log(`Template ID present:`, !!msg91TemplateId);
+    console.log(
+      "Error:",
+      error?.response?.data || error.message || error
+    );
     console.log(`Time: ${new Date().toISOString()}`);
     console.log("==================================");
+    if (requestId && otpStore[requestId]) {
+      otpStore[requestId].msg91Error =
+        error?.response?.data || error.message || String(error);
+      saveOTPStore();
+    }
     return false;
   }
 };

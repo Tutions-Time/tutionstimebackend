@@ -236,15 +236,35 @@ exports.giveSessionFeedback = async (req, res) => {
     const sp = await StudentProfile.findOne({ userId }).select("_id");
     const studentProfileId = sp?._id || userId;
 
+    const allowedStudentIds = new Set();
+    allowedStudentIds.add(String(userId));
+    if (studentProfileId) {
+      allowedStudentIds.add(String(studentProfileId));
+    }
+
+    const deny = () => {
+      return res
+        .status(403)
+        .json({ success: false, message: "Not authorized for this session" });
+    };
+
     let authorized = false;
     if (session.groupBatchId) {
-      const gb = await GroupBatch.findById(session.groupBatchId).select("enrolled");
-      authorized = !!gb && (gb.enrolled || []).some((s) => String(s) === String(studentProfileId));
+      const gb = await GroupBatch.findById(session.groupBatchId)
+        .select("enrolled");
+      authorized =
+        !!gb &&
+        (gb.enrolled || []).some((s) => allowedStudentIds.has(String(s)));
+      if (!authorized) return deny();
     } else if (session.regularClassId) {
-      authorized = String(session.regularClassId.studentId) === String(studentProfileId);
+      if (allowedStudentIds.has(String(session.regularClassId.studentId))) {
+        authorized = true;
+      } else {
+        return deny();
+      }
     }
     if (!authorized) {
-      return res.status(403).json({ success: false, message: "Not authorized for this session" });
+      return deny();
     }
 
     if (session.status !== "completed") {

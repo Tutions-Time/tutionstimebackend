@@ -165,6 +165,42 @@ ${JSON.stringify(meta, null, 2)}
   }
 }
 
+async function completeDemoIfReady(booking, context) {
+  if (
+    !booking ||
+    booking.type !== "demo" ||
+    !booking.studentJoinedAt ||
+    !booking.tutorJoinedAt ||
+    booking.status === "completed" ||
+    ["cancelled", "expired"].includes(booking.status)
+  ) {
+    return false;
+  }
+
+  booking.status = "completed";
+  await booking.save();
+  console.log("Demo completed", {
+    bookingId: String(booking._id),
+    studentJoinedAt: booking.studentJoinedAt,
+    tutorJoinedAt: booking.tutorJoinedAt,
+    context,
+  });
+
+  await createAdminNotification(
+    "Demo completed",
+    `Demo ${booking._id} completed ${context}`,
+    {
+      bookingId: booking._id,
+      tutorId: booking.tutorId,
+      studentId: booking.studentId,
+      preferredDate: booking.preferredDate,
+      preferredTime: booking.preferredTime,
+    }
+  );
+
+  return true;
+}
+
 /**
  * Student-initiated demo booking
  * POST /api/bookings/demo
@@ -977,6 +1013,7 @@ exports.markStudentJoined = async (req, res) => {
         bookingId: id,
         studentJoinedAt: booking.studentJoinedAt,
       });
+      await completeDemoIfReady(booking, "after student joined");
     }
 
     return res.json({ success: true, meetingLink: booking.meetingLink });
@@ -1018,6 +1055,7 @@ exports.markTutorJoined = async (req, res) => {
         bookingId: id,
         tutorJoinedAt: booking.tutorJoinedAt,
       });
+      await completeDemoIfReady(booking, "after tutor joined");
     }
 
     return res.json({ success: true, meetingLink: booking.meetingLink });
@@ -2186,24 +2224,7 @@ exports.autoCompletePastDemos = async function autoCompletePastDemos() {
           : latestJoin;
         const completeAt = minutesAfter(base, AUTO_COMPLETE_BUFFER_MIN);
         if (now >= completeAt) {
-          booking.status = "completed";
-          await booking.save();
-          console.log("Demo completed", {
-            bookingId: String(booking._id),
-            studentJoinedAt: booking.studentJoinedAt,
-            tutorJoinedAt: booking.tutorJoinedAt,
-          });
-          await createAdminNotification(
-            "Demo completed",
-            `Demo ${booking._id} completed after both joined`,
-            {
-              bookingId: booking._id,
-              tutorId: booking.tutorId,
-              studentId: booking.studentId,
-              preferredDate: booking.preferredDate,
-              preferredTime: booking.preferredTime,
-            }
-          );
+          await completeDemoIfReady(booking, "auto-complete");
         }
       }
     }

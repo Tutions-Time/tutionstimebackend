@@ -3,6 +3,7 @@ const razorpay = require("../services/payments/razorpay");
 const Payment = require("../models/Payment");
 const RegularClass = require("../models/RegularClass");
 const TutorProfile = require("../models/TutorProfile");
+const StudentProfileModel = require("../models/StudentProfile");
 const Note = require("../models/Note");
 const { createAdminNotification } = require("../services/adminNotification");
 const walletService = require("../services/payments/walletService");
@@ -27,6 +28,24 @@ function scheduleFundRelease(payment, baseDate = new Date()) {
   payment.fundReleaseDate = releaseDate;
   payment.fundReleaseStatus = "pending";
   payment.fundReleasedAt = null;
+}
+
+const DEFAULT_COMMISSION_PERCENT = 25;
+
+function applyCommissionFields(payment, amount, percent = DEFAULT_COMMISSION_PERCENT) {
+  const value = Number(amount || 0);
+  const commissionAmount = (value * percent) / 100;
+  const tutorNetAmount = Math.max(0, value - commissionAmount);
+  payment.commissionPercent = percent;
+  payment.commissionAmount = commissionAmount;
+  payment.tutorNetAmount = tutorNetAmount;
+  return { commissionAmount, tutorNetAmount };
+}
+
+async function resolveProfileName(model, id, fallback) {
+  if (!id) return fallback;
+  const doc = await model.findById(id).select("name").lean();
+  return doc?.name || fallback;
 }
 
 async function applyCouponIfValid({ code, type, amount, userId }) {
@@ -968,9 +987,19 @@ exports.razorpayWebhook = async (req, res) => {
         } catch (_) {}
       }
 
+      const studentNameForNotif = await resolveProfileName(
+        StudentProfileModel,
+        (rc && rc.studentId) || payment.studentId,
+        "Student"
+      );
+      const tutorNameForNotif = await resolveProfileName(
+        TutorProfile,
+        (rc && rc.tutorId) || payment.tutorId,
+        "Tutor"
+      );
       await createAdminNotification(
         "Subscription payment received",
-        `Payment ${payment._id} captured`,
+        `Subscription payment captured for ${studentNameForNotif} (Tutor: ${tutorNameForNotif})`,
         {
           paymentId: payment._id,
           regularClassId: payment.regularClassId,
@@ -1232,9 +1261,10 @@ exports.verifyPayment = async (req, res) => {
       try {
         if (!payment.walletProcessed) {
           const amount = payment.amount || 0;
-          const commissionPercent = 25;
-          const commissionAmount = (amount * commissionPercent) / 100;
-          const tutorNetAmount = amount - commissionAmount;
+          const { commissionAmount, tutorNetAmount } = applyCommissionFields(
+            payment,
+            amount
+          );
 
           // Admin receives full amount and holds tutor's share
           await walletService.adminCredit(amount, "Subscription payment verified", { type: "booking", id: payment.regularClassId });
@@ -1331,9 +1361,10 @@ exports.verifyPayment = async (req, res) => {
       try {
         if (!payment.walletProcessed) {
           const amount = payment.amount || Number(note.price) || 0;
-          const commissionPercent = 25;
-          const commissionAmount = (amount * commissionPercent) / 100;
-          const tutorNetAmount = amount - commissionAmount;
+          const { commissionAmount, tutorNetAmount } = applyCommissionFields(
+            payment,
+            amount
+          );
 
           // 1) Admin receives amount and holds tutor share
           await walletService.adminCredit(amount, "Note purchase verified", { type: "note", id: nId });
@@ -1403,9 +1434,19 @@ exports.verifyPayment = async (req, res) => {
       }
     }
 
+    const studentNameForNotif = await resolveProfileName(
+      StudentProfileModel,
+      payment.studentId,
+      "Student"
+    );
+    const tutorNameForNotif = await resolveProfileName(
+      TutorProfile,
+      payment.tutorId,
+      "Tutor"
+    );
     await createAdminNotification(
       payment.type === "note" ? "Note purchase verified" : "Subscription payment verified",
-      `Payment ${payment._id} verified via client callback`,
+      `Payment for ${studentNameForNotif} (Tutor: ${tutorNameForNotif}) verified via client callback`,
       {
         paymentId: payment._id,
         regularClassId: payment.regularClassId,
@@ -1500,7 +1541,7 @@ exports.verifyGroupPayment = async (req, res) => {
 
     await createAdminNotification(
       "Group batch payment verified",
-      `Payment ${payment._id} verified and enrollment finalized`,
+      `Payment for ${sp?.name || "Student"} verified and enrollment finalized`,
       { paymentId: payment._id, batchId: gb._id, studentId: sp._id }
     );
     try {
@@ -1804,9 +1845,9 @@ const computeAdminAmount = (payment) => {
   if (!srcAmount) return 0;
   if (["subscription", "note", "group"].includes(payment.type)) {
     if (typeof payment.commissionAmount === "number") {
-      return Math.round(payment.commissionAmount);
+      return payment.commissionAmount;
     }
-    return Math.round((srcAmount * 25) / 100);
+    return srcAmount * 0.25;
   }
   return 0;
 };
@@ -1908,10 +1949,11 @@ exports.listAllPaymentsHistory = async (req, res) => {
     };
 
     const toRow = (p, extra = {}) => {
-      const tutorNet = p.tutorNetAmount ?? Math.max(0, Number(p.amount || 0) - Number(p.commissionAmount || 0));
+      const adminAmount = computeAdminAmount(p);
+      const tutorNet =
+        p.tutorNetAmount ?? Math.max(0, Number(p.amount || 0) - adminAmount);
       const releaseStatus = p.fundReleaseStatus || "pending";
       const pendingReleaseAmount = releaseStatus !== "released" ? tutorNet : 0;
-      const adminAmount = computeAdminAmount(p);
       return {
         _id: p._id,
         type: p.type,
@@ -1935,6 +1977,7 @@ exports.listAllPaymentsHistory = async (req, res) => {
         fundReleaseDate: p.fundReleaseDate,
         fundReleasedAt: p.fundReleasedAt,
         pendingReleaseAmount,
+        refundAmount: Number(p.refundTotal || 0),
         ...extra,
       };
     };
@@ -1974,6 +2017,7 @@ exports.listAllPaymentsHistory = async (req, res) => {
       fundReleaseDate: t.createdAt,
       fundReleasedAt: t.createdAt,
       pendingReleaseAmount: 0,
+      refundAmount: 0,
     }));
 
     const nameMatch = (n, q) => (q ? String(n || "").toLowerCase().includes(String(q).toLowerCase()) : true);

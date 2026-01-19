@@ -22,19 +22,30 @@ async function findSessionForTutor(sessionId, tutorUserId, role = "tutor") {
   if (role !== "admin") {
     const TutorProfile = require("../models/TutorProfile");
     const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id");
-    const tutorProfileId = tp?._id || tutorUserId;
+    const profileId = tp?._id;
+    const allowedTutorIds = new Set();
+    allowedTutorIds.add(String(tutorUserId));
+    if (profileId) {
+      allowedTutorIds.add(String(profileId));
+    }
 
-    if (session.groupBatchId) {
-      const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId");
-      if (!gb || String(gb.tutorId) !== String(tutorProfileId)) {
-        const err = new Error("Not authorized to modify this session");
-        err.statusCode = 403;
-        throw err;
-      }
-    } else if (String(session.regularClassId.tutorId) !== String(tutorProfileId)) {
+    const reject = () => {
       const err = new Error("Not authorized to modify this session");
       err.statusCode = 403;
       throw err;
+    };
+
+    if (session.groupBatchId) {
+      const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId");
+      const tutorId = gb?.tutorId;
+      if (!gb || !allowedTutorIds.has(String(tutorId))) {
+        reject();
+      }
+    } else {
+      const tutorId = session.regularClassId?.tutorId;
+      if (!allowedTutorIds.has(String(tutorId))) {
+        reject();
+      }
     }
   }
 
@@ -334,6 +345,15 @@ exports.autoCompletePastSessions = async function autoCompletePastSessions() {
  * POST /api/sessions/:id/join
  * Roles: student, tutor
  */
+async function buildTutorIdentitySet(userId) {
+  const TutorProfile = require("../models/TutorProfile");
+  const tp = await TutorProfile.findOne({ userId }).select("_id");
+  const ids = new Set();
+  ids.add(String(userId));
+  if (tp?._id) ids.add(String(tp._id));
+  return ids;
+}
+
 exports.joinSession = async (req, res) => {
   try {
     const sessionId = req.params.id;
@@ -353,6 +373,8 @@ exports.joinSession = async (req, res) => {
       return res.status(403).json({ success: false, message: "Session is not joinable" });
     }
 
+    const allowedTutorIds = await buildTutorIdentitySet(userId);
+
     // Authorize membership
     let isTutor = false;
     let isStudent = false;
@@ -361,25 +383,39 @@ exports.joinSession = async (req, res) => {
       const StudentProfile = require("../models/StudentProfile");
       const sp = await StudentProfile.findOne({ userId }).select("_id");
       const spId = sp?._id || userId;
-      isTutor = role === "tutor" && !!gb && String(gb.tutorId) === String(userId);
-      
+      isTutor =
+        role === "tutor" &&
+        !!gb &&
+        allowedTutorIds.has(String(gb.tutorId));
+
       if (role === "student" && !!gb) {
-          const enrollment = (gb.enrollmentDetails || []).find(e => String(e.studentId) === String(spId));
-          if (enrollment && enrollment.validUntil) {
-             if (new Date(enrollment.validUntil) < new Date()) {
-                 return res.status(403).json({ success: false, message: "Subscription expired" });
-             }
-             isStudent = true;
-          } else {
-             isStudent = (gb.enrolled || []).some((s) => String(s) === String(spId));
+        const enrollment = (gb.enrollmentDetails || []).find(
+          (e) => String(e.studentId) === String(spId)
+        );
+        if (enrollment && enrollment.validUntil) {
+          if (new Date(enrollment.validUntil) < new Date()) {
+            return res
+              .status(403)
+              .json({ success: false, message: "Subscription expired" });
           }
+          isStudent = true;
+        } else {
+          isStudent = (gb.enrolled || []).some((s) => String(s) === String(spId));
+        }
       }
     } else {
       const StudentProfile = require("../models/StudentProfile");
       const sp = await StudentProfile.findOne({ userId }).select("_id");
       const spId = sp?._id || userId;
-      isTutor = role === "tutor" && String(session.regularClassId.tutorId) === String(userId);
-      isStudent = role === "student" && String(session.regularClassId.studentId) === String(spId);
+      const tutorId = session.regularClassId?.tutorId;
+      isTutor =
+        role === "tutor" &&
+        (allowedTutorIds.has(String(tutorId)) ||
+          allowedTutorIds.has(String(session.tutorId)));
+      isStudent =
+        role === "student" &&
+        (String(session.regularClassId.studentId) === String(spId) ||
+          String(session.regularClassId.studentId) === String(userId));
     }
     if (!isTutor && !isStudent) {
       return res.status(403).json({ success: false, message: "Not authorized" });

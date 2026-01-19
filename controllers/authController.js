@@ -89,25 +89,21 @@ const sendOTP = async (req, res) => {
     // Generate and store OTP
     const { otp, requestId, expiresAt } = otpService.storeOTP(phone, purpose);
 
-    // Send OTP via SMS (mock in development)
-    const sent = await otpService.sendOTP(phone, otp);
-
+    // Send OTP via SMS (non-blocking for login/signup flow)
+    const sent = await otpService.sendOTP(phone, otp, requestId);
     if (!sent) {
-      console.error('Send OTP Error: failed to send SMS', {
+      console.error('Send OTP Error: failed to send SMS (OTP flow continues)', {
         phone,
         purpose,
         requestId,
         time: new Date().toISOString(),
       });
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to send OTP SMS. Please try again.',
-      });
     }
 
     res.status(200).json({
       success: true,
-      message: 'OTP sent successfully',
+      message: 'OTP generated successfully',
+      smsSent: !!sent,
       requestId,
       expiresIn: Math.floor((expiresAt - Date.now()) / 1000)
     });
