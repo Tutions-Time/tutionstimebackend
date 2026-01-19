@@ -30,6 +30,18 @@ function scheduleFundRelease(payment, baseDate = new Date()) {
   payment.fundReleasedAt = null;
 }
 
+const DEFAULT_COMMISSION_PERCENT = 25;
+
+function applyCommissionFields(payment, amount, percent = DEFAULT_COMMISSION_PERCENT) {
+  const value = Number(amount || 0);
+  const commissionAmount = (value * percent) / 100;
+  const tutorNetAmount = Math.max(0, value - commissionAmount);
+  payment.commissionPercent = percent;
+  payment.commissionAmount = commissionAmount;
+  payment.tutorNetAmount = tutorNetAmount;
+  return { commissionAmount, tutorNetAmount };
+}
+
 async function resolveProfileName(model, id, fallback) {
   if (!id) return fallback;
   const doc = await model.findById(id).select("name").lean();
@@ -1249,9 +1261,10 @@ exports.verifyPayment = async (req, res) => {
       try {
         if (!payment.walletProcessed) {
           const amount = payment.amount || 0;
-          const commissionPercent = 25;
-          const commissionAmount = (amount * commissionPercent) / 100;
-          const tutorNetAmount = amount - commissionAmount;
+          const { commissionAmount, tutorNetAmount } = applyCommissionFields(
+            payment,
+            amount
+          );
 
           // Admin receives full amount and holds tutor's share
           await walletService.adminCredit(amount, "Subscription payment verified", { type: "booking", id: payment.regularClassId });
@@ -1348,9 +1361,10 @@ exports.verifyPayment = async (req, res) => {
       try {
         if (!payment.walletProcessed) {
           const amount = payment.amount || Number(note.price) || 0;
-          const commissionPercent = 25;
-          const commissionAmount = (amount * commissionPercent) / 100;
-          const tutorNetAmount = amount - commissionAmount;
+          const { commissionAmount, tutorNetAmount } = applyCommissionFields(
+            payment,
+            amount
+          );
 
           // 1) Admin receives amount and holds tutor share
           await walletService.adminCredit(amount, "Note purchase verified", { type: "note", id: nId });

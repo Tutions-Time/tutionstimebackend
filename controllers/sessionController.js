@@ -22,19 +22,30 @@ async function findSessionForTutor(sessionId, tutorUserId, role = "tutor") {
   if (role !== "admin") {
     const TutorProfile = require("../models/TutorProfile");
     const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id");
-    const tutorProfileId = tp?._id || tutorUserId;
+    const profileId = tp?._id;
+    const allowedTutorIds = new Set();
+    allowedTutorIds.add(String(tutorUserId));
+    if (profileId) {
+      allowedTutorIds.add(String(profileId));
+    }
 
-    if (session.groupBatchId) {
-      const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId");
-      if (!gb || String(gb.tutorId) !== String(tutorProfileId)) {
-        const err = new Error("Not authorized to modify this session");
-        err.statusCode = 403;
-        throw err;
-      }
-    } else if (String(session.regularClassId.tutorId) !== String(tutorProfileId)) {
+    const reject = () => {
       const err = new Error("Not authorized to modify this session");
       err.statusCode = 403;
       throw err;
+    };
+
+    if (session.groupBatchId) {
+      const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId");
+      const tutorId = gb?.tutorId;
+      if (!gb || !allowedTutorIds.has(String(tutorId))) {
+        reject();
+      }
+    } else {
+      const tutorId = session.regularClassId?.tutorId;
+      if (!allowedTutorIds.has(String(tutorId))) {
+        reject();
+      }
     }
   }
 
