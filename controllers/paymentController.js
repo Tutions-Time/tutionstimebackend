@@ -1831,9 +1831,9 @@ const computeAdminAmount = (payment) => {
   if (!srcAmount) return 0;
   if (["subscription", "note", "group"].includes(payment.type)) {
     if (typeof payment.commissionAmount === "number") {
-      return Math.round(payment.commissionAmount);
+      return payment.commissionAmount;
     }
-    return Math.round((srcAmount * 25) / 100);
+    return srcAmount * 0.25;
   }
   return 0;
 };
@@ -1935,10 +1935,11 @@ exports.listAllPaymentsHistory = async (req, res) => {
     };
 
     const toRow = (p, extra = {}) => {
-      const tutorNet = p.tutorNetAmount ?? Math.max(0, Number(p.amount || 0) - Number(p.commissionAmount || 0));
+      const adminAmount = computeAdminAmount(p);
+      const tutorNet =
+        p.tutorNetAmount ?? Math.max(0, Number(p.amount || 0) - adminAmount);
       const releaseStatus = p.fundReleaseStatus || "pending";
       const pendingReleaseAmount = releaseStatus !== "released" ? tutorNet : 0;
-      const adminAmount = computeAdminAmount(p);
       return {
         _id: p._id,
         type: p.type,
@@ -1962,6 +1963,7 @@ exports.listAllPaymentsHistory = async (req, res) => {
         fundReleaseDate: p.fundReleaseDate,
         fundReleasedAt: p.fundReleasedAt,
         pendingReleaseAmount,
+        refundAmount: Number(p.refundTotal || 0),
         ...extra,
       };
     };
@@ -2001,6 +2003,7 @@ exports.listAllPaymentsHistory = async (req, res) => {
       fundReleaseDate: t.createdAt,
       fundReleasedAt: t.createdAt,
       pendingReleaseAmount: 0,
+      refundAmount: 0,
     }));
 
     const nameMatch = (n, q) => (q ? String(n || "").toLowerCase().includes(String(q).toLowerCase()) : true);

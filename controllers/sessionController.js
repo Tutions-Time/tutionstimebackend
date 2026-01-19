@@ -379,7 +379,10 @@ exports.joinSession = async (req, res) => {
       const sp = await StudentProfile.findOne({ userId }).select("_id");
       const spId = sp?._id || userId;
       isTutor = role === "tutor" && String(session.regularClassId.tutorId) === String(userId);
-      isStudent = role === "student" && String(session.regularClassId.studentId) === String(spId);
+      isStudent =
+        role === "student" &&
+        (String(session.regularClassId.studentId) === String(spId) ||
+          String(session.regularClassId.studentId) === String(userId));
     }
     if (!isTutor && !isStudent) {
       return res.status(403).json({ success: false, message: "Not authorized" });
