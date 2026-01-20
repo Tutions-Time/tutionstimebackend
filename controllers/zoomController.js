@@ -1,36 +1,34 @@
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
+const crypto = require("crypto");
 
 const ZOOM_WEBHOOK_SECRET = process.env.ZOOM_WEBHOOK_SECRET || "";
 
-function isValidZoomToken(req) {
-  const auth = (req.headers.authorization || req.headers.Authorization || "").trim();
-  if (!auth) return false;
-  const supplied = auth.replace(/^Bearer\s+/i, "");
-  return supplied === ZOOM_WEBHOOK_SECRET;
+function buildEncryptedToken(plainToken) {
+  return crypto
+    .createHmac("sha256", ZOOM_WEBHOOK_SECRET)
+    .update(plainToken)
+    .digest("hex");
 }
 
 exports.handleZoomWebhook = async (req, res) => {
   try {
-    const validationToken =
-      req.query?.validationToken || req.body?.plain?.validationToken || req.body?.validationToken;
+    const eventBody = req.body || {};
 
-    if (validationToken) {
-      res.set("content-type", "text/plain");
-      return res.status(200).send(validationToken);
+    if (eventBody?.event === "endpoint.url_validation") {
+      const plainToken = eventBody.payload?.plainToken;
+      if (!plainToken) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Missing plainToken" });
+      }
+
+      const encryptedToken = buildEncryptedToken(plainToken);
+      return res.status(200).json({ plainToken, encryptedToken });
     }
 
-    if (!isValidZoomToken(req)) {
-      return res
-        .status(403)
-        .json({ success: false, message: "Invalid Zoom webhook token" });
-    }
+    console.log("Zoom webhook event:", eventBody.event || "unknown");
+    console.log("Webhook payload:", JSON.stringify(eventBody));
 
-    const event = req.body;
-    console.log("Zoom webhook event received:", JSON.stringify(event));
-
-    // TODO: handle specific events (meeting.started / ended / participant joined etc.)
-
-    return res.status(204).end();
+    return res.sendStatus(200);
   } catch (err) {
     console.error("zoom webhook error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
