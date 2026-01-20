@@ -26,6 +26,11 @@ const sessionSchema = new mongoose.Schema(
     startDateTime: { type: Date, required: true },
 
     meetingLink: { type: String },
+    meetingId: { type: String },
+    meetingPassword: { type: String },
+    startUrl: { type: String },
+    joinUrl: { type: String },
+    actualEndTime: { type: Date },
 
     status: {
       type: String,

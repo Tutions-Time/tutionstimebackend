@@ -4,6 +4,11 @@ const RegularClass = require("../models/RegularClass");
 const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
 const Session = require("../models/Session");
+const zoomService = require("../services/zoomService");
+
+const REGULAR_SESSION_DURATION_MINUTES = Number(
+  process.env.REGULAR_SESSION_DURATION_MINUTES || 60
+);
 
 
 function buildDateTime(dateStr, timeStr) {
@@ -13,6 +18,20 @@ function buildDateTime(dateStr, timeStr) {
   const d = new Date(year, month - 1, day);
   d.setHours(H, M, 0, 0);
   return d;
+}
+
+function buildRegularSessionTopic(rc, dateTime) {
+  const subject = rc?.subject || "Regular Class";
+  const dateLabel = dateTime.toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+  const timeLabel = dateTime.toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `${subject} - ${timeLabel} on ${dateLabel}`;
 }
 
 
@@ -194,8 +213,6 @@ exports.scheduleRegularClassSessions = async (req, res) => {
     // ------------------------------
     // 🧹 Clear old sessions (if rescheduling)
     // ------------------------------
-    await Session.deleteMany({ regularClassId: rcId });
-
     // Resolve StudentProfile._id and TutorProfile._id for sessions
     const resolvedStudentProfile =
       (await StudentProfile.findOne({ userId: rc.studentId }).select("_id")) ||
@@ -209,20 +226,35 @@ exports.scheduleRegularClassSessions = async (req, res) => {
     // ------------------------------
     // 🧪 Create Sessions Automatically
     // ------------------------------
-    const sessionsToInsert = selectedDates.map((dateStr, idx) => {
-      const startDateTime = buildDateTime(dateStr, time);
 
-      return {
+    const sessionsToInsert = [];
+    for (const dateStr of selectedDates) {
+      const startDateTime = buildDateTime(dateStr, time);
+      const topic = buildRegularSessionTopic(rc, startDateTime);
+      const meeting = await zoomService.createZoomMeeting({
+        topic,
+        startTime: startDateTime.toISOString(),
+        duration: REGULAR_SESSION_DURATION_MINUTES,
+      });
+
+      sessionsToInsert.push({
         regularClassId: rc._id,
         studentId: studentProfileId,
         tutorId: tutorProfileId,
         startDateTime,
-        meetingLink: `https://meet.jit.si/tuitiontime-${rcId}-${idx}-${Date.now()}`,
+        meetingId: meeting.id ? String(meeting.id) : "",
+        meetingPassword: meeting.password || meeting.encrypted_password || "",
+        startUrl: meeting.start_url || "",
+        joinUrl: meeting.join_url || "",
+        meetingLink: meeting.join_url || "",
         status: "scheduled",
-      };
-    });
+      });
+    }
+
+    await Session.deleteMany({ regularClassId: rcId });
 
     const created = await Session.insertMany(sessionsToInsert);
+
 
     rc.scheduleStatus = "scheduled";
     await rc.save();
@@ -355,7 +387,11 @@ exports.getStudentRegularClasses = async (req, res) => {
               sessionId: nextSession._id,
               startDateTime: nextSession.startDateTime, // full datetime
               scheduledTime,                            
-              meetingLink: nextSession.meetingLink || null,
+              meetingLink: nextSession.joinUrl || nextSession.meetingLink || null,
+              joinUrl: nextSession.joinUrl || null,
+              startUrl: nextSession.startUrl || null,
+              meetingId: nextSession.meetingId || null,
+              meetingPassword: nextSession.meetingPassword || null,
               status: nextSession.status,
               canJoin,                                  
             }
@@ -487,7 +523,11 @@ exports.getTutorRegularClasses = async (req, res) => {
               sessionId: nextSession._id,
               startDateTime: nextSession.startDateTime,
               scheduledTime,
-              meetingLink: nextSession.meetingLink || null,
+              meetingLink: nextSession.startUrl || nextSession.meetingLink || null,
+              joinUrl: nextSession.joinUrl || null,
+              startUrl: nextSession.startUrl || null,
+              meetingId: nextSession.meetingId || null,
+              meetingPassword: nextSession.meetingPassword || null,
               status: nextSession.status,
               canJoin,
             }

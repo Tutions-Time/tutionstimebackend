@@ -5,12 +5,21 @@ const ZOOM_ACCOUNT_ID = process.env.ZOOM_ACCOUNT_ID;
 const ZOOM_CLIENT_ID = process.env.ZOOM_CLIENT_ID;
 const ZOOM_CLIENT_SECRET = process.env.ZOOM_CLIENT_SECRET;
 
+function ensureZoomConfig() {
+  if (!ZOOM_ACCOUNT_ID || !ZOOM_CLIENT_ID || !ZOOM_CLIENT_SECRET) {
+    throw new Error(
+      "Missing Zoom credentials. Set ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET."
+    );
+  }
+}
+
 /**
  * 🔑 Get a short-lived Zoom OAuth access token
  * Uses Server-to-Server OAuth flow
  */
 async function getZoomAccessToken() {
   try {
+    ensureZoomConfig();
     const response = await axios.post(
       `https://zoom.us/oauth/token?grant_type=account_credentials&account_id=${ZOOM_ACCOUNT_ID}`,
       {},
@@ -40,6 +49,7 @@ async function getZoomAccessToken() {
  */
 async function createZoomMeeting({ topic, startTime, duration = 60 }) {
   try {
+    ensureZoomConfig();
     const token = await getZoomAccessToken();
 
     const response = await axios.post(
@@ -72,7 +82,9 @@ async function createZoomMeeting({ topic, startTime, duration = 60 }) {
     return response.data;
   } catch (error) {
     console.error('❌ Error creating Zoom meeting:', error.response?.data || error.message);
-    throw new Error('Failed to create Zoom meeting');
+    throw new Error(
+      error.response?.data?.message || error.message || 'Failed to create Zoom meeting'
+    );
   }
 }
 

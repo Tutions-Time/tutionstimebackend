@@ -678,7 +678,11 @@ const listAdminBookings = async (req, res) => {
       subject: b.subject,
       preferredDate: b.preferredDate,
       preferredTime: b.preferredTime,
-      meetingLink: b.meetingLink,
+      meetingLink: b.joinUrl || b.meetingLink || "",
+      joinUrl: b.joinUrl || "",
+      startUrl: b.startUrl || "",
+      meetingId: b.meetingId || "",
+      meetingPassword: b.meetingPassword || "",
       student: studentMap.get(String(b.studentId)) || null,
       tutor: tutorMap.get(String(b.tutorId)) || null,
     }));
