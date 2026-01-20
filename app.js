@@ -14,7 +14,7 @@ connectDB();
 const app = express();
 
 
-app.use(helmet());
+// app.use(helmet());
         
 // ==================== CORS CONFIGURATION ====================
 // ✅ Allow all origins (safe for dev/public API)
