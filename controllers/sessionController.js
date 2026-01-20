@@ -291,10 +291,11 @@ exports.markSessionCompleted = async (req, res) => {
     const session = await findSessionForTutor(sessionId, tutorUserId, role);
 
     session.status = "completed";
-
-    // if still not marked, but student joined, treat as present
-    if (session.attendance === "not-marked" && session.studentJoinTime) {
+    session.actualEndTime = new Date();
+    if (session.studentJoinTime) {
       session.attendance = "present";
+    } else if (session.attendance !== "present") {
+      session.attendance = "absent";
     }
 
     await session.save();
@@ -309,34 +310,6 @@ exports.markSessionCompleted = async (req, res) => {
     return res
       .status(err.statusCode || 500)
       .json({ success: false, message: err.message || "Server error" });
-  }
-};
-
-/**
- * Auto-complete sessions after 1 hour of start time
- * Runs via setInterval from app.js
- */
-exports.autoCompletePastSessions = async function autoCompletePastSessions() {
-  try {
-    const now = new Date();
-    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-
-    const sessions = await Session.find({
-      status: "scheduled",
-      startDateTime: { $lte: oneHourAgo },
-    });
-
-    if (!sessions.length) return;
-
-    for (const s of sessions) {
-      s.status = "completed";
-      if (s.attendance === "not-marked" && s.studentJoinTime) {
-        s.attendance = "present";
-      }
-      await s.save();
-    }
-  } catch (err) {
-    console.error("autoCompletePastSessions error:", err.message);
   }
 };
 
@@ -365,8 +338,10 @@ exports.joinSession = async (req, res) => {
       return res.status(404).json({ success: false, message: "Session not found" });
     }
 
-    if (!session.meetingLink) {
-      return res.status(400).json({ success: false, message: "Meeting link unavailable" });
+    const joinLink = session.joinUrl || session.meetingLink;
+    const startLink = session.startUrl || session.meetingLink;
+    if (!joinLink && !startLink) {
+      return res.status(400).json({ success: false, message: "Meeting details are unavailable" });
     }
 
     if (session.status !== "scheduled") {
@@ -453,7 +428,12 @@ exports.joinSession = async (req, res) => {
 
     await session.save();
 
-    return res.json({ success: true, url: session.meetingLink });
+    const effectiveUrl = isStudent ? joinLink : startLink;
+    if (!effectiveUrl) {
+      return res.status(400).json({ success: false, message: "Meeting link unavailable for your role" });
+    }
+
+    return res.json({ success: true, url: effectiveUrl });
   } catch (err) {
     console.error("joinSession error:", err);
     return res.status(500).json({ success: false, message: "Server error" });

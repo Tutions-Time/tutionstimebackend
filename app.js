@@ -86,8 +86,8 @@ app.use("/api/group-batches", require("./routes/groupBatchRoutes"));
 app.use('/api/marketing', require('./routes/marketingRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/devices', require('./routes/deviceRoutes'));
+app.use('/api/zoom', require('./routes/zoomRoutes'));
 
-const { autoCompletePastSessions } = require('./controllers/sessionController');
 const payoutScheduler = require('./services/cron/payoutScheduler');
 const weeklyReportScheduler = require('./services/cron/weeklyReportScheduler');
 const sessionReminderScheduler = require('./services/cron/sessionReminderScheduler');
@@ -95,9 +95,6 @@ const batchScheduler = require('./services/cron/batchScheduler');
 
 app.use("/api/sessions", require("./routes/sessionRoutes"));
 
-setInterval(() => {
-  autoCompletePastSessions();
-}, 5 * 60 * 1000);
 payoutScheduler.start();
 weeklyReportScheduler.start();
 sessionReminderScheduler.start();

@@ -2,6 +2,7 @@ const cron = require("node-cron");
 const GroupBatch = require("../../models/GroupBatch");
 const Session = require("../../models/Session");
 const notificationService = require("../notificationService");
+const { buildBatchSessionPayload } = require("../../utils/sessionZoomUtils");
 
 const daysMap = { "Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6 };
 
@@ -37,14 +38,9 @@ cron.schedule("0 1 * * *", async () => {
           if (!existingDates.has(current.toDateString())) {
              const sessionDate = new Date(current);
              sessionDate.setHours(startHour, startMinute, 0, 0);
-             if (sessionDate > Date.now()) {
-                 sessionsToCreate.push({
-                   groupBatchId: gb._id,
-                   tutorId: gb.tutorId,
-                   startDateTime: sessionDate,
-                   meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-                   status: "scheduled"
-                 });
+            if (sessionDate > Date.now()) {
+                const payload = await buildBatchSessionPayload(gb, sessionDate);
+                sessionsToCreate.push(payload);
              }
           }
         }

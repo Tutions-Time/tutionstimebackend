@@ -9,17 +9,15 @@ const notificationService = require('../services/notificationService');
 const emailTpl = require('../templates/emailTemplates');
 const AdminNotification = require('../models/AdminNotification');
 const wsHub = require('../services/wsHub');
+const zoomService = require('../services/zoomService');
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
 
 // Demo duration in minutes (business rule)
 const DEMO_DURATION_MINUTES = 15;
-// Optional buffer after end time before auto-completing
-const AUTO_COMPLETE_BUFFER_MIN = 5;
-// No-show expiry window from scheduled start
-const DEMO_NO_SHOW_GRACE_MIN = 10;
-// If both join, mark completed after this many minutes
-const DEMO_COMPLETE_AFTER_JOIN_MIN = 5;
+const REGULAR_SESSION_DURATION_MINUTES = Number(
+  process.env.REGULAR_SESSION_DURATION_MINUTES || 60
+);
 // Booking timezone offset (minutes), default IST
 const BOOKING_TZ_OFFSET_MIN = Number(process.env.BOOKING_TZ_OFFSET_MIN || 330);
 
@@ -41,6 +39,10 @@ function addMinutesToTime(timeStr, minutesToAdd) {
     2,
     "0"
   )}`;
+}
+
+function minutesAfter(date, minutes) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
 }
 
 function getBookingStartDateTime(booking) {
@@ -86,6 +88,36 @@ function getBookingEndDateTime(booking) {
   return minutesAfter(start, DEMO_DURATION_MINUTES);
 }
 
+function buildDemoTopic(booking) {
+  const subject = booking?.subject || "TuitionTime Demo";
+  if (booking?.preferredDate) {
+    const dateLabel = new Date(booking.preferredDate).toLocaleDateString("en-IN");
+    return `${subject} (${dateLabel})`;
+  }
+  return subject;
+}
+
+async function ensureDemoZoomMeeting(booking) {
+  const startDateTime = getBookingStartDateTime(booking);
+  if (!startDateTime) {
+    throw new Error("Unable to calculate demo start time for Zoom meeting.");
+  }
+
+  const topic = buildDemoTopic(booking);
+  const meeting = await zoomService.createZoomMeeting({
+    topic,
+    startTime: startDateTime.toISOString(),
+    duration: DEMO_DURATION_MINUTES,
+  });
+
+  booking.meetingId = meeting.id ? String(meeting.id) : booking.meetingId || "";
+  booking.meetingPassword =
+    meeting.password || meeting.encrypted_password || booking.meetingPassword || "";
+  booking.startUrl = meeting.start_url || booking.startUrl || "";
+  booking.joinUrl = meeting.join_url || booking.joinUrl || "";
+  booking.meetingLink = booking.joinUrl || booking.meetingLink || "";
+}
+
 function normalizeArray(val) {
   if (!val) return [];
   if (Array.isArray(val)) return val.filter(Boolean);
@@ -100,44 +132,6 @@ function normalizeArray(val) {
       .filter(Boolean);
   }
   return [];
-}
-
-async function expireDemo(booking, comment) {
-  if (!booking) return;
-  if (["completed", "cancelled", "expired"].includes(booking.status)) return;
-  console.log("Demo expired", {
-    bookingId: String(booking._id),
-    comment: comment || "No one joined the meeting.",
-    studentId: String(booking.studentId),
-    tutorId: String(booking.tutorId),
-    preferredTime: booking.preferredTime,
-  });
-  booking.status = "expired";
-  booking.demoFeedback = {
-    teaching: 1,
-    communication: 1,
-    understanding: 1,
-    overall: 1,
-    comment: comment || "No one joined the meeting.",
-    likedTutor: false,
-    createdAt: new Date(),
-  };
-  await booking.save();
-  await createAdminNotification(
-    "Demo expired",
-    `Demo ${booking._id} expired: ${booking.demoFeedback.comment}`,
-    {
-      bookingId: booking._id,
-      tutorId: booking.tutorId,
-      studentId: booking.studentId,
-      preferredDate: booking.preferredDate,
-      preferredTime: booking.preferredTime,
-    }
-  );
-}
-
-function minutesAfter(date, minutes) {
-  return new Date(date.getTime() + minutes * 60 * 1000);
 }
 
 async function createAdminNotification(title, message, meta = {}) {
@@ -163,42 +157,6 @@ ${JSON.stringify(meta, null, 2)}
   } catch (err) {
     console.warn("AdminNotification create failed:", err.message);
   }
-}
-
-async function completeDemoIfReady(booking, context) {
-  if (
-    !booking ||
-    booking.type !== "demo" ||
-    !booking.studentJoinedAt ||
-    !booking.tutorJoinedAt ||
-    booking.status === "completed" ||
-    ["cancelled", "expired"].includes(booking.status)
-  ) {
-    return false;
-  }
-
-  booking.status = "completed";
-  await booking.save();
-  console.log("Demo completed", {
-    bookingId: String(booking._id),
-    studentJoinedAt: booking.studentJoinedAt,
-    tutorJoinedAt: booking.tutorJoinedAt,
-    context,
-  });
-
-  await createAdminNotification(
-    "Demo completed",
-    `Demo ${booking._id} completed ${context}`,
-    {
-      bookingId: booking._id,
-      tutorId: booking.tutorId,
-      studentId: booking.studentId,
-      preferredDate: booking.preferredDate,
-      preferredTime: booking.preferredTime,
-    }
-  );
-
-  return true;
 }
 
 /**
@@ -810,9 +768,10 @@ exports.updateDemoStatus = async (req, res) => {
     if (status === "confirmed") {
       console.log("updateDemoStatus confirm", { bookingId: id, userId: req.user?.id });
       booking.status = "confirmed";
-      if (!booking.meetingLink) {
-        booking.meetingLink = `https://meet.jit.si/tuitiontime-${Date.now()}`;
+      if (!booking.joinUrl || !booking.startUrl) {
+        await ensureDemoZoomMeeting(booking);
       }
+      booking.meetingLink = booking.joinUrl || booking.meetingLink || "";
       await booking.save();
 
       const tutorUser = await User.findById(booking.tutorId);
@@ -824,6 +783,8 @@ exports.updateDemoStatus = async (req, res) => {
       const tutorName = tutorProfile?.name || "Your Tutor";
       const displayDate = new Date(booking.preferredDate).toDateString();
       const displayTime = booking.preferredTime || "";
+      const studentLink = booking.joinUrl || booking.meetingLink || "";
+      const tutorLink = booking.startUrl || booking.meetingLink || "";
 
       if (studentUser?.email && notificationService?.sendEmail) {
         const html = emailTpl.bookingConfirmedHTML({
@@ -831,7 +792,7 @@ exports.updateDemoStatus = async (req, res) => {
           subject: booking.subject,
           date: displayDate,
           time: displayTime,
-          link: booking.meetingLink,
+          link: studentLink,
         });
         await notificationService.sendEmail(
           studentUser.email,
@@ -847,7 +808,7 @@ exports.updateDemoStatus = async (req, res) => {
           subject: booking.subject,
           date: displayDate,
           time: displayTime,
-          link: booking.meetingLink,
+          link: tutorLink,
         });
         await notificationService.sendEmail(
           tutorUser.email,
@@ -865,8 +826,11 @@ exports.updateDemoStatus = async (req, res) => {
             displayTime ? ` at ${displayTime}` : ""
           }.`,
           {
-            meetingLink: booking.meetingLink,
+            meetingLink: studentLink,
             bookingId: booking._id,
+            joinUrl: booking.joinUrl,
+            startUrl: booking.startUrl,
+            meetingId: booking.meetingId,
           }
         );
       }
@@ -876,13 +840,23 @@ exports.updateDemoStatus = async (req, res) => {
           booking.studentId,
           "Demo Confirmed",
           `Your demo with ${tutorName} is confirmed for ${displayDate}${displayTime ? ` at ${displayTime}` : ''}.`,
-          { meetingLink: booking.meetingLink, bookingId: booking._id }
+          {
+            meetingLink: studentLink,
+            bookingId: booking._id,
+            joinUrl: booking.joinUrl,
+            startUrl: booking.startUrl,
+          }
         );
         await notificationService.notifyUser(
           booking.tutorId,
           "Demo Confirmed",
           `${tutorName} demo confirmed`,
-          { meetingLink: booking.meetingLink, bookingId: booking._id }
+          {
+            meetingLink: tutorLink,
+            bookingId: booking._id,
+            joinUrl: booking.joinUrl,
+            startUrl: booking.startUrl,
+          }
         );
       } catch (_) {}
 
@@ -896,6 +870,9 @@ exports.updateDemoStatus = async (req, res) => {
           tutorId: booking.tutorId,
           studentId: booking.studentId,
           meetingLink: booking.meetingLink,
+          startUrl: booking.startUrl,
+          joinUrl: booking.joinUrl,
+          meetingId: booking.meetingId,
           preferredTime: booking.preferredTime,
           status: booking.status,
         }
@@ -1013,10 +990,12 @@ exports.markStudentJoined = async (req, res) => {
         bookingId: id,
         studentJoinedAt: booking.studentJoinedAt,
       });
-      await completeDemoIfReady(booking, "after student joined");
     }
 
-    return res.json({ success: true, meetingLink: booking.meetingLink });
+    return res.json({
+      success: true,
+      meetingLink: booking.startUrl || booking.meetingLink || "",
+    });
   } catch (err) {
     console.error("markStudentJoined error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
@@ -1055,12 +1034,70 @@ exports.markTutorJoined = async (req, res) => {
         bookingId: id,
         tutorJoinedAt: booking.tutorJoinedAt,
       });
-      await completeDemoIfReady(booking, "after tutor joined");
     }
 
-    return res.json({ success: true, meetingLink: booking.meetingLink });
+    return res.json({
+      success: true,
+      meetingLink: booking.joinUrl || booking.meetingLink || "",
+    });
   } catch (err) {
     console.error("markTutorJoined error:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/**
+ * Tutor manually completes a demo booking
+ * POST /api/bookings/:id/complete
+ */
+exports.completeDemoBooking = async (req, res) => {
+  try {
+    const bookingId = req.params.id;
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+    if (booking.tutorId.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Not authorized" });
+    }
+    if (booking.type !== "demo") {
+      return res.status(400).json({ success: false, message: "Only demo bookings can be completed here" });
+    }
+    if (booking.status === "cancelled" || booking.status === "expired") {
+      return res.status(400).json({
+        success: false,
+        message: "Cancelled or expired demos cannot be marked as completed",
+      });
+    }
+    if (booking.status !== "confirmed") {
+      return res.status(400).json({
+        success: false,
+        message: "Only confirmed demos can be marked as completed",
+      });
+    }
+    if (booking.status === "completed") {
+      return res.json({ success: true, message: "Demo already completed", data: booking });
+    }
+
+    booking.status = "completed";
+    booking.actualEndTime = new Date();
+    if (booking.studentJoinedAt) {
+      booking.attendance = "present";
+    } else if (booking.tutorJoinedAt) {
+      booking.attendance = "no-show";
+    } else {
+      booking.attendance = "absent";
+    }
+
+    await booking.save();
+
+    return res.json({
+      success: true,
+      message: "Demo marked as completed",
+      data: booking,
+    });
+  } catch (err) {
+    console.error("completeDemoBooking error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
@@ -1112,9 +1149,10 @@ exports.updateDemoStatusByStudent = async (req, res) => {
     if (status === "confirmed") {
       console.log("updateDemoStatusByStudent confirm", { bookingId: id, userId: req.user?.id });
       booking.status = "confirmed";
-      if (!booking.meetingLink) {
-        booking.meetingLink = `https://meet.jit.si/tuitiontime-${Date.now()}`;
+      if (!booking.joinUrl || !booking.startUrl) {
+        await ensureDemoZoomMeeting(booking);
       }
+      booking.meetingLink = booking.joinUrl || booking.meetingLink || "";
       await booking.save();
 
       const tutorUser = await User.findById(booking.tutorId);
@@ -1130,6 +1168,8 @@ exports.updateDemoStatusByStudent = async (req, res) => {
       const studentName = studentProfile?.name || "Student";
       const displayDate = new Date(booking.preferredDate).toDateString();
       const displayTime = booking.preferredTime || "";
+      const studentLink = booking.joinUrl || booking.meetingLink || "";
+      const tutorLink = booking.startUrl || booking.meetingLink || "";
 
       // Email student
       if (studentUser?.email && notificationService?.sendEmail) {
@@ -1139,9 +1179,9 @@ exports.updateDemoStatusByStudent = async (req, res) => {
             subject: booking.subject,
             date: displayDate,
             time: displayTime,
-            link: booking.meetingLink,
+            link: studentLink,
           }) ||
-          `<p>Your demo with ${tutorName} is confirmed on ${displayDate} at ${displayTime}. Meeting: ${booking.meetingLink}</p>`;
+          `<p>Your demo with ${tutorName} is confirmed on ${displayDate} at ${displayTime}. Meeting: ${studentLink}</p>`;
 
         await notificationService.sendEmail(
           studentUser.email,
@@ -1159,9 +1199,9 @@ exports.updateDemoStatusByStudent = async (req, res) => {
             subject: booking.subject,
             date: displayDate,
             time: displayTime,
-            link: booking.meetingLink,
+            link: tutorLink,
           }) ||
-          `<p>Your demo with ${studentName} is confirmed on ${displayDate} at ${displayTime}. Meeting: ${booking.meetingLink}</p>`;
+          `<p>Your demo with ${studentName} is confirmed on ${displayDate} at ${displayTime}. Meeting: ${tutorLink}</p>`;
 
         await notificationService.sendEmail(
           tutorUser.email,
@@ -1179,8 +1219,11 @@ exports.updateDemoStatusByStudent = async (req, res) => {
             displayTime ? ` at ${displayTime}` : ""
           }.`,
           {
-            meetingLink: booking.meetingLink,
+            meetingLink: tutorLink,
             bookingId: booking._id,
+            joinUrl: booking.joinUrl,
+            startUrl: booking.startUrl,
+            meetingId: booking.meetingId,
           }
         );
       }
@@ -1194,7 +1237,10 @@ exports.updateDemoStatusByStudent = async (req, res) => {
           bookingId: booking._id,
           tutorId: booking.tutorId,
           studentId: booking.studentId,
-          meetingLink: booking.meetingLink,
+          meetingLink: tutorLink,
+          joinUrl: booking.joinUrl,
+          startUrl: booking.startUrl,
+          meetingId: booking.meetingId,
           preferredTime: booking.preferredTime,
           status: booking.status,
           requestedBy: booking.requestedBy,
@@ -1417,14 +1463,13 @@ exports.getBookingByIdForAdmin = async (req, res) => {
 // Helper: generate sessions for 4 weeks initially (for regular classes)
 async function generateSessionsForRegularClass(regularClass) {
   const sessions = [];
-  const { timeSlots, startDate, studentId, tutorId, _id } = regularClass;
+  const { timeSlots, startDate, studentId, tutorId, _id, subject } = regularClass;
 
   if (!timeSlots || !timeSlots.length) return;
 
   const start = new Date(startDate);
   const weeksToGenerate = 4;
 
-  // map dayOfWeek to JS day index
   const dayMap = {
     Sun: 0,
     Mon: 1,
@@ -1436,28 +1481,40 @@ async function generateSessionsForRegularClass(regularClass) {
   };
 
   for (let w = 0; w < weeksToGenerate; w++) {
-    timeSlots.forEach((slot) => {
-      const [hourStr, minuteStr] = slot.time.split(":");
+    for (const slot of timeSlots) {
+      const [hourStr, minuteStr] = (slot.time || "").split(":");
       const slotDayIndex = dayMap[slot.dayOfWeek];
-      if (slotDayIndex === undefined) return;
+      if (slotDayIndex === undefined) continue;
 
       const d = new Date(start);
-      // move to that week
       d.setDate(d.getDate() + w * 7);
 
       const diff = slotDayIndex - d.getDay();
       d.setDate(d.getDate() + diff);
+      d.setHours(parseInt(hourStr, 10) || 0, parseInt(minuteStr, 10) || 0, 0, 0);
 
-      d.setHours(parseInt(hourStr, 10), parseInt(minuteStr, 10), 0, 0);
+      const topic = `${subject || "Regular Class"} - ${slot.dayOfWeek || ""} ${
+        slot.time || ""
+      }`;
+      const meeting = await zoomService.createZoomMeeting({
+        topic,
+        startTime: d.toISOString(),
+        duration: REGULAR_SESSION_DURATION_MINUTES,
+      });
 
       sessions.push({
         regularClassId: _id,
         studentId,
         tutorId,
         startDateTime: d,
+        meetingId: meeting.id ? String(meeting.id) : "",
+        meetingPassword: meeting.password || meeting.encrypted_password || "",
+        startUrl: meeting.start_url || "",
+        joinUrl: meeting.join_url || "",
+        meetingLink: meeting.join_url || "",
         status: "scheduled",
       });
-    });
+    }
   }
 
   if (sessions.length) {
@@ -2172,73 +2229,4 @@ exports.startRegularFromDemo = async (req, res) => {
   }
 };
 
-/**
- * 🔁 Auto-complete past demos:
- * - type = 'demo'
- * - status = 'confirmed'
- * - now > preferredDate + preferredTime + DEMO_DURATION_MINUTES + buffer
- *
- * Call this from server.js using setInterval, e.g.:
- *   const { autoCompletePastDemos } = require('./controllers/bookingController');
- *   setInterval(autoCompletePastDemos, 5 * 60 * 1000);
- */
-exports.autoCompletePastDemos = async function autoCompletePastDemos() {
-  try {
-    const now = new Date();
 
-    const confirmedDemos = await Booking.find({
-      type: "demo",
-      status: "confirmed",
-    });
-
-    if (!confirmedDemos.length) return;
-
-    for (const booking of confirmedDemos) {
-      if (!booking.preferredDate || !booking.preferredTime) continue;
-
-      // Build demo start DateTime using booking timezone
-      const startDateTime = getBookingStartDateTime(booking);
-      if (!startDateTime) continue;
-
-      const noShowDeadline = minutesAfter(startDateTime, DEMO_NO_SHOW_GRACE_MIN);
-      const studentJoined = Boolean(booking.studentJoinedAt);
-      const tutorJoined = Boolean(booking.tutorJoinedAt);
-
-      if (!studentJoined && !tutorJoined && now >= noShowDeadline) {
-        await expireDemo(booking, "No one joined the meeting.");
-        continue;
-      }
-
-      if (studentJoined && !tutorJoined && now >= noShowDeadline) {
-        await expireDemo(booking, "Tutor did not join the demo.");
-        continue;
-      }
-
-      if (!studentJoined && tutorJoined && now >= noShowDeadline) {
-        await expireDemo(booking, "Student was not available for the demo.");
-        continue;
-      }
-
-      if (studentJoined && tutorJoined) {
-        const latestJoin = new Date(
-          Math.max(
-            new Date(booking.studentJoinedAt).getTime(),
-            new Date(booking.tutorJoinedAt).getTime()
-          )
-        );
-        const preferredEndDateTime = getBookingEndDateTime(booking);
-        const base = preferredEndDateTime
-          ? preferredEndDateTime
-          : latestJoin.getTime() < startDateTime.getTime()
-          ? startDateTime
-          : latestJoin;
-        const completeAt = minutesAfter(base, AUTO_COMPLETE_BUFFER_MIN);
-        if (now >= completeAt) {
-          await completeDemoIfReady(booking, "auto-complete");
-        }
-      }
-    }
-  } catch (err) {
-    console.error("autoCompletePastDemos error:", err.message);
-  }
-};

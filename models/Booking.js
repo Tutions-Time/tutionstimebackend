@@ -51,8 +51,18 @@ const bookingSchema = new mongoose.Schema(
     },
     type: { type: String, enum: ['demo', 'regular'], default: 'demo' },
 
-    // Meeting (Jitsi on confirm)
+    // Meeting metadata
     meetingLink: { type: String, default: '' },
+    meetingId: { type: String, default: '' },
+    meetingPassword: { type: String, default: '' },
+    startUrl: { type: String, default: '' },
+    joinUrl: { type: String, default: '' },
+    attendance: {
+      type: String,
+      enum: ['not-marked', 'present', 'absent', 'no-show'],
+      default: 'not-marked',
+    },
+    actualEndTime: { type: Date },
 
     // Structured demo feedback
     demoFeedback: feedbackSchema,

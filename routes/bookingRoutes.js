@@ -89,6 +89,16 @@ router.post(
 );
 
 /**
+ * POST /api/bookings/:id/complete
+ * Tutor manually completes a demo booking
+ */
+router.post(
+  '/:id/complete',
+  checkRole(['tutor']),
+  bookingController.completeDemoBooking
+);
+ 
+/**
  * POST /api/bookings/:id/feedback
  * Student gives structured demo feedback
  */

@@ -2,6 +2,7 @@ const GroupBatch = require("../models/GroupBatch");
 const Session = require("../models/Session");
 const { createAdminNotification } = require("../services/adminNotification");
 const metrics = require("../services/metricsService");
+const { buildBatchSessionPayload } = require("../utils/sessionZoomUtils");
 
 function computeRefundPolicy(gb) {
   const now = Date.now();
@@ -215,13 +216,8 @@ exports.createBatch = async (req, res) => {
         sessionDate.setHours(startHour, startMinute, 0, 0);
         // Only add if session is in the future
         if (sessionDate > Date.now()) {
-            sessions.push({
-              groupBatchId: gb._id,
-              tutorId: gb.tutorId,
-              startDateTime: sessionDate,
-              meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${sessions.length}-${Date.now()}`,
-              status: "scheduled"
-            });
+            const payload = await buildBatchSessionPayload(gb, sessionDate);
+            sessions.push(payload);
         }
       }
       current.setDate(current.getDate() + 1);
@@ -281,13 +277,13 @@ exports.editBatch = async (req, res) => {
       }
       const existing = await Session.countDocuments({ groupBatchId: gb._id });
       if (existing === 0) {
-        const sessions = (gb.fixedDates || []).map((d, idx) => ({
-          groupBatchId: gb._id,
-          tutorId: gb.tutorId,
-          startDateTime: d,
-          meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${idx}-${Date.now()}`,
-          status: "scheduled",
-        }));
+        const sessions = [];
+        for (const dateValue of gb.fixedDates || []) {
+          const sessionDate = new Date(dateValue);
+          if (isNaN(sessionDate.getTime())) continue;
+          const payload = await buildBatchSessionPayload(gb, sessionDate);
+          sessions.push(payload);
+        }
         if (sessions.length) await Session.insertMany(sessions);
       }
     }
@@ -387,13 +383,8 @@ exports.editBatch = async (req, res) => {
           const sessionDate = new Date(current);
           sessionDate.setHours(startHour, startMinute, 0, 0);
           if (sessionDate > now) {
-            sessions.push({
-              groupBatchId: gb._id,
-              tutorId: gb.tutorId,
-              startDateTime: sessionDate,
-              meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${sessions.length}-${Date.now()}`,
-              status: "scheduled",
-            });
+            const payload = await buildBatchSessionPayload(gb, sessionDate);
+            sessions.push(payload);
           }
         }
         current.setDate(current.getDate() + 1);
@@ -412,14 +403,14 @@ exports.editBatch = async (req, res) => {
       const existingSet = new Set(existingSessions.map((s) => new Date(s.startDateTime).toISOString()));
       const toCreate = desiredDates.filter((iso) => !existingSet.has(iso));
       if (toCreate.length) {
-        const payload = toCreate.map((iso, idx) => ({
-          groupBatchId: gb._id,
-          tutorId: gb.tutorId,
-          startDateTime: new Date(iso),
-          meetingLink: `https://meet.jit.si/tuitionstime-${gb._id}-${idx}-${Date.now()}`,
-          status: "scheduled",
-        }));
-        await Session.insertMany(payload);
+        const payloads = [];
+        for (const iso of toCreate) {
+          const sessionDate = new Date(iso);
+          if (isNaN(sessionDate.getTime())) continue;
+          const record = await buildBatchSessionPayload(gb, sessionDate);
+          payloads.push(record);
+        }
+        if (payloads.length) await Session.insertMany(payloads);
       }
     }
 
@@ -752,14 +743,16 @@ exports.generateUpcomingSessions = async (req, res) => {
     if (!gb) return res.status(404).json({ success: false, message: "Batch not found" });
     const existing = await Session.countDocuments({ groupBatchId: gb._id });
     if (existing > 0) return res.json({ success: true, count: existing });
-    const sessions = (gb.fixedDates || []).map((d, idx) => ({
-      groupBatchId: gb._id,
-      tutorId: gb.tutorId,
-      startDateTime: d,
-      meetingLink: `https://meet.jit.si/tuitiontime-${gb._id}-${idx}-${Date.now()}`,
-      status: "scheduled",
-    }));
-    const created = sessions.length ? await Session.insertMany(sessions) : [];
+    const sessionPayloads = [];
+    for (const dateValue of gb.fixedDates || []) {
+      const sessionDate = new Date(dateValue);
+      if (isNaN(sessionDate.getTime())) continue;
+      const payload = await buildBatchSessionPayload(gb, sessionDate);
+      sessionPayloads.push(payload);
+    }
+    const created = sessionPayloads.length
+      ? await Session.insertMany(sessionPayloads)
+      : [];
     await createAdminNotification("Batch sessions generated", `Generated ${created.length} sessions`, { batchId: gb._id });
     metrics.emit("group.sessions.generated", { batchId: gb._id }, { count: created.length });
     res.json({ success: true, count: created.length });
