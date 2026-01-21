@@ -46,7 +46,15 @@ const bookingSchema = new mongoose.Schema(
     // Flow state
     status: {
       type: String,
-      enum: ['pending', 'confirmed', 'cancelled', 'completed', 'expired'],
+      enum: [
+        'pending',
+        'confirmed',
+        'cancelled',
+        'completed',
+        'expired',
+        'student-missed',
+        'tutor-missed',
+      ],
       default: 'pending',
     },
     type: { type: String, enum: ['demo', 'regular'], default: 'demo' },

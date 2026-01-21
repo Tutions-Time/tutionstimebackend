@@ -10,6 +10,7 @@ const emailTpl = require('../templates/emailTemplates');
 const AdminNotification = require('../models/AdminNotification');
 const wsHub = require('../services/wsHub');
 const zoomService = require('../services/zoomService');
+const { determineDemoCompletion } = require('../services/demoCompletionService');
 const realtimeEvents = require('../services/realtimeEventService');
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
@@ -1080,22 +1081,29 @@ exports.completeDemoBooking = async (req, res) => {
       return res.json({ success: true, message: "Demo already completed", data: booking });
     }
 
-    booking.status = "completed";
-    booking.actualEndTime = new Date();
-    if (booking.studentJoinedAt) {
-      booking.attendance = "present";
-    } else if (booking.tutorJoinedAt) {
-      booking.attendance = "no-show";
-    } else {
-      booking.attendance = "absent";
+    const { updated, status } = determineDemoCompletion(booking, new Date());
+    if (!updated) {
+      return res.status(400).json({
+        success: false,
+        message: "Unable to complete demo (no join events detected).",
+      });
     }
 
     await booking.save();
-    realtimeEvents.notifyBookingCompletion(booking);
+    if (["completed", "student-missed", "tutor-missed"].includes(status)) {
+      realtimeEvents.notifyBookingCompletion(booking);
+    }
+
+    let message = "Demo marked as completed";
+    if (status === "student-missed") {
+      message = "Student did not join; demo marked as student no-show.";
+    } else if (status === "tutor-missed") {
+      message = "Tutor did not join; demo status updated accordingly.";
+    }
 
     return res.json({
       success: true,
-      message: "Demo marked as completed",
+      message,
       data: booking,
     });
   } catch (err) {

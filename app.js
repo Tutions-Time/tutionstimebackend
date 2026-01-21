@@ -92,13 +92,15 @@ const payoutScheduler = require('./services/cron/payoutScheduler');
 const weeklyReportScheduler = require('./services/cron/weeklyReportScheduler');
 const sessionReminderScheduler = require('./services/cron/sessionReminderScheduler');
 const batchScheduler = require('./services/cron/batchScheduler');
+const demoExpiryScheduler = require('./services/cron/demoExpiryScheduler');
 
 app.use("/api/sessions", require("./routes/sessionRoutes"));
-
 payoutScheduler.start();
 weeklyReportScheduler.start();
 sessionReminderScheduler.start();
+demoExpiryScheduler.start();
 
+demoExpiryScheduler.runOnce();
 payoutScheduler.runOnce();
 
 app.get("/", (req, res) =>
