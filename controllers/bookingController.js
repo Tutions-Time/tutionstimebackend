@@ -1081,7 +1081,7 @@ exports.completeDemoBooking = async (req, res) => {
       return res.json({ success: true, message: "Demo already completed", data: booking });
     }
 
-    const { updated, status } = determineDemoCompletion(booking, new Date());
+    const { updated, status } = determineDemoCompletion(booking);
     if (!updated) {
       return res.status(400).json({
         success: false,

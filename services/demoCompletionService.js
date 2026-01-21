@@ -6,7 +6,7 @@ function determineDemoCompletion(booking, endTime) {
     return { updated: false, status: booking?.status || "pending" };
   }
 
-  const now = endTime || new Date();
+  const now = endTime;
   const prevStatus = booking.status || "";
   const prevAttendance = booking.attendance || "";
   const prevEndTime = booking.actualEndTime;
@@ -27,7 +27,9 @@ function determineDemoCompletion(booking, endTime) {
 
   booking.status = newStatus;
   booking.attendance = newAttendance;
-  booking.actualEndTime = now;
+  if (now) {
+    booking.actualEndTime = now;
+  }
 
   const attendanceChanged = newAttendance !== prevAttendance;
   const statusChanged = newStatus !== prevStatus;
