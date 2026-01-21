@@ -21,6 +21,7 @@ function normalizeMeetingId(payload) {
 }
 
 function getZoomEndTime(eventBody) {
+  console.log("getZoomEndTime eventBody:", eventBody?.payload);
   const endTimeStr = eventBody?.payload?.object?.end_time;
   const dt = endTimeStr ? new Date(endTimeStr) : null;
   return dt && !Number.isNaN(dt.getTime()) ? dt : new Date();
@@ -81,7 +82,7 @@ exports.handleZoomWebhook = async (req, res) => {
       if (!ZOOM_WEBHOOK_SECRET) {
         return res.status(500).json({
           success: false,
-          message: "ZOOM_WEBHOOK_SECRET is not set in envv",
+          message: "ZOOM_WEBHOOK_SECRET is not set in env",
         });
       }
 
