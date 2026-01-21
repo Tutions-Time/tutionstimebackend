@@ -67,7 +67,6 @@ async function runOnce() {
 
     booking.status = "expired";
     booking.attendance = "absent";
-    booking.actualEndTime = endDate;
     await booking.save();
 
     realtimeEvents.notifyBookingStatusUpdate(booking, {

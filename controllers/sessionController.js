@@ -291,7 +291,6 @@ exports.markSessionCompleted = async (req, res) => {
     const session = await findSessionForTutor(sessionId, tutorUserId, role);
 
     session.status = "completed";
-    session.actualEndTime = new Date();
     if (session.studentJoinTime) {
       session.attendance = "present";
     } else if (session.attendance !== "present") {

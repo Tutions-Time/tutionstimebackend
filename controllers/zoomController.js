@@ -1,87 +1,3 @@
-// const crypto = require("crypto");
-// const Booking = require("../models/Booking");
-// const Session = require("../models/Session");
-
-// const ZOOM_WEBHOOK_SECRET = process.env.ZOOM_WEBHOOK_SECRET || "";
-
-// function buildEncryptedToken(plainToken) {
-//   return crypto
-//     .createHmac("sha256", ZOOM_WEBHOOK_SECRET)
-//     .update(plainToken)
-//     .digest("hex");
-// }
-
-// function normalizeMeetingId(eventPayload) {
-//   return (
-//     String(eventPayload?.object?.id || eventPayload?.object?.meeting_id || "")
-//   ).trim();
-// }
-
-// async function completeBooking(booking) {
-//   if (!booking || booking.status === "completed") return;
-//   booking.status = "completed";
-//   booking.actualEndTime = new Date();
-//   if (booking.studentJoinedAt) {
-//     booking.attendance = "present";
-//   } else if (booking.tutorJoinedAt) {
-//     booking.attendance = "no-show";
-//   } else {
-//     booking.attendance = "absent";
-//   }
-//   await booking.save();
-// }
-
-// async function completeSession(session) {
-//   if (!session || session.status === "completed") return;
-//   session.status = "completed";
-//   session.actualEndTime = new Date();
-//   if (session.studentJoinTime) {
-//     session.attendance = "present";
-//   } else if (session.attendance !== "present") {
-//     session.attendance = "absent";
-//   }
-//   await session.save();
-// }
-
-// exports.handleZoomWebhook = async (req, res) => {
-//   try {
-//     const eventBody = req.body || {};
-
-//     if (eventBody?.event === "endpoint.url_validation") {
-//       const plainToken = eventBody.payload?.plainToken;
-//       if (!plainToken) {
-//         return res
-//           .status(400)
-//           .json({ success: false, message: "Missing plainToken" });
-//       }
-
-//       const encryptedToken = buildEncryptedToken(plainToken);
-//       return res.status(200).json({ plainToken, encryptedToken });
-//     }
-
-//     const meetingId = normalizeMeetingId(eventBody.payload || {});
-
-//     if (eventBody.event === "meeting.ended" && meetingId) {
-//       const booking = await Booking.findOne({ meetingId });
-//       if (booking && booking.type === "demo") {
-//         await completeBooking(booking);
-//       } else {
-//         const session = await Session.findOne({ meetingId });
-//         await completeSession(session);
-//       }
-//     }
-
-//     console.log("Zoom webhook event:", eventBody.event || "unknown");
-
-//     return res.sendStatus(200);
-//   } catch (err) {
-//     console.error("zoom webhook error:", err);
-//     return res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
-
-
-
 const crypto = require("crypto");
 const Booking = require("../models/Booking");
 const Session = require("../models/Session");
@@ -190,6 +106,10 @@ exports.handleZoomWebhook = async (req, res) => {
           }
 
           const zoomEndTime = getZoomEndTime(eventBody);
+          console.log("Zoom meeting ended payload", {
+            meetingId,
+            zoomEndTime,
+          });
 
           // First try booking
           const booking = await Booking.findOne({ meetingId });
