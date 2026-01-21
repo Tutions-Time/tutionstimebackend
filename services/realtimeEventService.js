@@ -62,6 +62,11 @@ function notifyBookingStatusUpdate(booking, { title, message, body }) {
     meta,
   };
   const payload = { type: "notification", data: notification };
+  console.log("notifyBookingStatusUpdate", {
+    title,
+    status: meta.status,
+    meetingId: meta.meetingId,
+  });
   sendNotificationToTargets(payload, booking);
 }
 
