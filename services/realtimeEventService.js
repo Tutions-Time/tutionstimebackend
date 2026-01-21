@@ -31,29 +31,38 @@ function sendToUserIfAvailable(userId, payload) {
   wsHub.sendToUser(String(userId), payload);
 }
 
-function notifyBookingCompletion(booking) {
-  if (!booking) return;
-  const meta = buildBookingMeta(booking);
-  const notification = {
-    title: "Demo class completed",
-    message: "This demo booking has been marked as completed.",
-    body: "The class has ended and attendance has been finalized.",
-    meta,
-  };
-  const payload = { type: "notification", data: notification };
-
+function sendNotificationToTargets(payload, booking) {
   sendToUserIfAvailable(booking.studentId, payload);
   sendToUserIfAvailable(booking.tutorId, payload);
-
   wsHub.sendToRole("admin", {
     type: "admin_notification",
     data: {
-      title: "Demo completed",
-      message: `Booking ${meta.bookingId} has been completed.`,
-      body: `Meeting ID ${meta.meetingId} ended at ${meta.actualEndTime || "unknown"}.`,
-      meta,
+      ...payload.data,
+      meta: payload.data.meta,
     },
   });
+}
+
+function notifyBookingCompletion(booking) {
+  if (!booking) return;
+  notifyBookingStatusUpdate(booking, {
+    title: "Demo class completed",
+    message: "This demo booking has been marked as completed.",
+    body: "The class has ended and attendance has been finalized.",
+  });
+}
+
+function notifyBookingStatusUpdate(booking, { title, message, body }) {
+  if (!booking) return;
+  const meta = buildBookingMeta(booking);
+  const notification = {
+    title,
+    message,
+    body,
+    meta,
+  };
+  const payload = { type: "notification", data: notification };
+  sendNotificationToTargets(payload, booking);
 }
 
 async function resolveUserIdFromProfile(model, profileId) {
@@ -95,5 +104,6 @@ async function notifySessionCompletion(session) {
 
 module.exports = {
   notifyBookingCompletion,
+  notifyBookingStatusUpdate,
   notifySessionCompletion,
 };

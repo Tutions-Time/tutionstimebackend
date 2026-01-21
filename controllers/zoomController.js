@@ -86,6 +86,7 @@ const crypto = require("crypto");
 const Booking = require("../models/Booking");
 const Session = require("../models/Session");
 const realtimeEvents = require("../services/realtimeEventService");
+const { determineDemoCompletion } = require("../services/demoCompletionService");
 
 const ZOOM_WEBHOOK_SECRET = process.env.ZOOM_WEBHOOK_SECRET || "";
 
@@ -109,30 +110,22 @@ function getZoomEndTime(eventBody) {
   return dt && !Number.isNaN(dt.getTime()) ? dt : new Date();
 }
 
-async function completeBooking(booking, endTime, options = {}) {
-  if (!booking || booking.status === "completed") return false;
+async function completeBooking(booking, endTime) {
+  if (!booking) return null;
 
-  booking.status = "completed";
-  booking.actualEndTime = endTime || new Date();
-
-  if (booking.studentJoinedAt) {
-    booking.attendance = "present";
-  } else if (booking.tutorJoinedAt) {
-    booking.attendance = "no-show";
-  } else {
-    booking.attendance = "absent";
-  }
+  const { updated, status } = determineDemoCompletion(booking, endTime);
+  if (!updated) return null;
 
   await booking.save();
 
-  if (options.notify) {
+  if (["completed", "student-missed", "tutor-missed"].includes(status)) {
     realtimeEvents.notifyBookingCompletion(booking);
   }
 
-  return true;
+  return status;
 }
 
-async function completeSession(session, endTime) {
+async function completeSession(session, endTime, options = {}) {
   if (!session || session.status === "completed") return false;
 
   session.status = "completed";
@@ -201,11 +194,9 @@ exports.handleZoomWebhook = async (req, res) => {
           // First try booking
           const booking = await Booking.findOne({ meetingId });
           if (booking && booking.type === "demo") {
-            const updated = await completeBooking(booking, zoomEndTime, {
-              notify: true,
-            });
-            if (updated) {
-              console.log("Zoom webhook: booking completed", { meetingId });
+            const status = await completeBooking(booking, zoomEndTime);
+            if (status) {
+              console.log(`Zoom webhook: booking ${status}`, { meetingId });
             }
             return;
           }
