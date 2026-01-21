@@ -10,6 +10,7 @@ const emailTpl = require('../templates/emailTemplates');
 const AdminNotification = require('../models/AdminNotification');
 const wsHub = require('../services/wsHub');
 const zoomService = require('../services/zoomService');
+const realtimeEvents = require('../services/realtimeEventService');
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
 
@@ -1090,6 +1091,7 @@ exports.completeDemoBooking = async (req, res) => {
     }
 
     await booking.save();
+    realtimeEvents.notifyBookingCompletion(booking);
 
     return res.json({
       success: true,

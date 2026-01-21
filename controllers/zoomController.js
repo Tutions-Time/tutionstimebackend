@@ -85,6 +85,7 @@
 const crypto = require("crypto");
 const Booking = require("../models/Booking");
 const Session = require("../models/Session");
+const realtimeEvents = require("../services/realtimeEventService");
 
 const ZOOM_WEBHOOK_SECRET = process.env.ZOOM_WEBHOOK_SECRET || "";
 
@@ -108,8 +109,8 @@ function getZoomEndTime(eventBody) {
   return dt && !Number.isNaN(dt.getTime()) ? dt : new Date();
 }
 
-async function completeBooking(booking, endTime) {
-  if (!booking || booking.status === "completed") return;
+async function completeBooking(booking, endTime, options = {}) {
+  if (!booking || booking.status === "completed") return false;
 
   booking.status = "completed";
   booking.actualEndTime = endTime || new Date();
@@ -123,10 +124,16 @@ async function completeBooking(booking, endTime) {
   }
 
   await booking.save();
+
+  if (options.notify) {
+    realtimeEvents.notifyBookingCompletion(booking);
+  }
+
+  return true;
 }
 
 async function completeSession(session, endTime) {
-  if (!session || session.status === "completed") return;
+  if (!session || session.status === "completed") return false;
 
   session.status = "completed";
   session.actualEndTime = endTime || new Date();
@@ -138,9 +145,15 @@ async function completeSession(session, endTime) {
   }
 
   await session.save();
+  if (options.notify) {
+    await realtimeEvents.notifySessionCompletion(session);
+  }
+
+  return true;
 }
 
 exports.handleZoomWebhook = async (req, res) => {
+  console.log("Received Zoom webhook");
   // Always ACK quickly to avoid Zoom retries/timeouts
   // We'll do DB processing asynchronously below.
   try {
@@ -159,7 +172,7 @@ exports.handleZoomWebhook = async (req, res) => {
       if (!ZOOM_WEBHOOK_SECRET) {
         return res.status(500).json({
           success: false,
-          message: "ZOOM_WEBHOOK_SECRET is not set in env",
+          message: "ZOOM_WEBHOOK_SECRET is not set in envv",
         });
       }
 
@@ -188,16 +201,24 @@ exports.handleZoomWebhook = async (req, res) => {
           // First try booking
           const booking = await Booking.findOne({ meetingId });
           if (booking && booking.type === "demo") {
-            await completeBooking(booking, zoomEndTime);
-            console.log("Zoom webhook: booking completed", { meetingId });
+            const updated = await completeBooking(booking, zoomEndTime, {
+              notify: true,
+            });
+            if (updated) {
+              console.log("Zoom webhook: booking completed", { meetingId });
+            }
             return;
           }
 
           // Else try session
           const session = await Session.findOne({ meetingId });
           if (session) {
-            await completeSession(session, zoomEndTime);
-            console.log("Zoom webhook: session completed", { meetingId });
+            const completed = await completeSession(session, zoomEndTime, {
+              notify: true,
+            });
+            if (completed) {
+              console.log("Zoom webhook: session completed", { meetingId });
+            }
             return;
           }
 
