@@ -5,15 +5,30 @@ if (mongoose.models.User) {
     delete mongoose.models.User;
 }
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const userSchema = new mongoose.Schema({
-  phone: {
+  email: {
     type: String,
-    required: [true, 'Phone number is required'],
-    unique: true,
     trim: true,
+    lowercase: true,
+    unique: true,
+    sparse: true,
     validate: {
       validator: function(v) {
-        return /^[0-9]{10}$/.test(v);
+        return EMAIL_REGEX.test(v);
+      },
+      message: props => `${props.value} is not a valid email address`
+    }
+  },
+  phone: {
+    type: String,
+    trim: true,
+    sparse: true,
+    unique: true,
+    validate: {
+      validator: function(v) {
+        return !v || /^[0-9]{10}$/.test(v);
       },
       message: props => `${props.value} is not a valid phone number! Must be 10 digits.`
     }
@@ -62,9 +77,12 @@ userSchema.pre('save', function(next) {
     this.phone = this.phone.trim();
   }
 
-  // Additional validation
-  if (!this.phone || !/^[0-9]{10}$/.test(this.phone)) {
-    next(new Error('Valid phone number is required'));
+  if (this.email) {
+    this.email = String(this.email).trim().toLowerCase();
+  }
+
+  if (!this.email || !EMAIL_REGEX.test(this.email)) {
+    next(new Error('Valid email address is required'));
     return;
   }
 
@@ -72,6 +90,7 @@ userSchema.pre('save', function(next) {
 });
 
 // Add index explicitly
-userSchema.index({ phone: 1 }, { unique: true });
+userSchema.index({ phone: 1 }, { unique: true, sparse: true });
+userSchema.index({ email: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('User', userSchema);
