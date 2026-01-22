@@ -10,6 +10,8 @@ const {
   isTutorProfileComplete,
 } = require('../utils/profileValidation');
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 // Admin credentials (Move to environment variables in production)
 const ADMIN_USERNAME = 'admin';
 const ADMIN_PASSWORD = '$2b$10$TCUXGHzI/sxObzQLY7zRBePZqLVYpOE.6hZ/1nlVWAHy5PGxw2DP2'; // "admin123"
@@ -77,23 +79,31 @@ const adminLogin = async (req, res) => {
 // Send OTP for login or signup
 const sendOTP = async (req, res) => {
   try {
-    const { phone, purpose } = req.body;
+    const { email, purpose } = req.body;
 
-    if (!phone || !purpose || !['login', 'signup'].includes(purpose)) {
+    if (!email || !purpose || !['login', 'signup'].includes(purpose)) {
       return res.status(400).json({
         success: false,
-        message: 'Phone number and valid purpose are required'
+        message: 'Email and valid purpose are required'
+      });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    if (!EMAIL_REGEX.test(normalizedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid email address'
       });
     }
 
     // Generate and store OTP
-    const { otp, requestId, expiresAt } = otpService.storeOTP(phone, purpose);
+    const { otp, requestId, expiresAt } = otpService.storeOTP(normalizedEmail, purpose);
 
-    // Send OTP via SMS (non-blocking for login/signup flow)
-    const sent = await otpService.sendOTP(phone, otp, requestId);
+    // Send OTP via email (non-blocking for login/signup flow)
+    const sent = await otpService.sendOTP(normalizedEmail, otp);
     if (!sent) {
-      console.error('Send OTP Error: failed to send SMS (OTP flow continues)', {
-        phone,
+      console.error('Send OTP Error: failed to send email (OTP flow continues)', {
+        email: normalizedEmail,
         purpose,
         requestId,
         time: new Date().toISOString(),
@@ -103,7 +113,7 @@ const sendOTP = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'OTP generated successfully',
-      smsSent: !!sent,
+      emailSent: !!sent,
       requestId,
       expiresIn: Math.floor((expiresAt - Date.now()) / 1000)
     });
@@ -120,35 +130,25 @@ const sendOTP = async (req, res) => {
 // Verify OTP and authenticate user
 const verifyOTP = async (req, res) => {
   try {
-    const { phone, otp, requestId, role } = req.body;
+    const { email, otp, requestId, role } = req.body;
 
-    // console.log('Verify OTP Request:', {
-    //   phone,
-    //   otp,
-    //   requestId,
-    //   role,
-    //   timestamp: new Date().toISOString()
-    // });
-
-    // Validate required fields
-    if (!phone || !otp || !requestId) {
-      console.log('Missing required fields:', { phone, otp, requestId });
+    if (!email || !otp || !requestId) {
+      console.log('Missing required fields:', { email, otp, requestId });
       return res.status(400).json({
         success: false,
-        message: 'Phone, OTP, and requestId are required'
+        message: 'Email, OTP, and requestId are required'
       });
     }
 
-    // Check if phone number is valid
-    if (!/^[0-9]{10}$/.test(phone)) {
+    const normalizedEmail = String(email).trim().toLowerCase();
+    if (!EMAIL_REGEX.test(normalizedEmail)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid phone number format'
+        message: 'Please provide a valid email address'
       });
     }
 
-    // Verify OTP
-    const verification = otpService.verifyOTP(requestId, otp, phone);
+    const verification = otpService.verifyOTP(requestId, otp, normalizedEmail);
 
     if (!verification.valid) {
       return res.status(400).json({
@@ -169,7 +169,7 @@ const verifyOTP = async (req, res) => {
       }
 
       // Check if user already exists
-      const existingUser = await User.findOne({ phone });
+      const existingUser = await User.findOne({ email: normalizedEmail });
 
       if (existingUser) {
         return res.status(400).json({
@@ -178,18 +178,10 @@ const verifyOTP = async (req, res) => {
         });
       }
 
-      // Validate phone number
-      if (!phone || !/^[0-9]{10}$/.test(phone)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid phone number format. Must be 10 digits.'
-        });
-      }
-
       try {
         // Create new user
         user = await User.create({
-          phone: phone.trim(),
+          email: normalizedEmail,
           role,
           isProfileComplete: false,
           status: 'active'
@@ -295,12 +287,12 @@ const verifyOTP = async (req, res) => {
 
         // console.log('User created successfully:', {
         //   id: user._id,
-        //   phone: user.phone,
+        //   email: user.email,
         //   role: user.role
         // });
       } catch (error) {
         console.error('User creation error:', {
-          phone: phone.trim(),
+          email: normalizedEmail,
           role,
           error: error.message
         });
@@ -308,7 +300,7 @@ const verifyOTP = async (req, res) => {
       }
     } else {
       // For login, find existing user
-      user = await User.findOne({ phone });
+      user = await User.findOne({ email: normalizedEmail });
 
       if (!user) {
         return res.status(404).json({
@@ -337,6 +329,7 @@ const verifyOTP = async (req, res) => {
       message: 'OTP verified successfully',
       user: {
         id: user._id,
+        email: user.email,
         phone: user.phone,
         role: user.role,
         isProfileComplete: user.isProfileComplete
@@ -354,14 +347,14 @@ const verifyOTP = async (req, res) => {
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
-        message: 'User with this phone number already exists'
+        message: 'User with this email already exists'
       });
     }
 
-    if (error.message.includes('Valid phone number is required')) {
+    if (error.message.includes('Valid email address is required')) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide a valid 10-digit phone number'
+        message: 'Please provide a valid email address'
       });
     }
 
@@ -404,6 +397,7 @@ const getCurrentUser = async (req, res) => {
       success: true,
       user: {
         id: user._id,
+        email: user.email,
         phone: user.phone,
         role: user.role,
         isProfileComplete: user.isProfileComplete
