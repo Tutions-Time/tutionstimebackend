@@ -1,12 +1,5 @@
 const notificationService = require("./notificationService");
-
-// Using a more persistent object for development
-let otpStore = {};
-
-// Add persistence helper functions
-const saveOTPStore = () => {
-  // console.log("Current OTP Store State:", otpStore);
-};
+const OtpRequest = require("../models/OtpRequest");
 
 const generateOTP = () => {
   const code = Math.floor(100000 + Math.random() * 900000);
@@ -17,76 +10,73 @@ const normalizeEmail = (email) => {
   return String(email || "").trim().toLowerCase();
 };
 
-const storeOTP = (email, purpose) => {
+const storeOTP = async (email, purpose) => {
   const normalizedEmail = normalizeEmail(email);
   const otp = generateOTP();
   const requestId = Math.random().toString(36).substring(2, 15);
-  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes expiry
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes expiry
 
-  otpStore[requestId] = {
-    email: normalizedEmail,
-    otp,
-    purpose,
-    expiresAt,
-    createdAt: Date.now(),
-  };
-
-  saveOTPStore();
+  try {
+    await OtpRequest.create({
+      requestId,
+      email: normalizedEmail,
+      otp,
+      purpose,
+      expiresAt,
+    });
+  } catch (error) {
+    console.error("OTP store creation failed:", error?.message || error);
+    throw error;
+  }
 
   return { otp, requestId, expiresAt };
 };
 
-const verifyOTP = (requestId, providedOTP, email) => {
+const verifyOTP = async (requestId, providedOTP, email) => {
   const normalizedEmail = normalizeEmail(email);
-
-  let otpData = otpStore[requestId];
+  let otpData = await OtpRequest.findOne({ requestId });
 
   if (!otpData && normalizedEmail) {
-    const entry = Object.entries(otpStore).find(
-      ([rid, data]) => data.email === normalizedEmail
-    );
-    if (entry) {
-      const [fallbackRequestId, data] = entry;
+    otpData = await OtpRequest.findOne({ email: normalizedEmail })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (otpData) {
+      requestId = otpData.requestId;
       console.log("Fallback to email-based OTP entry:", {
-        fallbackRequestId,
+        fallbackRequestId: requestId,
         email: normalizedEmail,
       });
-      requestId = fallbackRequestId;
-      otpData = data;
     }
   }
 
   if (!otpData) {
     console.log("OTP data not found for requestId:", requestId);
-    console.log("Available requestIds:", Object.keys(otpStore));
     return { valid: false, message: "Invalid or expired request ID" };
   }
 
-  if (Date.now() > otpData.expiresAt) {
+  if (Date.now() > new Date(otpData.expiresAt).getTime()) {
     console.log("OTP expired:", {
-      expiresAt: new Date(otpData.expiresAt).toISOString(),
+      expiresAt: otpData.expiresAt.toISOString(),
       now: new Date().toISOString(),
-      age:
-        Math.round((Date.now() - otpData.createdAt) / 1000) + " seconds",
     });
-    delete otpStore[requestId];
-    saveOTPStore();
+    await OtpRequest.deleteOne({ requestId });
     return { valid: false, message: "OTP expired. Please request a new one." };
   }
 
   if (otpData.otp !== providedOTP) {
+    await OtpRequest.updateOne(
+      { requestId },
+      { $inc: { attempts: 1 } }
+    );
     console.log("OTP mismatch:", {
       provided: providedOTP,
       expected: otpData.otp,
-      attempts: (otpData.attempts || 0) + 1,
     });
-    otpData.attempts = (otpData.attempts || 0) + 1;
-    saveOTPStore();
     return { valid: false, message: "Invalid OTP. Please check and try again." };
   }
 
-  delete otpStore[requestId];
-  saveOTPStore();
+  await OtpRequest.deleteOne({ requestId });
 
   return {
     valid: true,

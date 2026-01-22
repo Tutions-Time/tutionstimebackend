@@ -97,7 +97,10 @@ const sendOTP = async (req, res) => {
     }
 
     // Generate and store OTP
-    const { otp, requestId, expiresAt } = otpService.storeOTP(normalizedEmail, purpose);
+    const { otp, requestId, expiresAt } = await otpService.storeOTP(
+      normalizedEmail,
+      purpose
+    );
 
     // Send OTP via email (non-blocking for login/signup flow)
     const sent = await otpService.sendOTP(normalizedEmail, otp);
@@ -148,7 +151,11 @@ const verifyOTP = async (req, res) => {
       });
     }
 
-    const verification = otpService.verifyOTP(requestId, otp, normalizedEmail);
+    const verification = await otpService.verifyOTP(
+      requestId,
+      otp,
+      normalizedEmail
+    );
 
     if (!verification.valid) {
       return res.status(400).json({
