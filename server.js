@@ -24,11 +24,11 @@ async function fixIndexes() {
       console.log("Phone index already exists, skipping");
     }
 
-    const result = await User.deleteMany({
-      $or: [{ phone: null }, { phone: { $exists: false } }, { phone: "" }],
-    });
-
-    console.log(`Removed ${result.deletedCount} invalid user documents`);
+    // REMOVED: Auto-deletion of invalid users
+    // const result = await User.deleteMany({
+    //   $or: [{ phone: null }, { phone: { $exists: false } }, { phone: "" }],
+    // });
+    // console.log(`Removed ${result.deletedCount} invalid user documents`);
   } catch (err) {
     console.error("Index fix error:", err.message);
   }
