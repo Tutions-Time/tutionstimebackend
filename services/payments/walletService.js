@@ -4,11 +4,23 @@ const AdminWallet = require("../../models/AdminWallet");
 
 exports.ensureWallet = async (userId, role) => {
   let wallet = await Wallet.findOne({ userId });
-  if (!wallet) {
+  if (wallet) {
+    return wallet;
+  }
+
+  try {
     wallet = await Wallet.create({ userId, role, balance: 0, pendingBalance: 0 });
     // console.log(`🪙 Wallet created for ${role} (${userId})`);
+    return wallet;
+  } catch (error) {
+    if (error?.code === 11000) {
+      wallet = await Wallet.findOne({ userId });
+      if (wallet) {
+        return wallet;
+      }
+    }
+    throw error;
   }
-  return wallet;
 };
 
 exports.creditWallet = async (userId, role, amount, description, referenceId) => {

@@ -168,24 +168,35 @@ const verifyOTP = async (req, res) => {
         });
       }
 
-      // Check if user already exists
-      const existingUser = await User.findOne({ email: normalizedEmail });
-
-      if (existingUser) {
-        return res.status(400).json({
-          success: false,
-          message: 'User already exists. Please login instead'
-        });
-      }
-
       try {
-        // Create new user
-        user = await User.create({
-          email: normalizedEmail,
-          role,
-          isProfileComplete: false,
-          status: 'active'
-        });
+        const creationResult = await User.findOneAndUpdate(
+          { email: normalizedEmail },
+          {
+            $setOnInsert: {
+              email: normalizedEmail,
+              role,
+              isProfileComplete: false,
+              status: 'active'
+            }
+          },
+          {
+            upsert: true,
+            new: true,
+            rawResult: true,
+            setDefaultsOnInsert: true
+          }
+        );
+
+        user = creationResult.value;
+        const wasCreated = !creationResult.lastErrorObject?.updatedExisting;
+
+        if (!wasCreated) {
+          return res.status(400).json({
+            success: false,
+            message: 'User already exists. Please login instead'
+          });
+        }
+
         await walletService.ensureWallet(user._id, user.role);
 
         // Auto-create referral code for this user
@@ -219,13 +230,13 @@ const verifyOTP = async (req, res) => {
           try {
             const ReferralCode = require('../models/ReferralCode');
             const rc = await ReferralCode.findOne({ code: req.body.referralCode.trim() });
-          if (rc && rc.status === 'active') {
-            user.referrerUserId = rc.ownerUserId;
-            user.referralCodeUsed = rc.code;
-            await user.save();
-          }
-        } catch (_) {}
-      }
+            if (rc && rc.status === 'active') {
+              user.referrerUserId = rc.ownerUserId;
+              user.referralCodeUsed = rc.code;
+              await user.save();
+            }
+          } catch (_) {}
+        }
 
       try {
         if (user.role === 'student' && user.referrerUserId && !user.referralRewardGranted) {
@@ -345,9 +356,19 @@ const verifyOTP = async (req, res) => {
 
     // Handle specific error types
     if (error.code === 11000) {
+      const duplicateField = Object.keys(error.keyValue || {})[0];
+      let message = 'Duplicate key error occurred during signup';
+      if (duplicateField === 'email') {
+        message = 'User with this email already exists';
+      } else if (duplicateField === 'code') {
+        message = 'Referral code collision detected, please try again';
+      } else if (duplicateField === 'userId') {
+        message = 'A wallet already exists for this user';
+      }
+
       return res.status(400).json({
         success: false,
-        message: 'User with this email already exists'
+        message
       });
     }
 

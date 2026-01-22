@@ -28,9 +28,9 @@ const validateStudentProfileData = (data) => {
     errors.email = "Valid email is required";
 
   if (isEmpty(data.altPhone)) {
-    errors.altPhone = "Alternate phone is required";
+    errors.altPhone = "Mobile number  is required";
   } else if (!PHONE_REGEX.test(String(data.altPhone))) {
-    errors.altPhone = "Alternate phone must be 10 digits";
+    errors.altPhone = "Mobile number  must be 10 digits";
   }
 
   if (isEmpty(data.gender)) errors.gender = "Gender is required";
