@@ -1,4 +1,4 @@
-﻿const User = require("../models/User");
+const User = require("../models/User");
 const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
 const {
@@ -472,7 +472,7 @@ const updateTutorProfile = async (req, res) => {
 ------------------------------------------------------------ */
 const getAllUsers = async (req, res) => {
   try {
-    const users = await User.find().select("-password -refreshToken");
+    const users = await User.find({ isDeleted: { $ne: true } }).select("-password -refreshToken");
     res.status(200).json({ success: true, count: users.length, data: users });
   } catch (error) {
     res.status(500).json({

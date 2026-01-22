@@ -44,8 +44,16 @@ const userSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'suspended'],
+    enum: ['active', 'suspended', 'inactive'],
     default: 'active'
+  },
+  isDeleted: {
+    type: Boolean,
+    default: false
+  },
+  deletedAt: {
+    type: Date,
+    default: null
   },
   refreshToken: {
     type: String,

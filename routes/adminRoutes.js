@@ -18,6 +18,9 @@ router.put('/users/:id/status',  adminController.updateUserStatus);
 // Get user by ID
 router.get('/users/:userId', adminController.getUserById);
 
+// Delete user (soft delete)
+router.delete('/users/:userId', adminController.deleteUser);
+
 // Update user status
 router.patch('/users/:userId/status', adminController.updateUserStatus);
 

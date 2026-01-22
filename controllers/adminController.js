@@ -216,6 +216,7 @@ const getAllUsers = async (req, res) => {
     const skip = Math.max(0, (pageNum - 1) * limitNum);
 
     const andClauses = [];
+    andClauses.push({ isDeleted: { $ne: true } });
     if (role && ["student", "tutor", "admin"].includes(String(role)))
       andClauses.push({ role: role });
     if (status && ["active", "inactive", "suspended"].includes(String(status)))
@@ -953,10 +954,46 @@ const listAdminBookings = async (req, res) => {
   }
 };
 
+const deleteUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    if (user.isDeleted) {
+      return res
+        .status(400)
+        .json({ success: false, message: "User is already deleted" });
+    }
+
+    user.isDeleted = true;
+    user.deletedAt = new Date();
+    user.status = "inactive";
+    await user.save();
+
+    await logActivity(req, "ADMIN_DELETE_USER", { targetUserId: userId });
+
+    res
+      .status(200)
+      .json({ success: true, message: "User deleted successfully" });
+  } catch (error) {
+    console.error("Delete User Error:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
 module.exports = {
   getAllUsers,
   getUserById,
   updateUserStatus,
+  deleteUser,
   verifyTutor,
   getDashboardStats,
   getDashboardActivity,

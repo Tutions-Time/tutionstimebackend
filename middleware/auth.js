@@ -36,12 +36,20 @@ const authenticate = async (req, res, next) => {
       return next();
     }
 
-    const user = await User.findById(verification.decoded.userId).select('status role');
+    const user = await User.findById(verification.decoded.userId).select('status role isDeleted');
     if (!user) {
       return res.status(401).json({
         success: false,
         message: 'User not found',
         error: 'UNAUTHORIZED'
+      });
+    }
+
+    if (user.isDeleted) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account has been deleted.',
+        error: 'DELETED'
       });
     }
 

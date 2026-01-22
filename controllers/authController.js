@@ -408,6 +408,14 @@ const verifyOTP = async (req, res) => {
       }
     }
 
+    if (user.isDeleted) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Your account has been deleted. Please contact support to restore it.",
+      });
+    }
+
     if (user.status === "inactive" || user.status === "suspended") {
       return res.status(403).json({
         success: false,
