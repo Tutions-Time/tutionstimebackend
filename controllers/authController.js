@@ -195,55 +195,64 @@ const verifyOTP = async (req, res) => {
         );
 
         user = creationResult.value;
-        const wasCreated = !creationResult.lastErrorObject?.updatedExisting;
-
-        if (!wasCreated) {
-          return res.status(400).json({
-            success: false,
-            message: 'User already exists. Please login instead'
+      } catch (error) {
+        if (error.code === 11000 && error.keyValue?.email === normalizedEmail) {
+          user = await User.findOne({ email: normalizedEmail });
+        } else {
+          console.error('User creation error:', {
+            email: normalizedEmail,
+            role,
+            error: error.message
           });
+          throw error;
         }
+      }
 
-        await walletService.ensureWallet(user._id, user.role);
+      if (!user) {
+        return res.status(500).json({
+          success: false,
+          message: 'Unable to create or retrieve user'
+        });
+      }
 
-        // Auto-create referral code for this user
+      await walletService.ensureWallet(user._id, user.role);
+
+      // Auto-create referral code for this user
+      try {
+        const ReferralCode = require('../models/ReferralCode');
+        const genCode = async () => {
+          const base = `TT${(user.role || 'U').charAt(0).toUpperCase()}`;
+          const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+          return `${base}${random}`;
+        };
+        let code = await genCode();
+        for (let i = 0; i < 5; i++) {
+          const exists = await ReferralCode.findOne({ code });
+          if (!exists) break;
+          code = await genCode();
+        }
+        await ReferralCode.create({
+          code,
+          ownerUserId: user._id,
+          rewardType: 'fixed',
+          rewardAmount: 0,
+          maxUses: 1000000,
+          allowedRoles: ['student', 'tutor'],
+          status: 'active',
+        });
+      } catch (_) {}
+
+      if (req.body && typeof req.body.referralCode === 'string') {
         try {
           const ReferralCode = require('../models/ReferralCode');
-          const genCode = async () => {
-            const base = `TT${(user.role || 'U').charAt(0).toUpperCase()}`;
-            const random = Math.random().toString(36).substring(2, 8).toUpperCase();
-            return `${base}${random}`;
-          };
-          let code = await genCode();
-          // Ensure uniqueness
-          for (let i = 0; i < 5; i++) {
-            const exists = await ReferralCode.findOne({ code });
-            if (!exists) break;
-            code = await genCode();
+          const rc = await ReferralCode.findOne({ code: req.body.referralCode.trim() });
+          if (rc && rc.status === 'active') {
+            user.referrerUserId = rc.ownerUserId;
+            user.referralCodeUsed = rc.code;
+            await user.save();
           }
-          await ReferralCode.create({
-            code,
-            ownerUserId: user._id,
-            rewardType: 'fixed',
-            rewardAmount: 0,
-            maxUses: 1000000,
-            allowedRoles: ['student', 'tutor'],
-            status: 'active',
-          });
         } catch (_) {}
-
-        // Optional referral code capture
-        if (req.body && typeof req.body.referralCode === 'string') {
-          try {
-            const ReferralCode = require('../models/ReferralCode');
-            const rc = await ReferralCode.findOne({ code: req.body.referralCode.trim() });
-            if (rc && rc.status === 'active') {
-              user.referrerUserId = rc.ownerUserId;
-              user.referralCodeUsed = rc.code;
-              await user.save();
-            }
-          } catch (_) {}
-        }
+      }
 
       try {
         if (user.role === 'student' && user.referrerUserId && !user.referralRewardGranted) {
@@ -302,20 +311,6 @@ const verifyOTP = async (req, res) => {
           }
         }
       } catch (_) {}
-
-        // console.log('User created successfully:', {
-        //   id: user._id,
-        //   email: user.email,
-        //   role: user.role
-        // });
-      } catch (error) {
-        console.error('User creation error:', {
-          email: normalizedEmail,
-          role,
-          error: error.message
-        });
-        throw error;
-      }
     } else {
       // For login, find existing user
       user = await User.findOne({ email: normalizedEmail });
