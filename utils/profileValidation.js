@@ -125,6 +125,12 @@ const validateTutorProfileData = (data, options = {}) => {
   if (isEmpty(data.email) || !EMAIL_REGEX.test(String(data.email)))
     errors.email = "Valid email is required";
 
+  if (isEmpty(data.altPhone)) {
+    errors.altPhone = "Mobile number is required";
+  } else if (!PHONE_REGEX.test(String(data.altPhone))) {
+    errors.altPhone = "Mobile number must be 10 digits";
+  }
+
   if (data.phone && !PHONE_REGEX.test(String(data.phone))) {
     errors.phone = "Phone must be 10 digits";
   }

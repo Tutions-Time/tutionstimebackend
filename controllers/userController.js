@@ -349,6 +349,7 @@ const updateTutorProfile = async (req, res) => {
       city,
       state,
       pincode,
+      altPhone,
     } = req.body;
 
     const existingProfile = await TutorProfile.findOne({ userId }).lean();
@@ -389,25 +390,26 @@ const updateTutorProfile = async (req, res) => {
       const normalizedStudentTypes = normalizeArray(studentTypes);
       const normalizedAvailability = normalizeArray(availability);
 
-      const profileData = {
-        userId,
-        name,
-        email,
-        gender,
-        qualification,
-        specialization,
-        experience: Number(experience) || 0,
-        subjects: normalizedSubjects,
-        classLevels: normalizedClassLevels,
-        boards: normalizedBoards,
-        exams: normalizedExams,
-        studentTypes: normalizedStudentTypes,
-        groupSize: groupSize || parsedGroupSizes[0] || "",
-        groupSizes: parsedGroupSizes,
-        teachingMode,
-        hourlyRate: parseFloat(hourlyRate) || 0,
-        monthlyRate: parseFloat(monthlyRate) || 0,
-        availability: normalizedAvailability,
+    const profileData = {
+      userId,
+      name,
+      email,
+      gender,
+      qualification,
+      specialization,
+      experience: Number(experience) || 0,
+      subjects: normalizedSubjects,
+      classLevels: normalizedClassLevels,
+      boards: normalizedBoards,
+      exams: normalizedExams,
+      studentTypes: normalizedStudentTypes,
+      groupSize: groupSize || parsedGroupSizes[0] || "",
+      groupSizes: parsedGroupSizes,
+      teachingMode,
+      hourlyRate: parseFloat(hourlyRate) || 0,
+      monthlyRate: parseFloat(monthlyRate) || 0,
+      availability: normalizedAvailability,
+      altPhone: altPhone || existingProfile?.altPhone || "",
       bio,
       achievements,
       isAgeConfirmed: resolvedIsAgeConfirmed,
