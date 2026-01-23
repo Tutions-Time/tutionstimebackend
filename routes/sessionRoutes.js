@@ -47,11 +47,6 @@ router.post(
   sessionController.joinSession
 );
 
-// Tutor/Admin: mark session as completed
-router.post(
-  "/:id/complete",
-  checkRole(["tutor", "admin"]),
-  sessionController.markSessionCompleted
-);
+
 
 module.exports = router;

@@ -1048,69 +1048,7 @@ exports.markTutorJoined = async (req, res) => {
   }
 };
 
-/**
- * Tutor manually completes a demo booking
- * POST /api/bookings/:id/complete
- */
-exports.completeDemoBooking = async (req, res) => {
-  try {
-    const bookingId = req.params.id;
-    const booking = await Booking.findById(bookingId);
-    if (!booking) {
-      return res.status(404).json({ success: false, message: "Booking not found" });
-    }
-    if (booking.tutorId.toString() !== req.user.id) {
-      return res.status(403).json({ success: false, message: "Not authorized" });
-    }
-    if (booking.type !== "demo") {
-      return res.status(400).json({ success: false, message: "Only demo bookings can be completed here" });
-    }
-    if (booking.status === "cancelled" || booking.status === "expired") {
-      return res.status(400).json({
-        success: false,
-        message: "Cancelled or expired demos cannot be marked as completed",
-      });
-    }
-    if (booking.status !== "confirmed") {
-      return res.status(400).json({
-        success: false,
-        message: "Only confirmed demos can be marked as completed",
-      });
-    }
-    if (booking.status === "completed") {
-      return res.json({ success: true, message: "Demo already completed", data: booking });
-    }
 
-    const { updated, status } = determineDemoCompletion(booking);
-    if (!updated) {
-      return res.status(400).json({
-        success: false,
-        message: "Unable to complete demo (no join events detected).",
-      });
-    }
-
-    await booking.save();
-    if (["completed", "student-missed", "tutor-missed"].includes(status)) {
-      realtimeEvents.notifyBookingCompletion(booking);
-    }
-
-    let message = "Demo marked as completed";
-    if (status === "student-missed") {
-      message = "Student did not join; demo marked as student no-show.";
-    } else if (status === "tutor-missed") {
-      message = "Tutor did not join; demo status updated accordingly.";
-    }
-
-    return res.json({
-      success: true,
-      message,
-      data: booking,
-    });
-  } catch (err) {
-    console.error("completeDemoBooking error:", err);
-    return res.status(500).json({ success: false, message: "Server error" });
-  }
-};
 
 /**
  * ✅ Student confirms/cancels a demo that was requested BY TUTOR

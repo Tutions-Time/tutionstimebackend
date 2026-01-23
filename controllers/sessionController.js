@@ -278,39 +278,7 @@ exports.markAttendanceEvent = async (req, res) => {
   }
 };
 
-/**
- * Tutor: mark session as completed
- * POST /api/sessions/:id/complete
- */
-exports.markSessionCompleted = async (req, res) => {
-  try {
-    const tutorUserId = req.user.id;
-    const role = req.user.role;
-    const sessionId = req.params.id;
 
-    const session = await findSessionForTutor(sessionId, tutorUserId, role);
-
-    session.status = "completed";
-    if (session.studentJoinTime) {
-      session.attendance = "present";
-    } else if (session.attendance !== "present") {
-      session.attendance = "absent";
-    }
-
-    await session.save();
-
-    return res.json({
-      success: true,
-      message: "Session marked as completed",
-      data: session,
-    });
-  } catch (err) {
-    console.error("markSessionCompleted error:", err);
-    return res
-      .status(err.statusCode || 500)
-      .json({ success: false, message: err.message || "Server error" });
-  }
-};
 
 /**
  * Join a session: returns meeting link and records attendance join event
