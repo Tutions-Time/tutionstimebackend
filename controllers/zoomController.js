@@ -130,6 +130,8 @@ exports.handleZoomWebhook = async (req, res) => {
             });
             if (completed) {
               console.log("Zoom webhook: session completed", { meetingId });
+            } else {
+              console.log("Zoom webhook: session already completed or invalid state", { meetingId, status: session.status });
             }
             return;
           }
