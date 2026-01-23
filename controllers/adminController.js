@@ -337,11 +337,17 @@ const getAllUsers = async (req, res) => {
               : String(profile.photoUrl);
         }
       }
+      const profilePhone =
+        (u.role === 'student'
+          ? profile?.altPhone
+          : profile?.phone) ||
+        u.phone ||
+        null;
       return {
         _id: u._id,
         name,
         email,
-        phone: u.phone,
+        phone: profilePhone,
         role: u.role,
         status: u.status,
         isProfileComplete: u.isProfileComplete,

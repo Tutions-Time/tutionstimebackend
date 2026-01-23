@@ -12,10 +12,11 @@ const tutorProfileSchema = new mongoose.Schema(
       unique: true,
     },
 
-    // Basic info
-    name: { type: String, required: true, trim: true },
-    email: { type: String, trim: true, lowercase: true },
-    gender: { type: String, enum: ["Male", "Female", "Other"] },
+  // Basic info
+  name: { type: String, required: true, trim: true },
+  email: { type: String, trim: true, lowercase: true },
+  gender: { type: String, enum: ["Male", "Female", "Other"] },
+  altPhone: { type: String, trim: true },
     isAgeConfirmed: { type: Boolean, default: false },
     rating: { type: Number, min: 0, max: 5, default: 0 },
     // For average calculation
