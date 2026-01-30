@@ -55,7 +55,7 @@ const requestLogger = require("./middleware/requestLogger");
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use(requestLogger);
+// app.use(requestLogger);
 
 app.use(
   helmet({

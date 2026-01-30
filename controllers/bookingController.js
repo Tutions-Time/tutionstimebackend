@@ -299,65 +299,18 @@ exports.createDemoBooking = async (req, res) => {
       meetingLink: "",
     });
 
-    try {
-      const student = studentProfile;
-      const tutorUser = await User.findById(tutorId).lean();
-
-      const tutorEmail = tutorProfile.email || tutorUser?.email;
-
-      if (tutorEmail && notificationService?.sendEmail) {
-        const html = emailTpl.tutorDemoRequestHTML({
-          studentName: student?.name || "A student",
-          subject: subjectForDisplay,
-          date,
-          time,
-        });
-
-        await notificationService.sendEmail(
-          tutorEmail,
-          "New Demo Request",
-          "",
-          html
-        );
-      }
-
-      if (notificationService?.createInApp) {
-        await notificationService.createInApp(
-          tutorId,
-          "New Demo Request",
-          `${student?.name || "A student"} requested a demo for ${subjectForDisplay} on ${date} at ${time}`,
-          {
-            tutorId,
-            subject: subjectForDisplay,
-            date,
-            time,
-            bookingId: booking._id,
-          }
-        );
-      }
-
-      await createAdminNotification(
-        "New Demo Booking Created",
-        `${
-          student?.name || "A student"
-        } requested a demo with ${
-          tutorProfile?.name || "Tutor"
-        } for ${subjectForDisplay} on ${date} at ${time}`,
-        {
-          bookingId: booking._id,
-          tutorId,
-          studentId: req.user.id,
-          subject: subjectForDisplay,
-          subjects: selectedSubjects,
-          date,
-          time,
-          type: booking.type,
-          status: booking.status,
-        }
-      );
-    } catch (e) {
-      console.warn("Notification (tutor/admin) failed:", e.message);
-    }
+    const notificationContext = {
+      booking,
+      tutorProfile,
+      studentProfile,
+      tutorId,
+      subject: subjectForDisplay,
+      date,
+      time,
+      selectedSubjects,
+      studentId: req.user.id,
+    };
+    void notifyStudentDemoBooking(notificationContext);
 
     return res.status(201).json({ success: true, data: booking });
   } catch (err) {
@@ -516,61 +469,16 @@ exports.createDemoBookingByTutor = async (req, res) => {
       requestedBy: "tutor", // NEW
     });
 
-    // Notifications to student + admin
-    try {
-      const studentUser = await User.findById(studentId).lean();
-      const tutorUser = await User.findById(tutorId).lean();
-
-      const tutorName = tutorProfile.name || tutorUser?.phone || "A tutor";
-      const studentEmail = studentProfile.email || studentUser?.email;
-
-      if (studentEmail && notificationService?.sendEmail) {
-        const html =
-          emailTpl.studentDemoRequestHTML?.({
-            tutorName,
-            subject,
-            date,
-            time,
-          }) ||
-          `<p>${tutorName} has requested a demo for ${subject} on ${date} at ${time}.</p>`;
-
-        await notificationService.sendEmail(
-          studentEmail,
-          "New Demo Request from Tutor - TuitionTime",
-          "",
-          html
-        );
-      }
-
-      if (notificationService?.createInApp) {
-        await notificationService.createInApp(
-          studentId,
-          "New Demo Request",
-          `${tutorName} requested a demo for ${subject} on ${date} at ${time}`,
-          { tutorId, studentId, subject, date, time, bookingId: booking._id }
-        );
-      }
-
-      await createAdminNotification(
-        "New Tutor-Initiated Demo Booking",
-        `${tutorName} requested a demo with ${
-          studentProfile.name || "Student"
-        } for ${subject} on ${date} at ${time}`,
-        {
-          bookingId: booking._id,
-          tutorId,
-          studentId,
-          subject,
-          date,
-          time,
-          type: booking.type,
-          status: booking.status,
-          requestedBy: booking.requestedBy,
-        }
-      );
-    } catch (e) {
-      console.warn("Notification (student/admin) failed:", e.message);
-    }
+    void notifyTutorDemoBooking({
+      booking,
+      tutorProfile,
+      studentProfile,
+      tutorId,
+      studentId,
+      subject,
+      date,
+      time,
+    });
 
     return res.status(201).json({ success: true, data: booking });
   } catch (err) {
@@ -581,6 +489,142 @@ exports.createDemoBookingByTutor = async (req, res) => {
     });
   }
 };
+
+async function notifyStudentDemoBooking({
+  booking,
+  tutorProfile,
+  studentProfile,
+  tutorId,
+  subject,
+  date,
+  time,
+  selectedSubjects,
+  studentId,
+}) {
+  try {
+    const student = studentProfile;
+    const tutorUser = await User.findById(tutorId).lean();
+
+    const tutorEmail = tutorProfile.email || tutorUser?.email;
+
+    if (tutorEmail && notificationService?.sendEmail) {
+      const html = emailTpl.tutorDemoRequestHTML({
+        studentName: student?.name || "A student",
+        subject,
+        date,
+        time,
+      });
+
+      await notificationService.sendEmail(
+        tutorEmail,
+        "New Demo Request",
+        "",
+        html
+      );
+    }
+
+    if (notificationService?.createInApp) {
+      await notificationService.createInApp(
+        tutorId,
+        "New Demo Request",
+        `${student?.name || "A student"} requested a demo for ${subject} on ${date} at ${time}`,
+        {
+          tutorId,
+          subject,
+          date,
+          time,
+          bookingId: booking._id,
+        }
+      );
+    }
+
+    await createAdminNotification(
+      "New Demo Booking Created",
+      `${
+        student?.name || "A student"
+      } requested a demo with ${tutorProfile?.name || "Tutor"} for ${subject} on ${date} at ${time}`,
+      {
+        bookingId: booking._id,
+        tutorId,
+        studentId,
+        subject,
+        subjects: selectedSubjects,
+        date,
+        time,
+        type: booking.type,
+        status: booking.status,
+      }
+    );
+  } catch (e) {
+    console.warn("Notification (tutor/admin) failed:", e.message);
+  }
+}
+
+async function notifyTutorDemoBooking({
+  booking,
+  tutorProfile,
+  studentProfile,
+  tutorId,
+  studentId,
+  subject,
+  date,
+  time,
+}) {
+  try {
+    const studentUser = await User.findById(studentId).lean();
+    const tutorUser = await User.findById(tutorId).lean();
+
+    const tutorName = tutorProfile.name || tutorUser?.phone || "A tutor";
+    const studentEmail = studentProfile.email || studentUser?.email;
+
+    if (studentEmail && notificationService?.sendEmail) {
+      const html =
+        emailTpl.studentDemoRequestHTML?.({
+          tutorName,
+          subject,
+          date,
+          time,
+        }) ||
+        `<p>${tutorName} has requested a demo for ${subject} on ${date} at ${time}.</p>`;
+
+      await notificationService.sendEmail(
+        studentEmail,
+        "New Demo Request from Tutor - TuitionTime",
+        "",
+        html
+      );
+    }
+
+    if (notificationService?.createInApp) {
+      await notificationService.createInApp(
+        studentId,
+        "New Demo Request",
+        `${tutorName} requested a demo for ${subject} on ${date} at ${time}`,
+        { tutorId, studentId, subject, date, time, bookingId: booking._id }
+      );
+    }
+
+    await createAdminNotification(
+      "New Tutor-Initiated Demo Booking",
+      `${tutorName} requested a demo with ${
+        studentProfile.name || "Student"
+      } for ${subject} on ${date} at ${time}`,
+      {
+        bookingId: booking._id,
+        tutorId,
+        studentId,
+        subject,
+        date,
+        time,
+        type: booking.type,
+        status: booking.status,
+        requestedBy: booking.requestedBy,
+      }
+    );
+  } catch (e) {
+    console.warn("Notification (student/admin) failed:", e.message);
+  }
+}
 
 exports.getStudentBookings = async (req, res) => {
   try {
