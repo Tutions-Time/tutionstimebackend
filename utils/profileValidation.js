@@ -186,7 +186,6 @@ const validateTutorProfileData = (data, options = {}) => {
 
   if (isEmpty(data.photoUrl)) errors.photoUrl = "Profile photo is required";
   if (isEmpty(data.resumeUrl)) errors.resumeUrl = "Resume is required";
-  if (isEmpty(data.demoVideoUrl)) errors.demoVideo = "Demo video is required";
 
   if (!data.isAgeConfirmed)
     errors.isAgeConfirmed = "Age confirmation is required";
