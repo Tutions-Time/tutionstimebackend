@@ -43,6 +43,40 @@ function addDays(date, days) {
   return d;
 }
 
+async function regenerateRecurringSessions(groupBatchId) {
+  const gb = await GroupBatch.findById(groupBatchId);
+  if (!gb || gb.scheduleType !== "recurring" || !gb.recurring) return;
+
+  const { startDate, endDate, days, time } = gb.recurring;
+  if (!startDate || !endDate || !Array.isArray(days) || !days.length || !time) return;
+
+  const now = new Date();
+  await Session.deleteMany({
+    groupBatchId: gb._id,
+    startDateTime: { $gte: now },
+  });
+
+  const daysMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const targetDays = days.map((d) => daysMap[d]).filter((d) => d !== undefined);
+  const [startHour, startMinute] = String(time).split(":").map(Number);
+
+  let current = new Date(startDate);
+  const sessions = [];
+  while (current <= endDate) {
+    if (targetDays.includes(current.getDay())) {
+      const sessionDate = new Date(current);
+      sessionDate.setHours(startHour, startMinute, 0, 0);
+      if (sessionDate > now) {
+        const payload = await buildBatchSessionPayload(gb, sessionDate);
+        sessions.push(payload);
+      }
+    }
+    current.setDate(current.getDate() + 1);
+  }
+
+  if (sessions.length) await Session.insertMany(sessions);
+}
+
 function validateBatchInput(tp, body) {
   const errors = [];
   const todayStart = new Date();
@@ -262,7 +296,28 @@ exports.editBatch = async (req, res) => {
     if (!gb) return res.status(404).json({ success: false, message: "Batch not found" });
     if (!tp || String(gb.tutorId) !== String(tp._id)) return res.status(403).json({ success: false, message: "Not authorized" });
 
-    const update = req.body || {};
+    const update = { ...(req.body || {}) };
+    const sameDate = (a, b) => {
+      if (!a || !b) return false;
+      const da = new Date(a);
+      const db = new Date(b);
+      if (isNaN(da.getTime()) || isNaN(db.getTime())) return false;
+      return da.toISOString().slice(0, 10) === db.toISOString().slice(0, 10);
+    };
+    const sameDays = (a, b) => {
+      const aList = Array.isArray(a) ? a.filter(Boolean) : [];
+      const bList = Array.isArray(b) ? b.filter(Boolean) : [];
+      if (aList.length !== bList.length) return false;
+      const aSet = new Set(aList);
+      for (const d of bList) if (!aSet.has(d)) return false;
+      return true;
+    };
+    if (update.startDate && sameDate(update.startDate, gb.recurring?.startDate)) delete update.startDate;
+    if (update.endDate && sameDate(update.endDate, gb.recurring?.endDate)) delete update.endDate;
+    if (update.classStartTime && String(update.classStartTime) === String(gb.recurring?.time || "")) delete update.classStartTime;
+    if (update.classEndTime && String(update.classEndTime) === String(gb.recurring?.endTime || "")) delete update.classEndTime;
+    if (update.recurringDays && sameDays(update.recurringDays, gb.recurring?.days || [])) delete update.recurringDays;
+    if (update.days && sameDays(update.days, gb.recurring?.days || [])) delete update.days;
     const wasPublished = !!gb.published;
     Object.assign(gb, update);
 
@@ -296,6 +351,7 @@ exports.editBatch = async (req, res) => {
       update.recurringDays ||
       update.days;
 
+    let shouldRegenerateSessions = false;
     if (hasRecurringChange) {
       const startDateRaw = update.startDate || gb.recurring?.startDate;
       const endDateRaw = update.endDate || gb.recurring?.endDate;
@@ -366,31 +422,7 @@ exports.editBatch = async (req, res) => {
       gb.enrollmentOpenAt = startDate;
       gb.enrollmentCloseAt = addDays(startDate, 7);
 
-      const now = new Date();
-      await Session.deleteMany({
-        groupBatchId: gb._id,
-        startDateTime: { $gte: now },
-      });
-
-      const daysMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-      const targetDays = recurringDays.map((d) => daysMap[d]).filter((d) => d !== undefined);
-      const [startHour, startMinute] = String(classStartTime).split(":").map(Number);
-
-      let current = new Date(startDate);
-      const sessions = [];
-      while (current <= endDate) {
-        if (targetDays.includes(current.getDay())) {
-          const sessionDate = new Date(current);
-          sessionDate.setHours(startHour, startMinute, 0, 0);
-          if (sessionDate > now) {
-            const payload = await buildBatchSessionPayload(gb, sessionDate);
-            sessions.push(payload);
-          }
-        }
-        current.setDate(current.getDate() + 1);
-      }
-
-      if (sessions.length) await Session.insertMany(sessions);
+      shouldRegenerateSessions = true;
     }
 
     // Auto-sync: ensure a session exists for every fixed date (create missing)
@@ -417,7 +449,15 @@ exports.editBatch = async (req, res) => {
     await gb.save();
     await createAdminNotification("Group batch updated", `Batch ${gb._id} updated`, { batchId: gb._id });
     metrics.emit("group.updated", { batchId: gb._id });
-    res.json({ success: true, data: gb });
+    res.json({ success: true, data: gb, sessionsRegenerating: shouldRegenerateSessions });
+
+    if (shouldRegenerateSessions) {
+      setImmediate(() => {
+        regenerateRecurringSessions(gb._id).catch((err) => {
+          console.error("Session regeneration failed:", err?.message || err);
+        });
+      });
+    }
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }

@@ -6,11 +6,16 @@ const Payment = require("../models/Payment");
 const AdminWallet = require("../models/AdminWallet");
 const RegularClass = require("../models/RegularClass");
 const Booking = require("../models/Booking");
+const GroupBatch = require("../models/GroupBatch");
 const mongoose = require("mongoose");
 const fs = require("fs");
 const path = require("path");
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { logActivity } = require("../services/loggerService");
+const {
+  DEFAULT_SESSION_DURATION_MINUTES,
+  computeDurationMinutes,
+} = require("../utils/sessionZoomUtils");
 
 // S3 config (support multiple env names)
 const S3_BUCKET = process.env.AWS_S3_BUCKET || process.env.AWS_BUCKET;
@@ -879,6 +884,274 @@ const listAdminSessions = async (req, res) => {
   }
 };
 
+const listAdminClassesMonitor = async (req, res) => {
+  try {
+    const {
+      student,
+      tutor,
+      kind,
+      status,
+      isLive,
+      from,
+      to,
+      page = 1,
+      limit = 20,
+    } = req.query;
+    const now = new Date();
+    let windowStart = null;
+    let windowEnd = null;
+    if (from || to) {
+      const f = from ? new Date(from) : null;
+      const t = to ? new Date(to) : null;
+      windowStart = f && !Number.isNaN(f.getTime()) ? f : null;
+      windowEnd = t && !Number.isNaN(t.getTime()) ? t : null;
+    }
+    if (!windowStart || !windowEnd) {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      windowStart = windowStart || start;
+      windowEnd = windowEnd || end;
+    }
+
+    const resolveStudentIds = async (value) => {
+      if (!value) return [];
+      const raw = String(value).trim();
+      if (!raw) return [];
+      if (mongoose.isValidObjectId(raw)) {
+        const sp = await StudentProfile.findOne({
+          $or: [{ _id: raw }, { userId: raw }],
+        })
+          .select("_id")
+          .lean();
+        return sp?._id ? [sp._id] : [new mongoose.Types.ObjectId(raw)];
+      }
+      const sps = await StudentProfile.find({
+        name: new RegExp(raw, "i"),
+      })
+        .select("_id")
+        .lean();
+      return sps.map((x) => x._id);
+    };
+
+    const resolveTutorIds = async (value) => {
+      if (!value) return [];
+      const raw = String(value).trim();
+      if (!raw) return [];
+      if (mongoose.isValidObjectId(raw)) {
+        const tp = await TutorProfile.findOne({
+          $or: [{ _id: raw }, { userId: raw }],
+        })
+          .select("_id")
+          .lean();
+        return tp?._id ? [tp._id] : [new mongoose.Types.ObjectId(raw)];
+      }
+      const tps = await TutorProfile.find({
+        name: new RegExp(raw, "i"),
+      })
+        .select("_id")
+        .lean();
+      return tps.map((x) => x._id);
+    };
+
+    const [studentIds, tutorIds] = await Promise.all([
+      resolveStudentIds(student),
+      resolveTutorIds(tutor),
+    ]);
+
+    const andClauses = [
+      { startDateTime: { $gte: windowStart, $lte: windowEnd } },
+    ];
+
+    if (tutorIds.length) {
+      andClauses.push({ tutorId: { $in: tutorIds } });
+    }
+
+    let batchIdsForStudent = [];
+    if (studentIds.length) {
+      const batches = await GroupBatch.find({
+        enrolled: { $in: studentIds },
+      })
+        .select("_id")
+        .lean();
+      batchIdsForStudent = batches.map((b) => b._id);
+      andClauses.push({
+        $or: [
+          { studentId: { $in: studentIds } },
+          { groupBatchId: { $in: batchIdsForStudent } },
+        ],
+      });
+    }
+
+    if (kind === "group") {
+      andClauses.push({ groupBatchId: { $exists: true, $ne: null } });
+    } else if (kind === "regular") {
+      andClauses.push({
+        $and: [
+          { regularClassId: { $exists: true, $ne: null } },
+          { groupBatchId: { $in: [null, undefined] } },
+        ],
+      });
+    }
+
+    if (status) {
+      andClauses.push({ status: String(status) });
+    }
+
+    const filter = andClauses.length ? { $and: andClauses } : {};
+    const sessions = await Session.find(filter)
+      .populate({ path: "studentId", select: "name photoUrl" })
+      .populate({ path: "tutorId", select: "name photoUrl" })
+      .populate({ path: "regularClassId", select: "subject" })
+      .populate({
+        path: "groupBatchId",
+        select: "subject batchType recurring enrolled tutorId",
+      })
+      .lean();
+
+    if (!sessions.length) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        summary: { isInClass: false, count: 0, liveCount: 0 },
+        pagination: {
+          total: 0,
+          page: Number(page) || 1,
+          limit: Number(limit) || 20,
+          pages: 0,
+        },
+      });
+    }
+
+    const batches = sessions
+      .map((s) => s.groupBatchId)
+      .filter(Boolean)
+      .filter((b) => typeof b === "object" && b._id);
+    const batchMap = new Map(
+      batches.map((b) => [String(b._id), b]),
+    );
+
+    const enrolledIds = batches
+      .flatMap((b) => b.enrolled || [])
+      .map((id) => String(id));
+    const uniqueEnrolledIds = [...new Set(enrolledIds)];
+    const enrolledProfiles = uniqueEnrolledIds.length
+      ? await StudentProfile.find({ _id: { $in: uniqueEnrolledIds } })
+          .select("name photoUrl")
+          .lean()
+      : [];
+    const enrolledMap = new Map(
+      enrolledProfiles.map((p) => [String(p._id), p]),
+    );
+
+    const rows = sessions
+      .map((s) => {
+        const start = s.startDateTime ? new Date(s.startDateTime) : null;
+        if (!start || Number.isNaN(start.getTime())) return null;
+
+        let end = s.actualEndTime ? new Date(s.actualEndTime) : null;
+        if (!end || Number.isNaN(end.getTime())) {
+          const gb = s.groupBatchId ? batchMap.get(String(s.groupBatchId)) : null;
+          if (gb?.recurring?.time && gb?.recurring?.endTime) {
+            const minutes = computeDurationMinutes(
+              gb.recurring.time,
+              gb.recurring.endTime,
+            );
+            end = new Date(start.getTime() + minutes * 60 * 1000);
+          } else {
+            end = new Date(
+              start.getTime() + DEFAULT_SESSION_DURATION_MINUTES * 60 * 1000,
+            );
+          }
+        }
+
+        const isLive = start <= now && now <= end;
+
+        const gbId =
+          s.groupBatchId && typeof s.groupBatchId === "object"
+            ? s.groupBatchId._id
+            : s.groupBatchId;
+        const gb = gbId ? batchMap.get(String(gbId)) : null;
+        const enrolled =
+          gb?.enrolled?.map((id) => {
+            const p = enrolledMap.get(String(id));
+            return p ? { _id: id, name: p.name, photoUrl: p.photoUrl } : { _id: id };
+          }) || [];
+
+        const kindValue = gb ? "group" : "regular";
+        const record = {
+          _id: s._id,
+          kind: kindValue,
+          subject:
+            gb?.subject ||
+            s.regularClassId?.subject ||
+            s.subject ||
+            "Class",
+          startDateTime: s.startDateTime,
+          endDateTime: end,
+          status: s.status,
+          isLive,
+          meetingLink: s.meetingLink || s.joinUrl || "",
+          tutor: s.tutorId || null,
+          student: s.studentId || null,
+          groupBatchId: gbId || null,
+          batchInfo: gb
+            ? {
+                subject: gb.subject,
+                batchType: gb.batchType,
+              }
+            : null,
+          enrolled,
+          presence: {
+            tutorJoined: !!s.tutorJoinTime,
+            studentJoined: !!s.studentJoinTime,
+            tutorJoinTime: s.tutorJoinTime || null,
+            studentJoinTime: s.studentJoinTime || null,
+          },
+        };
+
+        if (String(isLive || "").toLowerCase() === "true" && !record.isLive) {
+          return null;
+        }
+        if (String(isLive || "").toLowerCase() === "false" && record.isLive) {
+          return null;
+        }
+
+        return record;
+      })
+      .filter(Boolean);
+
+    const liveRows = rows.filter((r) => r.isLive);
+    const filteredRows = rows;
+
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.max(1, Math.min(200, Number(limit) || 20));
+    const total = filteredRows.length;
+    const pages = Math.ceil(total / limitNum);
+    const startIdx = (pageNum - 1) * limitNum;
+    const pageRows = filteredRows.slice(startIdx, startIdx + limitNum);
+
+    return res.status(200).json({
+      success: true,
+      data: pageRows,
+      summary: {
+        isInClass: liveRows.length > 0,
+        count: filteredRows.length,
+        liveCount: liveRows.length,
+      },
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        pages,
+      },
+    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
 const listAdminBookings = async (req, res) => {
   try {
     const { status, startDate, endDate, page = 1, limit = 50 } = req.query;
@@ -1004,6 +1277,7 @@ module.exports = {
   getDashboardStats,
   getDashboardActivity,
   listAdminSessions,
+  listAdminClassesMonitor,
   listAdminBookings,
   migrateUploadsToS3,
 };
