@@ -66,9 +66,43 @@ async function buildBatchSessionPayload(batch, sessionDate) {
   };
 }
 
+async function createBatchSessionsThrottled(batch, sessionDates, options = {}) {
+  const batchSize = Math.max(1, Math.min(50, Number(options.batchSize) || 10));
+  const delayMs = Math.max(0, Number(options.delayMs) || 1000);
+  const now = Date.now();
+  const dates = (sessionDates || [])
+    .map((d) => new Date(d))
+    .filter((d) => !Number.isNaN(d.getTime()) && d.getTime() > now);
+
+  const created = [];
+  for (let i = 0; i < dates.length; i += batchSize) {
+    const chunk = dates.slice(i, i + batchSize);
+    const payloads = (await Promise.all(
+      chunk.map(async (date) => {
+        try {
+          return await buildBatchSessionPayload(batch, date);
+        } catch (err) {
+          console.error("Zoom meeting creation failed:", err?.message || err);
+          return null;
+        }
+      })
+    )).filter(Boolean);
+    if (payloads.length) {
+      const inserted = await require("../models/Session").insertMany(payloads);
+      created.push(...inserted);
+    }
+    if (i + batchSize < dates.length && delayMs > 0) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+
+  return created;
+}
+
 module.exports = {
   computeDurationMinutes,
   buildGroupSessionTopic,
   DEFAULT_SESSION_DURATION_MINUTES,
   buildBatchSessionPayload,
+  createBatchSessionsThrottled,
 };

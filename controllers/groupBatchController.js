@@ -2,7 +2,7 @@ const GroupBatch = require("../models/GroupBatch");
 const Session = require("../models/Session");
 const { createAdminNotification } = require("../services/adminNotification");
 const metrics = require("../services/metricsService");
-const { buildBatchSessionPayload } = require("../utils/sessionZoomUtils");
+const { createBatchSessionsThrottled } = require("../utils/sessionZoomUtils");
 
 function computeRefundPolicy(gb) {
   const now = Date.now();
@@ -61,20 +61,21 @@ async function regenerateRecurringSessions(groupBatchId) {
   const [startHour, startMinute] = String(time).split(":").map(Number);
 
   let current = new Date(startDate);
-  const sessions = [];
+  const sessionDates = [];
   while (current <= endDate) {
     if (targetDays.includes(current.getDay())) {
       const sessionDate = new Date(current);
       sessionDate.setHours(startHour, startMinute, 0, 0);
       if (sessionDate > now) {
-        const payload = await buildBatchSessionPayload(gb, sessionDate);
-        sessions.push(payload);
+        sessionDates.push(sessionDate);
       }
     }
     current.setDate(current.getDate() + 1);
   }
 
-  if (sessions.length) await Session.insertMany(sessions);
+  if (sessionDates.length) {
+    await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
+  }
 }
 
 function validateBatchInput(tp, body) {
@@ -243,21 +244,22 @@ exports.createBatch = async (req, res) => {
     let current = new Date(gb.recurring.startDate);
     const endLimit = new Date(gb.recurring.endDate);
     
-    const sessions = [];
+    const sessionDates = [];
     while (current <= endLimit) {
       if (targetDays.includes(current.getDay())) {
         const sessionDate = new Date(current);
         sessionDate.setHours(startHour, startMinute, 0, 0);
         // Only add if session is in the future
         if (sessionDate > Date.now()) {
-            const payload = await buildBatchSessionPayload(gb, sessionDate);
-            sessions.push(payload);
+            sessionDates.push(sessionDate);
         }
       }
       current.setDate(current.getDate() + 1);
     }
     
-    if (sessions.length) await Session.insertMany(sessions);
+    if (sessionDates.length) {
+      await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
+    }
 
     await createAdminNotification("Group batch created", `Batch ${gb._id} created`, { batchId: gb._id, tutorId: tp._id });
     metrics.emit("group.created", { batchId: gb._id });
@@ -332,14 +334,12 @@ exports.editBatch = async (req, res) => {
       }
       const existing = await Session.countDocuments({ groupBatchId: gb._id });
       if (existing === 0) {
-        const sessions = [];
-        for (const dateValue of gb.fixedDates || []) {
-          const sessionDate = new Date(dateValue);
-          if (isNaN(sessionDate.getTime())) continue;
-          const payload = await buildBatchSessionPayload(gb, sessionDate);
-          sessions.push(payload);
+        const sessionDates = (gb.fixedDates || [])
+          .map((d) => new Date(d))
+          .filter((d) => !isNaN(d.getTime()));
+        if (sessionDates.length) {
+          await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
         }
-        if (sessions.length) await Session.insertMany(sessions);
       }
     }
 
@@ -435,14 +435,12 @@ exports.editBatch = async (req, res) => {
       const existingSet = new Set(existingSessions.map((s) => new Date(s.startDateTime).toISOString()));
       const toCreate = desiredDates.filter((iso) => !existingSet.has(iso));
       if (toCreate.length) {
-        const payloads = [];
-        for (const iso of toCreate) {
-          const sessionDate = new Date(iso);
-          if (isNaN(sessionDate.getTime())) continue;
-          const record = await buildBatchSessionPayload(gb, sessionDate);
-          payloads.push(record);
+        const sessionDates = toCreate
+          .map((iso) => new Date(iso))
+          .filter((d) => !isNaN(d.getTime()));
+        if (sessionDates.length) {
+          await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
         }
-        if (payloads.length) await Session.insertMany(payloads);
       }
     }
 
@@ -783,15 +781,11 @@ exports.generateUpcomingSessions = async (req, res) => {
     if (!gb) return res.status(404).json({ success: false, message: "Batch not found" });
     const existing = await Session.countDocuments({ groupBatchId: gb._id });
     if (existing > 0) return res.json({ success: true, count: existing });
-    const sessionPayloads = [];
-    for (const dateValue of gb.fixedDates || []) {
-      const sessionDate = new Date(dateValue);
-      if (isNaN(sessionDate.getTime())) continue;
-      const payload = await buildBatchSessionPayload(gb, sessionDate);
-      sessionPayloads.push(payload);
-    }
-    const created = sessionPayloads.length
-      ? await Session.insertMany(sessionPayloads)
+    const sessionDates = (gb.fixedDates || [])
+      .map((d) => new Date(d))
+      .filter((d) => !isNaN(d.getTime()));
+    const created = sessionDates.length
+      ? await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 })
       : [];
     await createAdminNotification("Batch sessions generated", `Generated ${created.length} sessions`, { batchId: gb._id });
     metrics.emit("group.sessions.generated", { batchId: gb._id }, { count: created.length });

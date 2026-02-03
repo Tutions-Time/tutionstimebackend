@@ -2,7 +2,7 @@ const cron = require("node-cron");
 const GroupBatch = require("../../models/GroupBatch");
 const Session = require("../../models/Session");
 const notificationService = require("../notificationService");
-const { buildBatchSessionPayload } = require("../../utils/sessionZoomUtils");
+const { createBatchSessionsThrottled } = require("../../utils/sessionZoomUtils");
 
 const daysMap = { "Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6 };
 
@@ -30,7 +30,7 @@ cron.schedule("0 1 * * *", async () => {
       
       const existingDates = new Set(existingSessions.map(s => new Date(s.startDateTime).toDateString()));
       
-      const sessionsToCreate = [];
+      const sessionDates = [];
       let current = new Date();
       
       while (current <= endLimit) {
@@ -39,17 +39,16 @@ cron.schedule("0 1 * * *", async () => {
              const sessionDate = new Date(current);
              sessionDate.setHours(startHour, startMinute, 0, 0);
             if (sessionDate > Date.now()) {
-                const payload = await buildBatchSessionPayload(gb, sessionDate);
-                sessionsToCreate.push(payload);
+                sessionDates.push(sessionDate);
              }
           }
         }
         current.setDate(current.getDate() + 1);
       }
       
-      if (sessionsToCreate.length > 0) {
-        await Session.insertMany(sessionsToCreate);
-        console.log(`Generated ${sessionsToCreate.length} sessions for batch ${gb._id}`);
+      if (sessionDates.length > 0) {
+        const created = await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
+        console.log(`Generated ${created.length} sessions for batch ${gb._id}`);
       }
     }
   } catch (err) {
