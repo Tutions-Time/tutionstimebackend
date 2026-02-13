@@ -8,6 +8,7 @@ const {
   isStudentProfileComplete,
   isTutorProfileComplete,
 } = require("../utils/profileValidation");
+const { createAdminNotification } = require("../services/adminNotification");
                                                          
 /* ------------------------------------------------------------
    GET USER PROFILE
@@ -246,6 +247,21 @@ const updateStudentProfile = async (req, res) => {
       await user.save();
     }
 
+    // Notify Admin
+    try {
+      await createAdminNotification(
+        "Student Profile Updated",
+        `Student ${profile.name || profile._id} updated their profile`,
+        {
+          studentId: profile._id,
+          userId: userId,
+          isProfileComplete: isComplete,
+        }
+      );
+    } catch (e) {
+      console.warn("Student profile update admin notification failed:", e.message);
+    }
+
     res.status(200).json({
       success: true,
       message: "Student profile updated successfully",
@@ -289,6 +305,21 @@ const uploadTutorKyc = async (req, res) => {
     tutor.kycStatus = "submitted";
 
     await tutor.save();
+
+    // Notify Admin
+    try {
+      await createAdminNotification(
+        "Tutor KYC Submitted",
+        `Tutor ${tutor.name || tutor._id} submitted KYC documents for verification`,
+        {
+          tutorId: tutor._id,
+          userId: userId,
+          kycStatus: "submitted",
+        }
+      );
+    } catch (e) {
+      console.warn("KYC admin notification failed:", e.message);
+    }
 
     res.status(200).json({
       success: true,
@@ -453,6 +484,21 @@ const updateTutorProfile = async (req, res) => {
     if (user.isProfileComplete !== isComplete) {
       user.isProfileComplete = isComplete;
       await user.save();
+    }
+
+    // Notify Admin
+    try {
+      await createAdminNotification(
+        "Tutor Profile Updated",
+        `Tutor ${profile.name || profile._id} updated their profile`,
+        {
+          tutorId: profile._id,
+          userId: userId,
+          isProfileComplete: isComplete,
+        }
+      );
+    } catch (e) {
+      console.warn("Tutor profile update admin notification failed:", e.message);
     }
 
     res.status(200).json({

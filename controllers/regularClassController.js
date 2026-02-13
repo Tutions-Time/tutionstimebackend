@@ -259,6 +259,21 @@ exports.scheduleRegularClassSessions = async (req, res) => {
     rc.scheduleStatus = "scheduled";
     await rc.save();
 
+    try {
+      const { createAdminNotification } = require("../services/adminNotification");
+      void createAdminNotification(
+        "Regular Class Sessions Scheduled",
+        `Tutor ${tutorProfile?.name || tutorUserId} scheduled ${created.length} sessions for class ${rc.subject} with student ${rc.studentId}`,
+        {
+          regularClassId: rc._id,
+          tutorId: tutorUserId,
+          studentId: rc.studentId,
+          sessionCount: created.length,
+          subject: rc.subject
+        }
+      );
+    } catch (_) {}
+
     return res.json({
       success: true,
       message: "Sessions auto-scheduled successfully",

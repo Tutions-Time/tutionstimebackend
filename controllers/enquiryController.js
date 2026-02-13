@@ -3,6 +3,7 @@ const Enquiry = require('../models/Enquiry');
 const TutorProfile = require('../models/TutorProfile');
 const StudentProfile = require('../models/StudentProfile');
 const notificationService = require('../services/notificationService');
+const { createAdminNotification } = require('../services/adminNotification');
 
 /**
  * POST /api/enquiries
@@ -33,8 +34,20 @@ exports.createEnquiry = async (req, res) => {
           `${student?.name || 'A student'} sent an enquiry: ${subject}`
         );
       }
+
+      // Notify Admin
+      await createAdminNotification(
+        'New Enquiry Received',
+        `${student?.name || 'A student'} sent an enquiry to ${tutor?.name || 'a tutor'}: ${subject}`,
+        {
+          enquiryId: enquiry._id,
+          studentId: req.user.id,
+          tutorId,
+          subject
+        }
+      );
     } catch (e) {
-      console.warn('enquiry notify tutor failed:', e.message);
+      console.warn('enquiry notification failed:', e.message);
     }
 
     res.status(201).json({ success: true, data: enquiry });

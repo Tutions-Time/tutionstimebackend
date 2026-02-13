@@ -16,7 +16,12 @@ async function createAdminNotification(title, message, meta = {}) {
         <p>${message}</p>
         <pre>${JSON.stringify(meta, null, 2)}</pre>
       `;
-      await notificationService.sendEmail(ADMIN_EMAIL, title, html);
+      await notificationService.sendEmail(
+        ADMIN_EMAIL,
+        `[Admin] ${title}`,
+        message,
+        html
+      );
     }
   } catch (err) {
     if (process.env.NODE_ENV !== "test") {
