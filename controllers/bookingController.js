@@ -312,6 +312,20 @@ exports.createDemoBooking = async (req, res) => {
     };
     void notifyStudentDemoBooking(notificationContext);
 
+    // Notify Admin
+    void createAdminNotification(
+      "New Demo Booking Requested",
+      `Student ${studentProfile?.name || req.user.id} requested a demo with tutor ${tutorProfile?.name || tutorId} for ${subjectForDisplay} on ${date}`,
+      {
+        bookingId: booking._id,
+        studentId: req.user.id,
+        tutorId,
+        subject: subjectForDisplay,
+        date,
+        time,
+      }
+    );
+
     return res.status(201).json({ success: true, data: booking });
   } catch (err) {
     console.error("createDemoBooking error:", err);
@@ -479,6 +493,20 @@ exports.createDemoBookingByTutor = async (req, res) => {
       date,
       time,
     });
+
+    // Notify Admin
+    void createAdminNotification(
+      "Tutor-initiated Demo Requested",
+      `Tutor ${tutorProfile?.name || tutorId} initiated a demo with student ${studentProfile?.name || studentId} for ${subject} on ${date}`,
+      {
+        bookingId: booking._id,
+        studentId,
+        tutorId,
+        subject,
+        date,
+        time,
+      }
+    );
 
     return res.status(201).json({ success: true, data: booking });
   } catch (err) {

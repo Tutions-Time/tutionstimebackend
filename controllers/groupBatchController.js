@@ -154,8 +154,8 @@ function validateBatchInput(tp, body) {
 
   // Start Date
   const startDate = new Date(body.startDate);
-  if (isNaN(startDate.getTime()) || startDate < todayStart) {
-    errors.push("Invalid startDate (must be future)");
+  if (isNaN(startDate.getTime())) {
+    errors.push("Invalid startDate");
   }
 
   // End Date
@@ -318,8 +318,8 @@ exports.editBatch = async (req, res) => {
     if (update.endDate && sameDate(update.endDate, gb.recurring?.endDate)) delete update.endDate;
     if (update.classStartTime && String(update.classStartTime) === String(gb.recurring?.time || "")) delete update.classStartTime;
     if (update.classEndTime && String(update.classEndTime) === String(gb.recurring?.endTime || "")) delete update.classEndTime;
-    if (update.recurringDays && sameDays(update.recurringDays, gb.recurring?.days || [])) delete update.recurringDays;
-    if (update.days && sameDays(update.days, gb.recurring?.days || [])) delete update.days;
+    if (update.recurringDays !== undefined && sameDays(update.recurringDays, gb.recurring?.days || [])) delete update.recurringDays;
+    if (update.days !== undefined && sameDays(update.days, gb.recurring?.days || [])) delete update.days;
     const wasPublished = !!gb.published;
     Object.assign(gb, update);
 
@@ -344,24 +344,21 @@ exports.editBatch = async (req, res) => {
     }
 
     const hasRecurringChange =
-      update.startDate ||
-      update.endDate ||
-      update.classStartTime ||
-      update.classEndTime ||
-      update.recurringDays ||
-      update.days;
+      update.startDate !== undefined ||
+      update.endDate !== undefined ||
+      update.classStartTime !== undefined ||
+      update.classEndTime !== undefined ||
+      update.recurringDays !== undefined ||
+      update.days !== undefined;
 
     let shouldRegenerateSessions = false;
     if (hasRecurringChange) {
-      const startDateRaw = update.startDate || gb.recurring?.startDate;
-      const endDateRaw = update.endDate || gb.recurring?.endDate;
-      const classStartTime = update.classStartTime || gb.recurring?.time;
-      const classEndTime = update.classEndTime || gb.recurring?.endTime;
+      const startDateRaw = update.startDate !== undefined ? update.startDate : gb.recurring?.startDate;
+      const endDateRaw = update.endDate !== undefined ? update.endDate : gb.recurring?.endDate;
+      const classStartTime = update.classStartTime !== undefined ? update.classStartTime : gb.recurring?.time;
+      const classEndTime = update.classEndTime !== undefined ? update.classEndTime : gb.recurring?.endTime;
       const recurringDays =
-        normalizeDayList(update.recurringDays) ||
-        normalizeDayList(update.days) ||
-        gb.recurring?.days ||
-        [];
+        normalizeDayList(update.recurringDays !== undefined ? update.recurringDays : update.days !== undefined ? update.days : gb.recurring?.days);
 
       const startDate = new Date(startDateRaw);
       const endDate = new Date(endDateRaw);
@@ -392,11 +389,11 @@ exports.editBatch = async (req, res) => {
         });
       }
 
-      if (isNaN(startDate.getTime()) || startDate < todayStart) {
+      if (isNaN(startDate.getTime())) {
         return res.status(422).json({
           success: false,
           message: "Validation failed",
-          errors: ["Invalid startDate (must be future)"],
+          errors: ["Invalid startDate"],
         });
       }
 

@@ -10,6 +10,7 @@ const {
   isTutorProfileComplete,
 } = require("../utils/profileValidation");
 const { logActivity } = require("../services/loggerService");
+const { createAdminNotification } = require("../services/adminNotification");
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -206,6 +207,23 @@ const verifyOTP = async (req, res) => {
         );
 
         user = creationResult.value;
+
+        // Notify Admin for new signup
+        if (creationResult.lastErrorObject?.updatedExisting === false) {
+          try {
+            await createAdminNotification(
+              "New User Signup",
+              `A new ${role} signed up with email: ${normalizedEmail}`,
+              {
+                userId: user._id,
+                email: normalizedEmail,
+                role: role,
+              }
+            );
+          } catch (e) {
+            console.warn("New signup admin notification failed:", e.message);
+          }
+        }
       } catch (error) {
         if (error.code === 11000 && error.keyValue?.email === normalizedEmail) {
           user = await User.findOne({ email: normalizedEmail });

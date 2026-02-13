@@ -2252,6 +2252,25 @@ exports.createRefundRequest = async (req, res) => {
         studentName = sp3?.name || null;
       } catch (_) {}
     }
+
+    try {
+      const { createAdminNotification } = require("../services/adminNotification");
+      void createAdminNotification(
+        "Refund Requested",
+        `Student ${studentName || userId} requested a refund for ${courseLabel || payment.type} (Amount: ${suggestedAmount})`,
+        {
+          refundRequestId: rr._id,
+          paymentId,
+          studentId: userId,
+          amount: suggestedAmount,
+          reasonCode,
+          courseLabel
+        }
+      );
+    } catch (err) {
+      console.error("Failed to create admin notification for refund request:", err);
+    }
+
     return res.status(201).json({
       success: true,
       data: {

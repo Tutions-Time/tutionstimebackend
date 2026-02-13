@@ -77,6 +77,20 @@ exports.testGrantReferral = async (req, res) => {
         );
       }
     } catch (_) {}
+    try {
+      const { createAdminNotification } = require('../services/adminNotification');
+      void createAdminNotification(
+        "Referral Reward Granted",
+        `Referral reward of ${rewardAmount} granted to ${user.referrerUserId}. Signup bonus of ${bonus} granted to student ${user._id}.`,
+        {
+          referrerUserId: user.referrerUserId,
+          studentUserId: user._id,
+          rewardAmount,
+          bonusAmount: bonus
+        }
+      );
+    } catch (_) {}
+
     res.json({ success: true, data: { adminWallet, refWallet, stuWallet, rewardAmount, bonus } });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });
