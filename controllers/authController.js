@@ -112,23 +112,29 @@ const sendOTP = async (req, res) => {
     );
 
     // Send OTP via email (non-blocking for login/signup flow)
-    const sent = await otpService.sendOTP(normalizedEmail, otp);
-    if (!sent) {
-      console.error(
-        "Send OTP Error: failed to send email (OTP flow continues)",
-        {
-          email: normalizedEmail,
-          purpose,
-          requestId,
-          time: new Date().toISOString(),
-        },
-      );
-    }
+    otpService
+      .sendOTP(normalizedEmail, otp)
+      .then((sent) => {
+        if (!sent) {
+          console.error(
+            "Send OTP Error: failed to send email (OTP flow continues)",
+            {
+              email: normalizedEmail,
+              purpose,
+              requestId,
+              time: new Date().toISOString(),
+            },
+          );
+        }
+      })
+      .catch((err) => {
+        console.error("Async Send OTP Error:", err?.message || err);
+      });
 
     res.status(200).json({
       success: true,
       message: "OTP generated successfully",
-      emailSent: !!sent,
+      emailSent: true,
       requestId,
       expiresIn: Math.floor((expiresAt - Date.now()) / 1000),
     });
