@@ -550,12 +550,21 @@ exports.listBatches = async (req, res) => {
     const now = Date.now();
     const tutorIds = items.map((b) => b.tutorId).filter(Boolean);
     let tutorMap = new Map();
+    let suspendedTutorIds = new Set();
     if (tutorIds.length) {
       const TutorProfile = require("../models/TutorProfile");
       const tutors = await TutorProfile.find({ _id: { $in: tutorIds } })
-        .select("_id name photoUrl")
+        .select("_id name photoUrl userId")
         .lean();
-      tutorMap = new Map(tutors.map((t) => [String(t._id), t]));
+      const userIds = tutors.map(t => t.userId).filter(Boolean);
+      if (userIds.length) {
+        const User = require("../models/User");
+        const users = await User.find({ _id: { $in: userIds } }).select("_id status").lean();
+        const suspended = new Set(users.filter(u => String(u.status || "").toLowerCase() === "suspended").map(u => String(u._id)));
+        suspendedTutorIds = new Set(tutors.filter(t => suspended.has(String(t.userId))).map(t => String(t._id)));
+      }
+      const activeTutors = tutors.filter(t => !suspendedTutorIds.has(String(t._id)));
+      tutorMap = new Map(activeTutors.map((t) => [String(t._id), t]));
     }
     let spId = null;
     let paymentsMap = {};
@@ -579,7 +588,10 @@ exports.listBatches = async (req, res) => {
         });
       }
     } catch (_) {}
-    const data = items.map((b) => {
+    // filter out batches owned by suspended tutors
+    const visibleItems = items.filter(b => !suspendedTutorIds.has(String(b.tutorId)));
+
+    const data = visibleItems.map((b) => {
       const enrolledCount = (b.enrolled || []).length;
       const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount);
       const myEnrollment = spId ? (b.enrollmentDetails || []).find((e) => String(e.studentId) === String(spId)) : null;
@@ -617,6 +629,17 @@ exports.getBatch = async (req, res) => {
     const id = req.params.id;
     const b = await GroupBatch.findById(id).lean();
     if (!b) return res.status(404).json({ success: false, message: "Batch not found" });
+    try {
+      const TutorProfile = require("../models/TutorProfile");
+      const t = await TutorProfile.findById(b.tutorId).select("userId").lean();
+      if (t?.userId) {
+        const User = require("../models/User");
+        const u = await User.findById(t.userId).select("status").lean();
+        if (String(u?.status || "").toLowerCase() === "suspended") {
+          return res.status(404).json({ success: false, message: "Batch not found" });
+        }
+      }
+    } catch (_) {}
     const now = Date.now();
     const enrolledCount = (b.enrolled || []).length;
     const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount);

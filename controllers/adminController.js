@@ -518,6 +518,44 @@ const updateUserStatus = async (req, res) => {
       });
     }
 
+    if (status === "suspended" && user.role === "student") {
+      try {
+        const sp = await StudentProfile.findOne({ userId }).select("_id").lean();
+        const spId = sp?._id;
+        if (spId) {
+          const now = new Date();
+          await Promise.all([
+            GroupBatch.updateMany(
+              {
+                $or: [
+                  { enrolled: spId },
+                  { "enrollmentDetails.studentId": spId },
+                  { "holds.studentId": spId },
+                  { waitlist: spId },
+                ],
+              },
+              {
+                $pull: {
+                  enrolled: spId,
+                  waitlist: spId,
+                  enrollmentDetails: { studentId: spId },
+                  holds: { studentId: spId },
+                },
+              },
+            ),
+            RegularClass.updateMany(
+              { studentId: spId, status: { $ne: "ended" } },
+              { $set: { status: "paused" } },
+            ),
+            Session.updateMany(
+              { studentId: spId, startDateTime: { $gte: now }, status: "scheduled" },
+              { $set: { status: "cancelled" } },
+            ),
+          ]);
+        }
+      } catch (_) {}
+    }
+
     await logActivity(req, "ADMIN_UPDATE_USER_STATUS", {
       targetUserId: userId,
       newStatus: status,

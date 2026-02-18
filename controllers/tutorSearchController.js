@@ -115,7 +115,7 @@ exports.searchTutors = async (req, res) => {
 
       // Fetch tutors
       const tutors = await TutorProfile.find(filter)
-        .populate('userId', 'phone role lastLogin')
+        .populate('userId', 'phone role lastLogin status')
         .sort(sort)
         .skip(skip)
         .limit(limit)
@@ -124,15 +124,18 @@ exports.searchTutors = async (req, res) => {
         )
         .lean();
 
-      const total = await TutorProfile.countDocuments(filter);
+      const activeTutors = tutors.filter((t) => {
+        const st = String(t?.userId?.status || '').toLowerCase();
+        return st !== 'suspended';
+      });
 
       return res.status(200).json({
         success: true,
         mode: 'filter',
         page,
-        total,
-        count: tutors.length,
-        data: tutors,
+        total: activeTutors.length,
+        count: activeTutors.length,
+        data: activeTutors,
       });
     }
 
@@ -164,10 +167,18 @@ exports.getTutorById = async (req, res) => {
   try {
     const { id } = req.params;
   const tutor = await TutorProfile.findById(id)
-    .populate('userId', 'phone role email')
+    .populate('userId', 'phone role email status')
     .lean();
 
   if (!tutor) {
+    return res.status(404).json({
+      success: false,
+      message: 'Tutor not found',
+    });
+  }
+
+  const userStatus = String(tutor?.userId?.status || '').toLowerCase();
+  if (userStatus === 'suspended') {
     return res.status(404).json({
       success: false,
       message: 'Tutor not found',
