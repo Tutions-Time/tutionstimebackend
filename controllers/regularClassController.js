@@ -294,7 +294,7 @@ exports.getStudentRegularClasses = async (req, res) => {
     const studentUserId = req.user.id; // this is User._id
 
     // 1) Find all PAID + ACTIVE regular classes for this student
-    const regularClasses = await RegularClass.find({
+    let regularClasses = await RegularClass.find({
       studentId: studentUserId, // you store studentId = User._id in RegularClass
       paymentStatus: "paid",
       status: "active",
@@ -306,8 +306,14 @@ exports.getStudentRegularClasses = async (req, res) => {
       return res.json({ success: true, data: [] });
     }
 
-    // 2) Load tutor profiles to show name + photo
+    // 2) Remove classes whose tutor is suspended
     const tutorUserIds = regularClasses.map((rc) => rc.tutorId.toString());
+    const User = require("../models/User");
+    const tutorsUsers = await User.find({ _id: { $in: tutorUserIds } }).select("_id status").lean();
+    const suspendedTutorUsers = new Set(
+      tutorsUsers.filter(u => String(u.status || "").toLowerCase() === "suspended").map(u => String(u._id))
+    );
+    regularClasses = regularClasses.filter(rc => !suspendedTutorUsers.has(String(rc.tutorId)));
 
     const tutors = await TutorProfile.find({
       userId: { $in: tutorUserIds },

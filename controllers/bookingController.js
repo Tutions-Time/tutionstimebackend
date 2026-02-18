@@ -204,6 +204,19 @@ exports.createDemoBooking = async (req, res) => {
       });
     }
 
+    // Block booking with suspended tutors
+    const tutorUser = await User.findById(tutorId).select("status").lean();
+    if (!tutorUser) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Tutor not found" });
+    }
+    if (String(tutorUser.status || "").toLowerCase() === "suspended") {
+      return res
+        .status(403)
+        .json({ success: false, message: "Tutor unavailable" });
+    }
+
     const tutorProfile = await TutorProfile.findOne({ userId: tutorId }).lean();
     if (!tutorProfile) {
       return res

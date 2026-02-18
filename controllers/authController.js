@@ -211,14 +211,14 @@ const verifyOTP = async (req, res) => {
         // Notify Admin for new signup
         if (creationResult.lastErrorObject?.updatedExisting === false) {
           try {
+            const meta =
+              role === "tutor"
+                ? { userId: user._id, tutorId: user._id, email: normalizedEmail, role }
+                : { userId: user._id, studentId: user._id, email: normalizedEmail, role };
             await createAdminNotification(
               "New User Signup",
               `A new ${role} signed up with email: ${normalizedEmail}`,
-              {
-                userId: user._id,
-                email: normalizedEmail,
-                role: role,
-              }
+              meta
             );
           } catch (e) {
             console.warn("New signup admin notification failed:", e.message);

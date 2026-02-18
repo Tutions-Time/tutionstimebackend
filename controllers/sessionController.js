@@ -305,6 +305,35 @@ exports.joinSession = async (req, res) => {
       return res.status(404).json({ success: false, message: "Session not found" });
     }
 
+    try {
+      const User = require("../models/User");
+      const TutorProfile = require("../models/TutorProfile");
+      let tutorUserId = null;
+      if (session.groupBatchId) {
+        const GroupBatch = require("../models/GroupBatch");
+        const gb = await GroupBatch.findById(session.groupBatchId).select("tutorId").lean();
+        if (gb?.tutorId) {
+          const tp = await TutorProfile.findById(gb.tutorId).select("userId").lean();
+          tutorUserId = tp?.userId || null;
+        }
+      } else {
+        // For regular classes, tutorId may be stored in regularClassId.tutorId (User._id) or session.tutorId (TutorProfile._id)
+        const rcTutorId = session.regularClassId?.tutorId || null;
+        if (rcTutorId) {
+          tutorUserId = rcTutorId;
+        } else if (session.tutorId) {
+          const tp = await TutorProfile.findById(session.tutorId).select("userId").lean();
+          tutorUserId = tp?.userId || null;
+        }
+      }
+      if (tutorUserId) {
+        const tutorUser = await User.findById(tutorUserId).select("status").lean();
+        if (String(tutorUser?.status || "").toLowerCase() === "suspended") {
+          return res.status(403).json({ success: false, message: "Tutor unavailable" });
+        }
+      }
+    } catch (_) {}
+
     const joinLink = session.joinUrl || session.meetingLink;
     const startLink = session.startUrl || session.meetingLink;
     if (!joinLink && !startLink) {

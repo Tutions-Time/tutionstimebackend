@@ -57,11 +57,20 @@ exports.getRecommendedTutors = async (studentId) => {
   const student = await StudentProfile.findOne({ userId: studentId }).lean();
 
   if (!student) {
-    // fallback: return recent verified tutors
-    return await TutorProfile.find({ isVerified: true })
+    const tutors = await TutorProfile.find({ isVerified: true })
       .sort({ createdAt: -1 })
       .limit(10)
       .lean();
+    const userIds = tutors.map((t) => t.userId).filter(Boolean);
+    if (!userIds.length) return [];
+    const User = require('../models/User');
+    const users = await User.find({ _id: { $in: userIds } })
+      .select('_id status')
+      .lean();
+    const active = new Set(
+      users.filter((u) => String(u.status || '').toLowerCase() !== 'suspended').map((u) => String(u._id))
+    );
+    return tutors.filter((t) => active.has(String(t.userId)));
   }
 
   const pastBookings = await Booking.find({ studentId }).lean();
@@ -83,5 +92,14 @@ exports.getRecommendedTutors = async (studentId) => {
     .limit(15)
     .lean();
 
-  return tutors;
+  const userIds = tutors.map((t) => t.userId).filter(Boolean);
+  if (!userIds.length) return [];
+  const User = require('../models/User');
+  const users = await User.find({ _id: { $in: userIds } })
+    .select('_id status')
+    .lean();
+  const active = new Set(
+    users.filter((u) => String(u.status || '').toLowerCase() !== 'suspended').map((u) => String(u._id))
+  );
+  return tutors.filter((t) => active.has(String(t.userId)));
 };
