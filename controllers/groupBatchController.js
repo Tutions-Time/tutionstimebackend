@@ -43,6 +43,63 @@ function addDays(date, days) {
   return d;
 }
 
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function toYmd(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
+function addOneDayYmd(ymd) {
+  const [y, m, d] = String(ymd).split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (Number.isNaN(dt.getTime())) return null;
+  dt.setUTCDate(dt.getUTCDate() + 1);
+  return `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}-${pad2(dt.getUTCDate())}`;
+}
+
+function dayIndexFromYmd(ymd) {
+  const [y, m, d] = String(ymd).split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.getUTCDay();
+}
+
+function buildIstDateTime(ymd, hhmm) {
+  if (!ymd || !hhmm || !/^\d{2}:\d{2}$/.test(String(hhmm))) return null;
+  const dt = new Date(`${ymd}T${hhmm}:00+05:30`);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt;
+}
+
+function buildRecurringSessionDates(recurring, now = new Date()) {
+  const { startDate, endDate, days, time } = recurring || {};
+  const startYmd = toYmd(startDate);
+  const endYmd = toYmd(endDate);
+  if (!startYmd || !endYmd || !Array.isArray(days) || !days.length || !time) return [];
+
+  const daysMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const targetDays = new Set(days.map((d) => daysMap[d]).filter((d) => d !== undefined));
+  if (!targetDays.size) return [];
+
+  const out = [];
+  let cur = startYmd;
+  while (cur && cur <= endYmd) {
+    const dow = dayIndexFromYmd(cur);
+    if (dow !== null && targetDays.has(dow)) {
+      const sessionDate = buildIstDateTime(cur, String(time));
+      if (sessionDate && sessionDate.getTime() > now.getTime()) {
+        out.push(sessionDate);
+      }
+    }
+    cur = addOneDayYmd(cur);
+  }
+  return out;
+}
+
 async function regenerateRecurringSessions(groupBatchId) {
   const gb = await GroupBatch.findById(groupBatchId);
   if (!gb || gb.scheduleType !== "recurring" || !gb.recurring) return;
@@ -56,22 +113,7 @@ async function regenerateRecurringSessions(groupBatchId) {
     startDateTime: { $gte: now },
   });
 
-  const daysMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  const targetDays = days.map((d) => daysMap[d]).filter((d) => d !== undefined);
-  const [startHour, startMinute] = String(time).split(":").map(Number);
-
-  let current = new Date(startDate);
-  const sessionDates = [];
-  while (current <= endDate) {
-    if (targetDays.includes(current.getDay())) {
-      const sessionDate = new Date(current);
-      sessionDate.setHours(startHour, startMinute, 0, 0);
-      if (sessionDate > now) {
-        sessionDates.push(sessionDate);
-      }
-    }
-    current.setDate(current.getDate() + 1);
-  }
+  const sessionDates = buildRecurringSessionDates(gb.recurring, now);
 
   if (sessionDates.length) {
     await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
@@ -236,26 +278,8 @@ exports.createBatch = async (req, res) => {
       enrollmentCloseAt: addDays(payload.recurring.startDate, 7),
     });
 
-    // Generate sessions between start and end dates
-    const daysMap = { "Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6 };
-    const targetDays = (gb.recurring.days || []).map(d => daysMap[d]);
-    const [startHour, startMinute] = gb.recurring.time.split(":").map(Number);
-    
-    let current = new Date(gb.recurring.startDate);
-    const endLimit = new Date(gb.recurring.endDate);
-    
-    const sessionDates = [];
-    while (current <= endLimit) {
-      if (targetDays.includes(current.getDay())) {
-        const sessionDate = new Date(current);
-        sessionDate.setHours(startHour, startMinute, 0, 0);
-        // Only add if session is in the future
-        if (sessionDate > Date.now()) {
-            sessionDates.push(sessionDate);
-        }
-      }
-      current.setDate(current.getDate() + 1);
-    }
+    // Generate sessions between start and end dates with stable IST conversion
+    const sessionDates = buildRecurringSessionDates(gb.recurring, new Date());
     
     if (sessionDates.length) {
       await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
