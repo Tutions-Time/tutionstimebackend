@@ -14,11 +14,8 @@ const REGULAR_SESSION_DURATION_MINUTES = Number(
 function buildDateTime(dateStr, timeStr) {
   const [year, month, day] = dateStr.split("-").map(Number);
   const [H, M] = timeStr.split(":").map(Number);
-  // Build a stable IST datetime so server timezone does not shift class times.
-  // Example: "2026-02-20" + "15:00" => Date for "2026-02-20T15:00:00+05:30".
-  return new Date(
-    Date.UTC(year, month - 1, day, H - 5, M - 30, 0, 0)
-  );
+  // Preserve raw tutor-entered wall-clock time without timezone math.
+  return new Date(Date.UTC(year, month - 1, day, H, M, 0, 0));
 }
 
 function buildRegularSessionTopic(rc, dateTime) {
@@ -27,10 +24,12 @@ function buildRegularSessionTopic(rc, dateTime) {
     day: "numeric",
     month: "short",
     year: "numeric",
+    timeZone: "UTC",
   });
   const timeLabel = dateTime.toLocaleTimeString("en-IN", {
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "UTC",
   });
   return `${subject} - ${timeLabel} on ${dateLabel}`;
 }
@@ -409,7 +408,7 @@ exports.getStudentRegularClasses = async (req, res) => {
           hour: "2-digit",
           minute: "2-digit",
           hour12: false,
-          timeZone: "Asia/Kolkata",
+          timeZone: "UTC",
         });
       }
 
@@ -554,7 +553,7 @@ exports.getTutorRegularClasses = async (req, res) => {
           hour: "2-digit",
           minute: "2-digit",
           hour12: false,
-          timeZone: "Asia/Kolkata",
+          timeZone: "UTC",
         });
       }
 

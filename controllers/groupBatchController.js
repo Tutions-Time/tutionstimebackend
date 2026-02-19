@@ -68,9 +68,9 @@ function dayIndexFromYmd(ymd) {
   return dt.getUTCDay();
 }
 
-function buildIstDateTime(ymd, hhmm) {
+function buildRawDateTime(ymd, hhmm) {
   if (!ymd || !hhmm || !/^\d{2}:\d{2}$/.test(String(hhmm))) return null;
-  const dt = new Date(`${ymd}T${hhmm}:00+05:30`);
+  const dt = new Date(`${ymd}T${hhmm}:00Z`);
   if (Number.isNaN(dt.getTime())) return null;
   return dt;
 }
@@ -90,7 +90,7 @@ function buildRecurringSessionDates(recurring, now = new Date()) {
   while (cur && cur <= endYmd) {
     const dow = dayIndexFromYmd(cur);
     if (dow !== null && targetDays.has(dow)) {
-      const sessionDate = buildIstDateTime(cur, String(time));
+      const sessionDate = buildRawDateTime(cur, String(time));
       if (sessionDate && sessionDate.getTime() > now.getTime()) {
         out.push(sessionDate);
       }
