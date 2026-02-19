@@ -14,10 +14,11 @@ const REGULAR_SESSION_DURATION_MINUTES = Number(
 function buildDateTime(dateStr, timeStr) {
   const [year, month, day] = dateStr.split("-").map(Number);
   const [H, M] = timeStr.split(":").map(Number);
-
-  const d = new Date(year, month - 1, day);
-  d.setHours(H, M, 0, 0);
-  return d;
+  // Build a stable IST datetime so server timezone does not shift class times.
+  // Example: "2026-02-20" + "15:00" => Date for "2026-02-20T15:00:00+05:30".
+  return new Date(
+    Date.UTC(year, month - 1, day, H - 5, M - 30, 0, 0)
+  );
 }
 
 function buildRegularSessionTopic(rc, dateTime) {
@@ -404,7 +405,12 @@ exports.getStudentRegularClasses = async (req, res) => {
         }
 
         // schedule time as "HH:MM"
-        scheduledTime = startDate.toISOString().slice(11, 16);
+        scheduledTime = startDate.toLocaleTimeString("en-IN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+          timeZone: "Asia/Kolkata",
+        });
       }
 
       return {
@@ -544,7 +550,12 @@ exports.getTutorRegularClasses = async (req, res) => {
         if (nowMs >= joinOpenAt && nowMs <= joinCloseAt) {
           canJoin = true;
         }
-        scheduledTime = startDate.toISOString().slice(11, 16);
+        scheduledTime = startDate.toLocaleTimeString("en-IN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+          timeZone: "Asia/Kolkata",
+        });
       }
 
       return {
