@@ -468,6 +468,34 @@ exports.editBatch = async (req, res) => {
     await gb.save();
     await createAdminNotification("Group batch updated", `Batch ${gb._id} updated`, { batchId: gb._id });
     metrics.emit("group.updated", { batchId: gb._id });
+
+    // Notify enrolled students about batch updates and deep-link to batch detail page
+    try {
+      const StudentProfile = require("../models/StudentProfile");
+      const TutorProfile = require("../models/TutorProfile");
+      const tp2 = await TutorProfile.findById(gb.tutorId).select("name").lean();
+      const studentProfiles = (gb.enrolled || []).length
+        ? await StudentProfile.find({ _id: { $in: gb.enrolled } }).select("userId").lean()
+        : [];
+      const studentUserIds = [...new Set(studentProfiles.map((sp) => String(sp.userId)).filter(Boolean))];
+
+      if (studentUserIds.length) {
+        const title = "Batch Updated";
+        const body = `${tp2?.name || "Tutor"} updated your batch schedule/details.`;
+        await Promise.allSettled(
+          studentUserIds.map((userId) =>
+            notificationService.notifyUser(userId, title, body, {
+              batchId: gb._id,
+              groupBatchId: gb._id,
+              route: `/dashboard/student/group-batches/${gb._id}`,
+            })
+          )
+        );
+      }
+    } catch (notifyErr) {
+      console.error("batch edit student notify error:", notifyErr?.message || notifyErr);
+    }
+
     res.json({ success: true, data: gb, sessionsRegenerating: shouldRegenerateSessions });
 
     if (shouldRegenerateSessions) {
