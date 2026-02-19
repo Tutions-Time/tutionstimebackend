@@ -351,6 +351,14 @@ exports.createSubscriptionOrder = async (req, res) => {
           { upsert: true, new: true }
         );
 
+        // Ensure paid classes are immediately visible in regular class listings.
+        rc.paymentStatus = "paid";
+        rc.tutorPaymentStatus = rc.tutorPaymentStatus || "locked";
+        if (billingType === "hourly" && classes > 0) {
+          rc.classCount = classes;
+        }
+        await rc.save();
+
         await walletService.debitWallet(
           sp?.userId || userId,
           "student",
