@@ -299,10 +299,15 @@ exports.scheduleRegularClassSessions = async (req, res) => {
 exports.getStudentRegularClasses = async (req, res) => {
   try {
     const studentUserId = req.user.id; // this is User._id
+    const studentProfile = await StudentProfile.findOne({ userId: studentUserId })
+      .select("_id")
+      .lean();
+    const studentIds = [String(studentUserId)];
+    if (studentProfile?._id) studentIds.push(String(studentProfile._id));
 
     // 1) Find all PAID + ACTIVE regular classes for this student
     let regularClasses = await RegularClass.find({
-      studentId: studentUserId, // you store studentId = User._id in RegularClass
+      studentId: { $in: studentIds }, // support both User._id and StudentProfile._id
       paymentStatus: "paid",
       status: "active",
     })
@@ -314,21 +319,30 @@ exports.getStudentRegularClasses = async (req, res) => {
     }
 
     // 2) Remove classes whose tutor is suspended
-    const tutorUserIds = regularClasses.map((rc) => rc.tutorId.toString());
+    const tutorRefIds = regularClasses.map((rc) => rc.tutorId.toString());
+    const tutorProfiles = await TutorProfile.find({
+      $or: [{ _id: { $in: tutorRefIds } }, { userId: { $in: tutorRefIds } }],
+    })
+      .select("_id userId name photoUrl")
+      .lean();
+    const tutorByRefId = new Map();
+    for (const t of tutorProfiles) {
+      tutorByRefId.set(String(t._id), t);
+      if (t.userId) tutorByRefId.set(String(t.userId), t);
+    }
+    const tutorUserIds = tutorProfiles
+      .map((t) => (t.userId ? String(t.userId) : null))
+      .filter(Boolean);
     const User = require("../models/User");
     const tutorsUsers = await User.find({ _id: { $in: tutorUserIds } }).select("_id status").lean();
     const suspendedTutorUsers = new Set(
       tutorsUsers.filter(u => String(u.status || "").toLowerCase() === "suspended").map(u => String(u._id))
     );
-    regularClasses = regularClasses.filter(rc => !suspendedTutorUsers.has(String(rc.tutorId)));
-
-    const tutors = await TutorProfile.find({
-      userId: { $in: tutorUserIds },
-    })
-      .select("userId name photoUrl")
-      .lean();
-
-    const tutorMap = new Map(tutors.map((t) => [String(t.userId), t]));
+    regularClasses = regularClasses.filter((rc) => {
+      const tp = tutorByRefId.get(String(rc.tutorId));
+      const tutorUserId = tp?.userId ? String(tp.userId) : String(rc.tutorId);
+      return !suspendedTutorUsers.has(tutorUserId);
+    });
 
     // 3) Load sessions for each regular class
     const rcIds = regularClasses.map((rc) => rc._id);
@@ -370,7 +384,7 @@ exports.getStudentRegularClasses = async (req, res) => {
     // 4) Build response for frontend
     const enriched = regularClasses.map((rc) => {
       const key = String(rc._id);
-      const t = tutorMap.get(String(rc.tutorId)) || {};
+      const t = tutorByRefId.get(String(rc.tutorId)) || {};
       const nextSession = nextSessionMap.get(key) || null;
 
       let canJoin = false;
@@ -405,7 +419,7 @@ exports.getStudentRegularClasses = async (req, res) => {
         scheduleStatus: rc.scheduleStatus ?? "not-scheduled",
 
         tutor: {
-          userId: rc.tutorId,
+          userId: t.userId || rc.tutorId,
           name: t.name || "Tutor",
           photoUrl: t.photoUrl || null,
         },
