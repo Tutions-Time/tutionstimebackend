@@ -433,11 +433,24 @@ exports.createDemoBookingByTutor = async (req, res) => {
     const studentAvail = Array.isArray(studentProfile.availability)
       ? studentProfile.availability
       : [];
-    if (studentAvail.length && !studentAvail.includes(date)) {
-      return res.status(400).json({
-        success: false,
-        message: "Student not available on selected date",
-      });
+    if (studentAvail.length) {
+      if (!studentAvail.includes(date)) {
+        return res.status(400).json({
+          success: false,
+          message: "Student not available on selected date",
+        });
+      }
+    } else {
+      const isSunday = (() => {
+        const d = new Date(`${date}T00:00:00Z`);
+        return d.getUTCDay() === 0;
+      })();
+      if (isSunday) {
+        return res.status(400).json({
+          success: false,
+          message: "Student not available on Sundays",
+        });
+      }
     }
 
     // Prevent double booking for same tutor+student+slot
