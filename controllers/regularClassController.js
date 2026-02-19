@@ -38,9 +38,14 @@ function buildRegularSessionTopic(rc, dateTime) {
 exports.getTutorRegularStudents = async (req, res) => {
   try {
     const tutorUserId = req.user.id; // this is User._id
+    const tutorProfile = await TutorProfile.findOne({ userId: tutorUserId })
+      .select("_id")
+      .lean();
+    const tutorIds = [String(tutorUserId)];
+    if (tutorProfile?._id) tutorIds.push(String(tutorProfile._id));
 
     const regularClasses = await RegularClass.find({
-      tutorId: tutorUserId, // you store tutorId = User._id in RegularClass
+      tutorId: { $in: tutorIds }, // support both User._id and TutorProfile._id
       paymentStatus: "paid",
       status: "active",
     })
@@ -56,14 +61,16 @@ exports.getTutorRegularStudents = async (req, res) => {
     );
 
     const students = await StudentProfile.find({
-      userId: { $in: studentUserIds },
+      $or: [{ _id: { $in: studentUserIds } }, { userId: { $in: studentUserIds } }],
     })
       .select("userId name photoUrl")
       .lean();
 
-    const studentMap = new Map(
-      students.map((s) => [String(s.userId), s])
-    );
+    const studentMap = new Map();
+    for (const s of students) {
+      studentMap.set(String(s._id), s);
+      if (s.userId) studentMap.set(String(s.userId), s);
+    }
 
     const enriched = regularClasses.map((rc) => {
       const s = studentMap.get(String(rc.studentId)) || {};
@@ -437,9 +444,14 @@ exports.getStudentRegularClasses = async (req, res) => {
 exports.getTutorRegularClasses = async (req, res) => {
   try {
     const tutorUserId = req.user.id;
+    const tutorProfile = await TutorProfile.findOne({ userId: tutorUserId })
+      .select("_id")
+      .lean();
+    const tutorIds = [String(tutorUserId)];
+    if (tutorProfile?._id) tutorIds.push(String(tutorProfile._id));
 
     const regularClasses = await RegularClass.find({
-      tutorId: tutorUserId,
+      tutorId: { $in: tutorIds },
       paymentStatus: "paid",
       status: "active",
     })
@@ -452,11 +464,15 @@ exports.getTutorRegularClasses = async (req, res) => {
 
     const studentUserIds = regularClasses.map((rc) => rc.studentId.toString());
     const students = await StudentProfile.find({
-      userId: { $in: studentUserIds },
+      $or: [{ _id: { $in: studentUserIds } }, { userId: { $in: studentUserIds } }],
     })
       .select("userId name photoUrl")
       .lean();
-    const studentMap = new Map(students.map((s) => [String(s.userId), s]));
+    const studentMap = new Map();
+    for (const s of students) {
+      studentMap.set(String(s._id), s);
+      if (s.userId) studentMap.set(String(s.userId), s);
+    }
 
     const rcIds = regularClasses.map((rc) => rc._id);
     const now = new Date();
@@ -576,9 +592,23 @@ exports.getRegularClassSessions = async (req, res) => {
       return res.status(404).json({ success: false, message: "Regular class not found" });
     }
 
-    // Authorize: tutor or student assigned to this class
-    const isTutor = role === "tutor" && String(rc.tutorId) === String(userId);
-    const isStudent = role === "student" && String(rc.studentId) === String(userId);
+    // Authorize: tutor or student assigned to this class (support both User and Profile ids)
+    const tutorProfile =
+      role === "tutor"
+        ? await TutorProfile.findOne({ userId }).select("_id").lean()
+        : null;
+    const studentProfile =
+      role === "student"
+        ? await StudentProfile.findOne({ userId }).select("_id").lean()
+        : null;
+    const isTutor =
+      role === "tutor" &&
+      (String(rc.tutorId) === String(userId) ||
+        (tutorProfile && String(rc.tutorId) === String(tutorProfile._id)));
+    const isStudent =
+      role === "student" &&
+      (String(rc.studentId) === String(userId) ||
+        (studentProfile && String(rc.studentId) === String(studentProfile._id)));
     if (!isTutor && !isStudent) {
       return res.status(403).json({ success: false, message: "Not authorized" });
     }
