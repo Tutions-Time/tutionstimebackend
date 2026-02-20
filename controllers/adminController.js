@@ -936,17 +936,31 @@ const listAdminClassesMonitor = async (req, res) => {
       limit = 20,
     } = req.query;
     const now = new Date();
+    const parseDateBoundary = (value, endOfDay = false) => {
+      if (!value) return null;
+      const raw = String(value).trim();
+      if (!raw) return null;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        return new Date(`${raw}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`);
+      }
+      const d = new Date(raw);
+      if (Number.isNaN(d.getTime())) return null;
+      return d;
+    };
     let windowStart = null;
     let windowEnd = null;
     if (from || to) {
-      const f = from ? new Date(from) : null;
-      const t = to ? new Date(to) : null;
+      const f = parseDateBoundary(from, false);
+      const t = parseDateBoundary(to, true);
       windowStart = f && !Number.isNaN(f.getTime()) ? f : null;
       windowEnd = t && !Number.isNaN(t.getTime()) ? t : null;
     }
     if (!windowStart || !windowEnd) {
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      const y = now.getUTCFullYear();
+      const m = String(now.getUTCMonth() + 1).padStart(2, "0");
+      const d = String(now.getUTCDate()).padStart(2, "0");
+      const start = new Date(`${y}-${m}-${d}T00:00:00.000Z`);
+      const end = new Date(`${y}-${m}-${d}T23:59:59.999Z`);
       windowStart = windowStart || start;
       windowEnd = windowEnd || end;
     }
@@ -1037,6 +1051,7 @@ const listAdminClassesMonitor = async (req, res) => {
 
     const filter = andClauses.length ? { $and: andClauses } : {};
     const sessions = await Session.find(filter)
+      .sort({ startDateTime: -1, _id: -1 })
       .populate({ path: "studentId", select: "name photoUrl" })
       .populate({ path: "tutorId", select: "name photoUrl" })
       .populate({ path: "regularClassId", select: "subject" })
@@ -1158,8 +1173,16 @@ const listAdminClassesMonitor = async (req, res) => {
       })
       .filter(Boolean);
 
-    const liveRows = rows.filter((r) => r.isLive);
-    const filteredRows = rows;
+    const sortedRows = rows
+      .slice()
+      .sort((a, b) => {
+        const at = new Date(a.startDateTime).getTime();
+        const bt = new Date(b.startDateTime).getTime();
+        if (bt !== at) return bt - at;
+        return String(b._id).localeCompare(String(a._id));
+      });
+    const liveRows = sortedRows.filter((r) => r.isLive);
+    const filteredRows = sortedRows;
 
     const pageNum = Math.max(1, Number(page) || 1);
     const limitNum = Math.max(1, Math.min(200, Number(limit) || 20));
