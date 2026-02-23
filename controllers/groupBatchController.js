@@ -86,7 +86,9 @@ function buildRecurringSessionDates(recurring, now = new Date()) {
   if (!targetDays.size) return [];
 
   const out = [];
-  let cur = startYmd;
+  // If the batch is created with a start date equal to "today", begin from tomorrow
+  const todayYmd = toYmd(now);
+  let cur = startYmd === todayYmd ? addOneDayYmd(startYmd) : startYmd;
   while (cur && cur <= endYmd) {
     const dow = dayIndexFromYmd(cur);
     if (dow !== null && targetDays.has(dow)) {
