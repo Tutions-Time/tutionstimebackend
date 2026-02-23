@@ -21,6 +21,9 @@ router.get('/users/:userId', adminController.getUserById);
 // Delete user (soft delete)
 router.delete('/users/:userId', adminController.deleteUser);
 
+// Permanently delete user (hard delete)
+router.delete('/users/:userId/hard', adminController.hardDeleteUser);
+
 // Update user status
 router.patch('/users/:userId/status', adminController.updateUserStatus);
 

@@ -7,6 +7,9 @@ const AdminWallet = require("../models/AdminWallet");
 const RegularClass = require("../models/RegularClass");
 const Booking = require("../models/Booking");
 const GroupBatch = require("../models/GroupBatch");
+const DeviceToken = require("../models/DeviceToken");
+const Notification = require("../models/Notification");
+const Wallet = require("../models/Wallet");
 const mongoose = require("mongoose");
 const fs = require("fs");
 const path = require("path");
@@ -1053,7 +1056,7 @@ const listAdminClassesMonitor = async (req, res) => {
     const sessions = await Session.find(filter)
       .sort({ startDateTime: -1, _id: -1 })
       .populate({ path: "studentId", select: "name photoUrl" })
-      .populate({ path: "tutorId", select: "name photoUrl" })
+      .populate({ path: "tutorId", select: "name photoUrl userId" })
       .populate({ path: "regularClassId", select: "subject" })
       .populate({
         path: "groupBatchId",
@@ -1329,11 +1332,54 @@ const deleteUser = async (req, res) => {
   }
 };
 
+// Hard delete a user and their profile (student or tutor)
+const hardDeleteUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId);
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
+    }
+
+    // Remove dependent documents that are safe to delete
+    await Promise.allSettled([
+      DeviceToken.deleteMany({ userId }),
+      Notification.deleteMany({ userId }),
+      Wallet.deleteOne({ userId }),
+    ]);
+
+    // Remove role-specific profile
+    if (String(user.role) === "student") {
+      await StudentProfile.deleteOne({ userId });
+    } else if (String(user.role) === "tutor") {
+      await TutorProfile.deleteOne({ userId });
+    }
+
+    // Finally remove the user
+    await User.deleteOne({ _id: userId });
+
+    await logActivity(req, "ADMIN_HARD_DELETE_USER", { targetUserId: userId, role: user.role });
+
+    return res.status(200).json({
+      success: true,
+      message: "User permanently deleted",
+    });
+  } catch (error) {
+    console.error("Hard Delete User Error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
 module.exports = {
   getAllUsers,
   getUserById,
   updateUserStatus,
   deleteUser,
+  hardDeleteUser,
   verifyTutor,
   getDashboardStats,
   getDashboardActivity,
