@@ -85,17 +85,7 @@ async function createBatchSessionsThrottled(batch, sessionDates, options = {}) {
           return await buildBatchSessionPayload(batch, date);
         } catch (err) {
           console.error("Zoom meeting creation failed:", err?.message || err);
-          return {
-            groupBatchId: batch._id,
-            tutorId: batch.tutorId,
-            startDateTime: date,
-            meetingId: "",
-            meetingPassword: "",
-            startUrl: "",
-            joinUrl: "",
-            meetingLink: "",
-            status: "scheduled",
-          };
+          return null;
         }
       })
     )).filter(Boolean);
