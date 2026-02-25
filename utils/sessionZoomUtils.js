@@ -3,6 +3,29 @@ const DEFAULT_SESSION_DURATION_MINUTES = Number(
 );
 const zoomService = require("../services/zoomService");
 
+async function wait(ms) {
+  if (ms > 0) {
+    await new Promise((r) => setTimeout(r, ms));
+  }
+}
+
+async function createMeetingWithRetry({ topic, startTime, duration }, opts = {}) {
+  const retries = Math.max(0, Number(opts.retries ?? 3));
+  const retryDelayMs = Math.max(0, Number(opts.retryDelayMs ?? 1500));
+  let lastErr = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await zoomService.createZoomMeeting({ topic, startTime, duration });
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) {
+        await wait(retryDelayMs);
+      }
+    }
+  }
+  throw lastErr || new Error("Zoom meeting creation failed");
+}
+
 function computeDurationMinutes(startTime, endTime) {
   if (!startTime || !endTime) {
     return DEFAULT_SESSION_DURATION_MINUTES;
@@ -49,7 +72,7 @@ function buildGroupSessionTopic(batch, dateTime) {
 async function buildBatchSessionPayload(batch, sessionDate) {
   const duration = computeDurationMinutes(batch?.recurring?.time, batch?.recurring?.endTime);
   const topic = buildGroupSessionTopic(batch, sessionDate);
-  const meeting = await zoomService.createZoomMeeting({
+  const meeting = await createMeetingWithRetry({
     topic,
     startTime: sessionDate.toISOString(),
     duration,
@@ -71,6 +94,8 @@ async function buildBatchSessionPayload(batch, sessionDate) {
 async function createBatchSessionsThrottled(batch, sessionDates, options = {}) {
   const batchSize = Math.max(1, Math.min(50, Number(options.batchSize) || 10));
   const delayMs = Math.max(0, Number(options.delayMs) || 1000);
+  const retries = Math.max(0, Number(options.retryCount ?? 3));
+  const retryDelayMs = Math.max(0, Number(options.retryDelayMs ?? 1500));
   const now = Date.now();
   const dates = (sessionDates || [])
     .map((d) => new Date(d))
@@ -82,7 +107,24 @@ async function createBatchSessionsThrottled(batch, sessionDates, options = {}) {
     const payloads = (await Promise.all(
       chunk.map(async (date) => {
         try {
-          return await buildBatchSessionPayload(batch, date);
+          // inline retry with the same defaults used in buildBatchSessionPayload
+          const duration = computeDurationMinutes(batch?.recurring?.time, batch?.recurring?.endTime);
+          const topic = buildGroupSessionTopic(batch, date);
+          const meeting = await createMeetingWithRetry(
+            { topic, startTime: date.toISOString(), duration },
+            { retries, retryDelayMs }
+          );
+          return {
+            groupBatchId: batch._id,
+            tutorId: batch.tutorId,
+            startDateTime: date,
+            meetingId: meeting.id ? String(meeting.id) : "",
+            meetingPassword: meeting.password || meeting.encrypted_password || "",
+            startUrl: meeting.start_url || "",
+            joinUrl: meeting.join_url || "",
+            meetingLink: meeting.join_url || "",
+            status: "scheduled",
+          };
         } catch (err) {
           console.error("Zoom meeting creation failed:", err?.message || err);
           return {
