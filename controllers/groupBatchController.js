@@ -69,8 +69,13 @@ function dayIndexFromYmd(ymd) {
 }
 
 function buildRawDateTime(ymd, hhmm) {
-  if (!ymd || !hhmm || !/^\d{2}:\d{2}$/.test(String(hhmm))) return null;
-  const dt = new Date(`${ymd}T${hhmm}:00Z`);
+  if (!ymd || !hhmm) return null;
+  const m = String(hhmm).match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Math.max(0, Math.min(23, Number(m[1])));
+  const min = Math.max(0, Math.min(59, Number(m[2])));
+  const t = `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  const dt = new Date(`${ymd}T${t}:00Z`);
   if (Number.isNaN(dt.getTime())) return null;
   return dt;
 }
