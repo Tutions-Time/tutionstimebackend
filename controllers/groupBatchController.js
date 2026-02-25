@@ -893,3 +893,56 @@ exports.resyncRecurringSessions = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
+exports.ensureUpcomingSessionLinks = async (req, res) => {
+  try {
+    if (!featureEnabled()) return res.status(404).json({ success: false, message: "Feature disabled" });
+    const batchId = req.params.id;
+    const tutorUserId = req.user.id;
+    const TutorProfile = require("../models/TutorProfile");
+    const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id");
+    const gb = await GroupBatch.findById(batchId);
+    if (!gb) return res.status(404).json({ success: false, message: "Batch not found" });
+    if (!tp || String(gb.tutorId) !== String(tp._id)) return res.status(403).json({ success: false, message: "Not authorized" });
+    if (!gb.recurring || !gb.recurring.time) return res.status(400).json({ success: false, message: "Batch has no recurring time" });
+
+    const zoomService = require("../services/zoomService");
+    const { computeDurationMinutes } = require("../utils/sessionZoomUtils");
+    const now = new Date();
+    const duration = computeDurationMinutes(gb.recurring.time, gb.recurring.endTime);
+
+    const sessions = await Session.find({
+      groupBatchId: gb._id,
+      startDateTime: { $gte: now },
+      $or: [
+        { joinUrl: { $in: [null, ""] } },
+        { startUrl: { $in: [null, ""] } },
+        { meetingId: { $in: [null, ""] } }
+      ],
+    }).sort({ startDateTime: 1 });
+
+    let updated = 0;
+    for (const s of sessions) {
+      try {
+        const meeting = await zoomService.createZoomMeeting({
+          topic: `${gb.subject || "Batch"} - ${new Date(s.startDateTime).toLocaleString("en-IN")}`,
+          startTime: new Date(s.startDateTime).toISOString(),
+          duration,
+        });
+        s.meetingId = meeting.id ? String(meeting.id) : s.meetingId || "";
+        s.meetingPassword = meeting.password || meeting.encrypted_password || s.meetingPassword || "";
+        s.startUrl = meeting.start_url || s.startUrl || "";
+        s.joinUrl = meeting.join_url || s.joinUrl || "";
+        s.meetingLink = s.joinUrl || s.meetingLink || "";
+        await s.save();
+        updated++;
+      } catch (e) {
+        console.error("ensureUpcomingSessionLinks meeting creation failed:", e?.message || e);
+      }
+    }
+
+    res.json({ success: true, updated, totalPending: sessions.length });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
