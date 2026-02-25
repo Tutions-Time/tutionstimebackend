@@ -873,3 +873,23 @@ exports.generateUpcomingSessions = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
+exports.resyncRecurringSessions = async (req, res) => {
+  try {
+    if (!featureEnabled()) return res.status(404).json({ success: false, message: "Feature disabled" });
+    const batchId = req.params.id;
+    const tutorUserId = req.user.id;
+    const TutorProfile = require("../models/TutorProfile");
+    const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id");
+    const gb = await GroupBatch.findById(batchId);
+    if (!gb) return res.status(404).json({ success: false, message: "Batch not found" });
+    if (!tp || String(gb.tutorId) !== String(tp._id)) return res.status(403).json({ success: false, message: "Not authorized" });
+    if (gb.scheduleType !== "recurring" || !gb.recurring) return res.status(400).json({ success: false, message: "Not a recurring batch" });
+    await regenerateRecurringSessions(gb._id);
+    const count = await Session.countDocuments({ groupBatchId: gb._id, startDateTime: { $gte: new Date() } });
+    await createAdminNotification("Batch sessions resynced", `Resynced recurring sessions for batch ${gb._id}`, { batchId: gb._id });
+    res.json({ success: true, message: "Resync initiated", upcomingCount: count });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};

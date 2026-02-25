@@ -19,6 +19,7 @@ router.post("/:id/join", checkRole(["student"]), joinLimiter, c.joinBatch);
 router.post("/:id/leave", checkRole(["student"]), c.leaveBatch);
 router.get("/:id/sessions", c.listBatchSessions);
 router.post("/:id/sessions/generate", checkRole(["tutor"]), c.generateUpcomingSessions);
+router.post("/:id/sessions/resync-recurring", checkRole(["tutor"]), c.resyncRecurringSessions);
 router.get("/:id/roster", checkRole(["tutor"]), c.getRoster);
 router.post("/:id/announce", checkRole(["tutor"]), c.broadcastAnnouncement);
 

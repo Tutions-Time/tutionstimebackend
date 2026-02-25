@@ -6,6 +6,39 @@ const { createBatchSessionsThrottled } = require("../../utils/sessionZoomUtils")
 
 const daysMap = { "Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6 };
 
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function toYmd(d) {
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return null;
+  return `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}-${pad2(dt.getUTCDate())}`;
+}
+function addOneDayYmd(ymd) {
+  const [y, m, d] = String(ymd).split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (Number.isNaN(dt.getTime())) return null;
+  dt.setUTCDate(dt.getUTCDate() + 1);
+  return `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}-${pad2(dt.getUTCDate())}`;
+}
+function dayIndexFromYmd(ymd) {
+  const [y, m, d] = String(ymd).split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.getUTCDay();
+}
+function buildRawDateTime(ymd, hhmm) {
+  if (!ymd || !hhmm) return null;
+  const m = String(hhmm).match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Math.max(0, Math.min(23, Number(m[1])));
+  const min = Math.max(0, Math.min(59, Number(m[2])));
+  const t = `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  const dt = new Date(`${ymd}T${t}:00Z`);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt;
+}
+
 // Run every day at 1 AM - Generate Sessions
 cron.schedule("0 1 * * *", async () => {
   console.log("Running batch session generation job...");
@@ -14,38 +47,53 @@ cron.schedule("0 1 * * *", async () => {
     
     for (const gb of batches) {
       if (!gb.recurring || !gb.recurring.days || !gb.recurring.time) continue;
-      
-      const targetDays = gb.recurring.days.map(d => daysMap[d]);
-      const [startHour, startMinute] = gb.recurring.time.split(":").map(Number);
-      
+
+      const targetDays = new Set((gb.recurring.days || []).map(d => daysMap[d]).filter(d => d !== undefined));
+      if (!targetDays.size) continue;
+
       const now = new Date();
-      const endLimit = new Date();
-      endLimit.setDate(endLimit.getDate() + 30);
-      
-      // Get existing sessions in range
+      const horizon = new Date(now);
+      horizon.setDate(horizon.getDate() + 30);
+
+      const startBound = new Date(Math.max(
+        now.getTime(),
+        gb.recurring.startDate ? new Date(gb.recurring.startDate).getTime() : now.getTime()
+      ));
+      const endBound = new Date(Math.min(
+        horizon.getTime(),
+        gb.recurring.endDate ? new Date(gb.recurring.endDate).getTime() : horizon.getTime()
+      ));
+      if (endBound.getTime() < startBound.getTime()) continue;
+
+      const ymdStart = toYmd(startBound);
+      const ymdEnd = toYmd(endBound);
+      if (!ymdStart || !ymdEnd) continue;
+
       const existingSessions = await Session.find({
         groupBatchId: gb._id,
-        startDateTime: { $gte: now, $lte: endLimit }
+        startDateTime: { $gte: startBound, $lte: endBound }
       }).select("startDateTime");
-      
-      const existingDates = new Set(existingSessions.map(s => new Date(s.startDateTime).toDateString()));
-      
+      const existingYmdSet = new Set(
+        existingSessions
+          .map(s => toYmd(s.startDateTime))
+          .filter(Boolean)
+      );
+
       const sessionDates = [];
-      let current = new Date();
-      
-      while (current <= endLimit) {
-        if (targetDays.includes(current.getDay())) {
-          if (!existingDates.has(current.toDateString())) {
-             const sessionDate = new Date(current);
-             sessionDate.setHours(startHour, startMinute, 0, 0);
-            if (sessionDate > Date.now()) {
-                sessionDates.push(sessionDate);
-             }
+      let cur = ymdStart;
+      while (cur && cur <= ymdEnd) {
+        const dow = dayIndexFromYmd(cur);
+        if (dow !== null && targetDays.has(dow)) {
+          if (!existingYmdSet.has(cur)) {
+            const dt = buildRawDateTime(cur, String(gb.recurring.time));
+            if (dt && dt.getTime() > now.getTime()) {
+              sessionDates.push(dt);
+            }
           }
         }
-        current.setDate(current.getDate() + 1);
+        cur = addOneDayYmd(cur);
       }
-      
+
       if (sessionDates.length > 0) {
         const created = await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
         console.log(`Generated ${created.length} sessions for batch ${gb._id}`);
