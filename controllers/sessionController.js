@@ -334,10 +334,40 @@ exports.joinSession = async (req, res) => {
       }
     } catch (_) {}
 
-    const joinLink = session.joinUrl || session.meetingLink;
-    const startLink = session.startUrl || session.meetingLink;
+    let joinLink = session.joinUrl || session.meetingLink;
+    let startLink = session.startUrl || session.meetingLink;
     if (!joinLink && !startLink) {
-      return res.status(400).json({ success: false, message: "Meeting details are unavailable" });
+      try {
+        const GroupBatch = require("../models/GroupBatch");
+        const { computeDurationMinutes, buildGroupSessionTopic } = require("../utils/sessionZoomUtils");
+        const zoomService = require("../services/zoomService");
+
+        let durationMin = 60;
+        let topic = "Group Batch Session";
+        if (session.groupBatchId) {
+          const gb = await GroupBatch.findById(session.groupBatchId).lean();
+          if (gb?.recurring?.time) {
+            durationMin = computeDurationMinutes(gb.recurring.time, gb.recurring.endTime);
+          }
+          topic = buildGroupSessionTopic(gb, new Date(session.startDateTime));
+        }
+
+        const meeting = await zoomService.createZoomMeeting({
+          topic,
+          startTime: new Date(session.startDateTime).toISOString(),
+          duration: durationMin,
+        });
+        session.meetingId = meeting.id ? String(meeting.id) : session.meetingId || "";
+        session.meetingPassword = meeting.password || meeting.encrypted_password || session.meetingPassword || "";
+        session.startUrl = meeting.start_url || session.startUrl || "";
+        session.joinUrl = meeting.join_url || session.joinUrl || "";
+        session.meetingLink = session.joinUrl || session.meetingLink || "";
+        await session.save();
+        joinLink = session.joinUrl || session.meetingLink;
+        startLink = session.startUrl || session.meetingLink;
+      } catch (e) {
+        return res.status(400).json({ success: false, message: "Meeting details are unavailable" });
+      }
     }
 
     if (session.status !== "scheduled") {
