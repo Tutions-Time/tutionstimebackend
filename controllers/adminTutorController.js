@@ -114,7 +114,7 @@ exports.getAllTutors = async (req, res) => {
     const rows = data.map((t) => ({
       id: t._id,
       name: t.profile?.name || 'Unknown Tutor',
-      email: t.profile?.email || '',
+      email: t.profile?.email || t.email || '',
       phone: t.profile?.altPhone || t.profile?.phone || t.phone || '',
       profilePhoto: t.profile?.photoUrl || null,
       profileComplete: !!t.isProfileComplete,
