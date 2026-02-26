@@ -289,7 +289,7 @@ exports.createBatch = async (req, res) => {
     const sessionDates = buildRecurringSessionDates(gb.recurring, new Date());
     
     if (sessionDates.length) {
-      await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
+      await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 2, delayMs: 1000 });
     }
 
     await createAdminNotification("Group batch created", `Batch ${gb._id} created`, { batchId: gb._id, tutorId: tp._id });
@@ -369,7 +369,7 @@ exports.editBatch = async (req, res) => {
           .map((d) => new Date(d))
           .filter((d) => !isNaN(d.getTime()));
         if (sessionDates.length) {
-          await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
+          await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 2, delayMs: 1000 });
         }
       }
     }
@@ -467,7 +467,7 @@ exports.editBatch = async (req, res) => {
           .map((iso) => new Date(iso))
           .filter((d) => !isNaN(d.getTime()));
         if (sessionDates.length) {
-          await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
+          await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 2, delayMs: 1000 });
         }
       }
     }

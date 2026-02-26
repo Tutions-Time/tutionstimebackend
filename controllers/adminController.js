@@ -336,7 +336,7 @@ const getAllUsers = async (req, res) => {
       }
       if (profile) {
         name = profile.name || null;
-        email = profile.email || null;
+        email = profile.email || u.email || null;
         if (profile.photoUrl) {
           photoUrl = /^https?:\/\//i.test(profile.photoUrl)
             ? profile.photoUrl
@@ -344,6 +344,8 @@ const getAllUsers = async (req, res) => {
               ? `${baseUrl}/${String(profile.photoUrl).replace(/^\//, "")}`
               : String(profile.photoUrl);
         }
+      } else {
+        email = u.email || null;
       }
       const profilePhone =
         (u.role === 'student'

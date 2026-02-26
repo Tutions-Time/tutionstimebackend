@@ -95,7 +95,7 @@ cron.schedule("0 1 * * *", async () => {
       }
 
       if (sessionDates.length > 0) {
-        const created = await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
+        const created = await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 2, delayMs: 1000 });
         console.log(`Generated ${created.length} sessions for batch ${gb._id}`);
       }
     }
