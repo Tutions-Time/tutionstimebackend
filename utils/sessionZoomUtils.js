@@ -92,7 +92,7 @@ async function buildBatchSessionPayload(batch, sessionDate) {
 }
 
 async function createBatchSessionsThrottled(batch, sessionDates, options = {}) {
-  const batchSize = Math.max(1, Math.min(50, Number(options.batchSize) || 10));
+  const batchSize = Math.max(1, Math.min(50, Number(options.batchSize) || 2));
   const delayMs = Math.max(0, Number(options.delayMs) || 1000);
   const retries = Math.max(0, Number(options.retryCount ?? 3));
   const retryDelayMs = Math.max(0, Number(options.retryDelayMs ?? 1500));
@@ -104,6 +104,14 @@ async function createBatchSessionsThrottled(batch, sessionDates, options = {}) {
   const created = [];
   for (let i = 0; i < dates.length; i += batchSize) {
     const chunk = dates.slice(i, i + batchSize);
+    console.log("Creating zoom meetings", {
+      batchId: String(batch?._id || ""),
+      chunkStartIndex: i,
+      chunkSize: chunk.length,
+      total: dates.length,
+      batchSize,
+      delayMs,
+    });
     const payloads = (await Promise.all(
       chunk.map(async (date) => {
         try {
@@ -126,7 +134,15 @@ async function createBatchSessionsThrottled(batch, sessionDates, options = {}) {
             status: "scheduled",
           };
         } catch (err) {
-          console.error("Zoom meeting creation failed:", err?.message || err);
+          const status = err?.response?.status || null;
+          const data = err?.response?.data || null;
+          console.error("Zoom meeting creation failed", {
+            batchId: String(batch?._id || ""),
+            startDateTime: date.toISOString(),
+            status,
+            data,
+            message: err?.message || String(err),
+          });
           return {
             groupBatchId: batch._id,
             tutorId: batch.tutorId,

@@ -34,7 +34,11 @@ async function getZoomAccessToken() {
 
     return response.data.access_token;
   } catch (error) {
-    console.error('❌ Error fetching Zoom access token:', error.response?.data || error.message);
+    console.error('❌ Error fetching Zoom access token', {
+      status: error.response?.status || null,
+      data: error.response?.data || null,
+      message: error.message,
+    });
     throw new Error('Failed to authenticate with Zoom API');
   }
 }
@@ -81,7 +85,15 @@ async function createZoomMeeting({ topic, startTime, duration = 60 }) {
     console.log(`✅ Zoom meeting created: ${response.data.join_url}`);
     return response.data;
   } catch (error) {
-    console.error('❌ Error creating Zoom meeting:', error.response?.data || error.message);
+    console.error('❌ Error creating Zoom meeting', {
+      topic,
+      startTime,
+      duration,
+      status: error.response?.status || null,
+      headers: error.response?.headers || null,
+      data: error.response?.data || null,
+      message: error.message,
+    });
     throw new Error(
       error.response?.data?.message || error.message || 'Failed to create Zoom meeting'
     );
