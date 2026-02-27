@@ -39,7 +39,7 @@ function buildRawDateTime(ymd, hhmm) {
   return dt;
 }
 
-// Run every day at 1 AM - Generate Sessions
+// Run every day at 1 AM - Generate Sessions (weekly rolling window)
 cron.schedule("0 1 * * *", async () => {
   console.log("Running batch session generation job...");
   try {
@@ -48,55 +48,68 @@ cron.schedule("0 1 * * *", async () => {
     for (const gb of batches) {
       if (!gb.recurring || !gb.recurring.days || !gb.recurring.time) continue;
 
+      const now = new Date();
       const targetDays = new Set((gb.recurring.days || []).map(d => daysMap[d]).filter(d => d !== undefined));
       if (!targetDays.size) continue;
 
-      const now = new Date();
-      const horizon = new Date(now);
-      horizon.setDate(horizon.getDate() + 30);
-
-      const startBound = new Date(Math.max(
-        now.getTime(),
-        gb.recurring.startDate ? new Date(gb.recurring.startDate).getTime() : now.getTime()
-      ));
-      const endBound = new Date(Math.min(
-        horizon.getTime(),
-        gb.recurring.endDate ? new Date(gb.recurring.endDate).getTime() : horizon.getTime()
-      ));
-      if (endBound.getTime() < startBound.getTime()) continue;
-
-      const ymdStart = toYmd(startBound);
-      const ymdEnd = toYmd(endBound);
-      if (!ymdStart || !ymdEnd) continue;
-
-      const existingSessions = await Session.find({
+      // Gather upcoming sessions
+      const upcoming = await Session.find({
         groupBatchId: gb._id,
-        startDateTime: { $gte: startBound, $lte: endBound }
-      }).select("startDateTime");
-      const existingYmdSet = new Set(
-        existingSessions
-          .map(s => toYmd(s.startDateTime))
-          .filter(Boolean)
-      );
+        startDateTime: { $gte: now }
+      }).select("startDateTime").sort({ startDateTime: 1 });
 
-      const sessionDates = [];
-      let cur = ymdStart;
-      while (cur && cur <= ymdEnd) {
-        const dow = dayIndexFromYmd(cur);
-        if (dow !== null && targetDays.has(dow)) {
-          if (!existingYmdSet.has(cur)) {
+      // Helper to create sessions within a YMD range
+      async function createInRange(ymdFrom, ymdTo) {
+        const sessionDates = [];
+        let cur = ymdFrom;
+        const existingYmdSet = new Set(
+          (await Session.find({
+            groupBatchId: gb._id,
+            startDateTime: { $gte: new Date(`${ymdFrom}T00:00:00Z`), $lte: new Date(`${ymdTo}T23:59:59Z`) }
+          }).select("startDateTime")).map(s => toYmd(s.startDateTime)).filter(Boolean)
+        );
+        while (cur && cur <= ymdTo) {
+          const dow = dayIndexFromYmd(cur);
+          if (dow !== null && targetDays.has(dow) && !existingYmdSet.has(cur)) {
             const dt = buildRawDateTime(cur, String(gb.recurring.time));
             if (dt && dt.getTime() > now.getTime()) {
-              sessionDates.push(dt);
+              // Respect batch end date
+              const batchEndYmd = toYmd(gb.recurring.endDate);
+              if (batchEndYmd && cur <= batchEndYmd) {
+                sessionDates.push(dt);
+              }
             }
           }
+          cur = addOneDayYmd(cur);
         }
-        cur = addOneDayYmd(cur);
+        if (sessionDates.length > 0) {
+          const created = await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 2, delayMs: 1000 });
+          console.log(`Generated ${created.length} sessions for batch ${gb._id}`);
+        }
       }
 
-      if (sessionDates.length > 0) {
-        const created = await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 2, delayMs: 1000 });
-        console.log(`Generated ${created.length} sessions for batch ${gb._id}`);
+      const batchStartYmd = toYmd(gb.recurring.startDate);
+      const todayYmd = toYmd(now);
+      // Initial seeding: if no upcoming, seed next 7 days from batch start (or tomorrow if starting today)
+      if (!upcoming.length) {
+        if (!batchStartYmd) continue;
+        let seedStart = batchStartYmd === todayYmd ? addOneDayYmd(batchStartYmd) : batchStartYmd;
+        let seedEnd = seedStart;
+        for (let i = 1; i < 7; i++) seedEnd = addOneDayYmd(seedEnd);
+        await createInRange(seedStart, seedEnd);
+        continue;
+      }
+
+      // Rolling generation: on the last day of the current window, create the next 7 days
+      const maxUpcoming = upcoming[upcoming.length - 1]?.startDateTime ? new Date(upcoming[upcoming.length - 1].startDateTime) : null;
+      if (!maxUpcoming) continue;
+      const maxYmd = toYmd(maxUpcoming);
+      // If the last scheduled day is today, roll another week
+      if (maxYmd && maxYmd === todayYmd) {
+        let nextStart = addOneDayYmd(maxYmd);
+        let nextEnd = nextStart;
+        for (let i = 1; i < 7; i++) nextEnd = addOneDayYmd(nextEnd);
+        await createInRange(nextStart, nextEnd);
       }
     }
   } catch (err) {
