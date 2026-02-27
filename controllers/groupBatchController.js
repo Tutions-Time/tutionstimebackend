@@ -107,6 +107,44 @@ function buildRecurringSessionDates(recurring, now = new Date()) {
   return out;
 }
 
+function buildRecurringSessionDatesWindow(recurring, now = new Date(), windowDays = 7) {
+  const { startDate, endDate, days, time } = recurring || {};
+  const rawStartYmd = toYmd(startDate);
+  const endYmd = toYmd(endDate);
+  if (!rawStartYmd || !endYmd || !Array.isArray(days) || !days.length || !time) return [];
+
+  const daysMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const targetDays = new Set(days.map((d) => daysMap[d]).filter((d) => d !== undefined));
+  if (!targetDays.size) return [];
+
+  const todayYmd = toYmd(now);
+  let startYmd = rawStartYmd === todayYmd ? addOneDayYmd(rawStartYmd) : rawStartYmd;
+
+  // Compute window end as startYmd + (windowDays - 1), but never beyond batch end
+  let windowEndYmd = startYmd;
+  for (let i = 1; i < Math.max(1, Number(windowDays)); i++) {
+    const next = addOneDayYmd(windowEndYmd);
+    if (!next) break;
+    windowEndYmd = next;
+  }
+  // Cap by batch end date
+  const capEndYmd = endYmd < windowEndYmd ? endYmd : windowEndYmd;
+
+  const out = [];
+  let cur = startYmd;
+  while (cur && cur <= capEndYmd) {
+    const dow = dayIndexFromYmd(cur);
+    if (dow !== null && targetDays.has(dow)) {
+      const sessionDate = buildRawDateTime(cur, String(time));
+      if (sessionDate && sessionDate.getTime() > now.getTime()) {
+        out.push(sessionDate);
+      }
+    }
+    cur = addOneDayYmd(cur);
+  }
+  return out;
+}
+
 async function regenerateRecurringSessions(groupBatchId) {
   const gb = await GroupBatch.findById(groupBatchId);
   if (!gb || gb.scheduleType !== "recurring" || !gb.recurring) return;
@@ -120,7 +158,8 @@ async function regenerateRecurringSessions(groupBatchId) {
     startDateTime: { $gte: now },
   });
 
-  const sessionDates = buildRecurringSessionDates(gb.recurring, now);
+  // Only regenerate up to one week ahead to stay within Zoom limits
+  const sessionDates = buildRecurringSessionDatesWindow(gb.recurring, now, 7);
 
   if (sessionDates.length) {
     await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 10, delayMs: 1000 });
@@ -285,8 +324,8 @@ exports.createBatch = async (req, res) => {
       enrollmentCloseAt: addDays(payload.recurring.startDate, 7),
     });
 
-    // Generate sessions between start and end dates with stable IST conversion
-    const sessionDates = buildRecurringSessionDates(gb.recurring, new Date());
+    // Generate sessions only for the first week to stay within Zoom limits
+    const sessionDates = buildRecurringSessionDatesWindow(gb.recurring, new Date(), 7);
     
     if (sessionDates.length) {
       await createBatchSessionsThrottled(gb, sessionDates, { batchSize: 2, delayMs: 1000 });
