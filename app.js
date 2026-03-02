@@ -91,6 +91,7 @@ app.use("/api/marketing", require("./routes/marketingRoutes"));
 app.use("/api/notifications", require("./routes/notificationRoutes"));
 app.use("/api/devices", require("./routes/deviceRoutes"));
 app.use("/api/zoom", require("./routes/zoomRoutes"));
+app.use("/api/reschedules", require("./routes/rescheduleRoutes"));
 
 const payoutScheduler = require("./services/cron/payoutScheduler");
 const weeklyReportScheduler = require("./services/cron/weeklyReportScheduler");
