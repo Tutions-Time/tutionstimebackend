@@ -145,7 +145,7 @@ const sendOTP = async (req, res) => {
 // Verify OTP and authenticate user
 const verifyOTP = async (req, res) => {
   try {
-    const { email, otp, requestId, role } = req.body;
+    const { email, otp, requestId, role, name, phone, referralCode } = req.body;
 
     if (!email || !otp || !requestId) {
       console.log("Missing required fields:", { email, otp, requestId });
@@ -186,6 +186,21 @@ const verifyOTP = async (req, res) => {
           message: "Valid role is required for signup",
         });
       }
+      // Validate required extra fields for signup
+      const trimmedName = String(name || "").trim();
+      const trimmedPhone = String(phone || "").trim();
+      if (!trimmedName || !trimmedPhone) {
+        return res.status(400).json({
+          success: false,
+          message: "Name and mobile number are required",
+        });
+      }
+      if (!/^[0-9]{10}$/.test(trimmedPhone)) {
+        return res.status(400).json({
+          success: false,
+          message: "Please provide a valid 10-digit mobile number",
+        });
+      }
 
       try {
         const creationResult = await User.findOneAndUpdate(
@@ -207,6 +222,23 @@ const verifyOTP = async (req, res) => {
         );
 
         user = creationResult.value;
+        // Update phone on the user (unique, may fail if clash)
+        if (user) {
+          if (String(user.phone || "") !== trimmedPhone) {
+            user.phone = trimmedPhone;
+            try {
+              await user.save();
+            } catch (e) {
+              if (e.code === 11000) {
+                return res.status(400).json({
+                  success: false,
+                  message: "This mobile number is already in use",
+                });
+              }
+              throw e;
+            }
+          }
+        }
 
         // Notify Admin for new signup
         if (creationResult.lastErrorObject?.updatedExisting === false) {
@@ -223,6 +255,24 @@ const verifyOTP = async (req, res) => {
           } catch (e) {
             console.warn("New signup admin notification failed:", e.message);
           }
+        }
+        // Create minimal profile with provided name (same location as complete profile)
+        try {
+          if (role === "student") {
+            await StudentProfile.findOneAndUpdate(
+              { userId: user._id },
+              { $set: { name: trimmedName, email: normalizedEmail } },
+              { new: true, upsert: true }
+            );
+          } else if (role === "tutor") {
+            await TutorProfile.findOneAndUpdate(
+              { userId: user._id },
+              { $set: { name: trimmedName, email: normalizedEmail } },
+              { new: true, upsert: true }
+            );
+          }
+        } catch (e) {
+          console.warn("Minimal profile upsert failed:", e.message);
         }
       } catch (error) {
         if (error.code === 11000 && error.keyValue?.email === normalizedEmail) {
