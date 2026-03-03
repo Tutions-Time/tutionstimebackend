@@ -5,10 +5,12 @@ const rescheduleRequestSchema = new mongoose.Schema(
   {
     sessionId: { type: mongoose.Schema.Types.ObjectId, ref: "Session", required: true, index: true },
     groupBatchId: { type: mongoose.Schema.Types.ObjectId, ref: "GroupBatch", required: true },
+    regularClassId: { type: mongoose.Schema.Types.ObjectId, ref: "RegularClass" },
     proposedStartDateTime: { type: Date, required: true },
     reason: { type: String },
     requesterUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     requesterRole: { type: String, enum: ["student", "tutor"], required: true },
+    requesterStudentId: { type: mongoose.Schema.Types.ObjectId, ref: "StudentProfile" },
     status: { type: String, enum: ["pending", "approved", "rejected", "cancelled"], default: "pending", index: true },
     approverUserId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     approverRole: { type: String, enum: ["student", "tutor"] },
@@ -18,4 +20,3 @@ const rescheduleRequestSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model("RescheduleRequest", rescheduleRequestSchema);
-
