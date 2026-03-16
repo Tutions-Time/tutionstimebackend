@@ -59,12 +59,12 @@ function buildGroupSessionTopic(batch, dateTime) {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: "UTC",
+    timeZone: "Asia/Kolkata",
   });
   const timeLabel = dateTime.toLocaleTimeString("en-IN", {
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: "UTC",
+    timeZone: "Asia/Kolkata",
   });
   return `${subject} (${typeLabel}) - ${timeLabel} on ${dateLabel}`;
 }
