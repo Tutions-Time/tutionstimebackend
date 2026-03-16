@@ -136,6 +136,65 @@ function normalizeArray(val) {
   return [];
 }
 
+function parseTime24ToMinutes(timeStr) {
+  const m = String(timeStr || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h < 0 || h > 23 || min < 0 || min > 59) {
+    return null;
+  }
+  return h * 60 + min;
+}
+
+function parseTime12ToMinutes(timeStr) {
+  const m = String(timeStr || "")
+    .trim()
+    .match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const min = Number(m[2]);
+  const period = String(m[3]).toUpperCase();
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h < 1 || h > 12 || min < 0 || min > 59) {
+    return null;
+  }
+  h = h % 12;
+  if (period === "PM") h += 12;
+  return h * 60 + min;
+}
+
+function isTimeWithinPreferredSlots(time24, preferredTimes) {
+  const target = parseTime24ToMinutes(time24);
+  if (target === null) return false;
+  const slots = Array.isArray(preferredTimes) ? preferredTimes : [];
+  if (!slots.length) return true;
+  let parsedSlotCount = 0;
+
+  for (const slot of slots) {
+    const parts = String(slot || "")
+      .split("-")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length !== 2) continue;
+    const startMin = parseTime12ToMinutes(parts[0]);
+    const endMin = parseTime12ToMinutes(parts[1]);
+    if (startMin === null || endMin === null) continue;
+    parsedSlotCount += 1;
+
+    // Normal slot (e.g. 10:00 AM - 01:00 PM)
+    if (endMin >= startMin) {
+      if (target >= startMin && target <= endMin) return true;
+      continue;
+    }
+    // Overnight slot (e.g. 11:00 PM - 01:00 AM)
+    if (target >= startMin || target <= endMin) return true;
+  }
+
+  // If legacy/invalid slot strings exist but none are parseable, don't hard block.
+  if (parsedSlotCount === 0) return true;
+  return false;
+}
+
 async function createAdminNotification(title, message, meta = {}) {
   try {
     const notif = await AdminNotification.create({ title, message, meta });
@@ -190,17 +249,25 @@ exports.createDemoBooking = async (req, res) => {
       });
     }
 
-    const existingActiveDemo = await Booking.findOne({
+    // Block if the student already has a pending/confirmed demo whose scheduled
+    // end time is still in the future (i.e. the time window hasn't passed yet).
+    const now = new Date();
+    const activeDemos = await Booking.find({
       studentId: req.user.id,
       type: "demo",
       status: { $in: ["pending", "confirmed"] },
+    }).lean();
+
+    const hasActiveUpcomingDemo = activeDemos.some((demo) => {
+      const endDt = getBookingEndDateTime(demo);
+      return endDt && endDt > now;
     });
 
-    if (existingActiveDemo) {
+    if (hasActiveUpcomingDemo) {
       return res.status(400).json({
         success: false,
         message:
-          "You already have an active demo. Complete it before booking another.",
+          "You already have a demo session scheduled. Please wait until it is completed before booking another.",
       });
     }
 
@@ -414,6 +481,18 @@ exports.createDemoBookingByTutor = async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "Student profile not found" });
+    }
+
+    const studentPreferredTimes = normalizeArray(studentProfile.preferredTimes);
+    if (
+      studentPreferredTimes.length > 0 &&
+      !isTimeWithinPreferredSlots(time, studentPreferredTimes)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please choose a time within student's preferred time slots",
+        preferredTimes: studentPreferredTimes,
+      });
     }
 
     const preferredDate = toStartOfDay(date);
@@ -860,10 +939,6 @@ exports.getStudentBookings = async (req, res) => {
       filter = {
         studentId: req.user.id,
         type: "demo",
-        $or: [
-          { "demoFeedback.likedTutor": { $ne: false } },
-          { demoFeedback: { $exists: false } },
-        ],
       };
     } else if (type === "regular") {
       filter = {
@@ -875,13 +950,7 @@ exports.getStudentBookings = async (req, res) => {
         studentId: req.user.id,
         $or: [
           { type: "regular" },
-          {
-            type: "demo",
-            $or: [
-              { "demoFeedback.likedTutor": { $ne: false } },
-              { demoFeedback: { $exists: false } },
-            ],
-          },
+          { type: "demo" },
         ],
       };
     }
@@ -1709,7 +1778,7 @@ exports.giveDemoFeedback = async (req, res) => {
       await tutorProfile.save();
     }
 
-    // notify tutor by email
+    // notify tutor by email + in-app
     try {
       const tutorUser = await User.findById(booking.tutorId);
       const studentProfile = await StudentProfile.findOne({
@@ -1719,8 +1788,39 @@ exports.giveDemoFeedback = async (req, res) => {
       const studentName = studentProfile?.name || "Student";
       const tutorName = tutorProfile?.name || "Tutor";
 
+      if (!likedTutor) {
+        // Student rejected tutor — send distinct rejection notification
+        await notificationService.notifyUser(
+          booking.tutorId,
+          "Student did not proceed after demo",
+          `${studentName} completed the demo but chose not to continue with you. Review your demo insights to track your conversion rate.`,
+          {
+            type: "demo_rejection",
+            bookingId: booking._id,
+            studentId: booking.studentId,
+            studentName,
+            overall,
+          }
+        );
+      } else {
+        // Student liked tutor — standard feedback notification
+        await notificationService.notifyUser(
+          booking.tutorId,
+          "New demo feedback received",
+          `${studentName} liked your demo! Overall rating: ${overall}/5.`,
+          {
+            type: "demo_feedback",
+            bookingId: booking._id,
+            studentId: booking.studentId,
+            overall,
+          }
+        );
+      }
+
       if (tutorUser && notificationService?.sendEmail) {
-        const subjectLine = "New demo feedback received";
+        const subjectLine = !likedTutor
+          ? `Demo feedback: ${studentName} did not proceed`
+          : "New demo feedback received";
         const html =
           emailTpl.demoFeedbackToTutor?.({
             tutorName,
@@ -1730,8 +1830,11 @@ exports.giveDemoFeedback = async (req, res) => {
             understanding,
             overall,
             comment,
+            likedTutor: !!likedTutor,
           }) ||
-          `<p>You received new demo feedback from ${studentName}. Overall: ${overall}/5</p>`;
+          (!likedTutor
+            ? `<p>Hi ${tutorName},</p><p>${studentName} completed the demo session but chose not to continue. Overall rating: ${overall}/5.</p><p>Check your demo insights on the dashboard to track your performance.</p>`
+            : `<p>You received new demo feedback from ${studentName}. Overall: ${overall}/5</p>`);
         await notificationService.sendEmail(
           tutorUser.email,
           subjectLine,
@@ -1743,16 +1846,19 @@ exports.giveDemoFeedback = async (req, res) => {
       console.error("Error notifying tutor about feedback:", err);
     }
 
-    // notify admin
+    // notify admin — distinct message when student rejects
     await createAdminNotification(
-      "Demo feedback submitted",
-      `Feedback for demo booking ${booking._id}`,
+      !likedTutor ? "Student rejected tutor after demo" : "Demo feedback submitted",
+      !likedTutor
+        ? `A student did not proceed with tutor after completing demo (Booking: ${booking._id})`
+        : `Feedback for demo booking ${booking._id}`,
       {
         bookingId: booking._id,
         tutorId: booking.tutorId,
         studentId: booking.studentId,
         overall,
         likedTutor,
+        rejectedByStudent: !likedTutor,
       }
     );
 
@@ -2328,6 +2434,89 @@ exports.startRegularFromDemo = async (req, res) => {
       message: "Server error",
       error: err.message,
     });
+  }
+};
+
+/**
+ * GET /api/bookings/tutor/insights
+ * Returns demo performance insights for the logged-in tutor:
+ * total demos, completed, rejected by student, liked by student, pending, confirmed, cancelled, expired
+ */
+exports.getTutorDemoInsights = async (req, res) => {
+  try {
+    const tutorId = req.user.id;
+
+    const [stats] = await Booking.aggregate([
+      { $match: { tutorId: new (require("mongoose").Types.ObjectId)(tutorId), type: "demo" } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          pending: { $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] } },
+          confirmed: { $sum: { $cond: [{ $eq: ["$status", "confirmed"] }, 1, 0] } },
+          completed: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
+          cancelled: { $sum: { $cond: [{ $eq: ["$status", "cancelled"] }, 1, 0] } },
+          expired: { $sum: { $cond: [{ $eq: ["$status", "expired"] }, 1, 0] } },
+          studentMissed: { $sum: { $cond: [{ $eq: ["$status", "student-missed"] }, 1, 0] } },
+          tutorMissed: { $sum: { $cond: [{ $eq: ["$status", "tutor-missed"] }, 1, 0] } },
+          feedbackGiven: {
+            $sum: { $cond: [{ $ifNull: ["$demoFeedback.createdAt", false] }, 1, 0] },
+          },
+          rejectedByStudent: {
+            $sum: {
+              $cond: [
+                { $and: [
+                  { $ifNull: ["$demoFeedback.createdAt", false] },
+                  { $eq: ["$demoFeedback.likedTutor", false] },
+                ]},
+                1, 0,
+              ],
+            },
+          },
+          likedByStudent: {
+            $sum: {
+              $cond: [
+                { $and: [
+                  { $ifNull: ["$demoFeedback.createdAt", false] },
+                  { $eq: ["$demoFeedback.likedTutor", true] },
+                ]},
+                1, 0,
+              ],
+            },
+          },
+          convertedToRegular: {
+            $sum: { $cond: [{ $ifNull: ["$regularClassId", false] }, 1, 0] },
+          },
+          avgRating: { $avg: "$demoFeedback.overall" },
+        },
+      },
+    ]);
+
+    const insights = stats || {
+      total: 0, pending: 0, confirmed: 0, completed: 0,
+      cancelled: 0, expired: 0, studentMissed: 0, tutorMissed: 0,
+      feedbackGiven: 0, rejectedByStudent: 0, likedByStudent: 0,
+      convertedToRegular: 0, avgRating: null,
+    };
+    delete insights._id;
+
+    // rejection rate out of demos that received feedback
+    insights.rejectionRate = insights.feedbackGiven > 0
+      ? Math.round((insights.rejectedByStudent / insights.feedbackGiven) * 100)
+      : 0;
+
+    insights.conversionRate = insights.feedbackGiven > 0
+      ? Math.round((insights.likedByStudent / insights.feedbackGiven) * 100)
+      : 0;
+
+    if (insights.avgRating != null) {
+      insights.avgRating = Math.round(insights.avgRating * 10) / 10;
+    }
+
+    return res.json({ success: true, data: insights });
+  } catch (err) {
+    console.error("getTutorDemoInsights error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
 

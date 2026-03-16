@@ -47,6 +47,16 @@ router.get(
 );
 
 /**
+ * GET /api/bookings/tutor/insights
+ * Demo performance insights for the logged-in tutor
+ */
+router.get(
+  '/tutor/insights',
+  checkRole(['tutor']),
+  bookingController.getTutorDemoInsights
+);
+
+/**
  * PATCH /api/bookings/:id/status
  * Tutor accepts/rejects (confirm/cancel) a demo booking
  * (For bookings requestedBy = 'student')

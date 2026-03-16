@@ -34,7 +34,8 @@ function buildRawDateTime(ymd, hhmm) {
   const h = Math.max(0, Math.min(23, Number(m[1])));
   const min = Math.max(0, Math.min(59, Number(m[2])));
   const t = `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-  const dt = new Date(`${ymd}T${t}:00Z`);
+  // Treat schedule input as IST wall-clock time and convert to UTC instant.
+  const dt = new Date(`${ymd}T${t}:00+05:30`);
   if (Number.isNaN(dt.getTime())) return null;
   return dt;
 }

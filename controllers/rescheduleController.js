@@ -8,6 +8,28 @@ const notificationService = require("../services/notificationService");
 const zoomService = require("../services/zoomService");
 const { computeDurationMinutes, buildGroupSessionTopic } = require("../utils/sessionZoomUtils");
 const wsHub = require("../services/wsHub");
+const TUTOR_RESCHEDULE_MIN_HOURS = Number(process.env.TUTOR_RESCHEDULE_MIN_HOURS || 24);
+
+function getComparableSessionStartDate(session) {
+  const raw = new Date(session?.startDateTime);
+  if (Number.isNaN(raw.getTime())) return null;
+
+  // Regular sessions are stored as UTC wall-clock values.
+  // Convert UTC components to local wall-clock for policy checks.
+  if (session?.regularClassId && !session?.groupBatchId) {
+    return new Date(
+      raw.getUTCFullYear(),
+      raw.getUTCMonth(),
+      raw.getUTCDate(),
+      raw.getUTCHours(),
+      raw.getUTCMinutes(),
+      raw.getUTCSeconds(),
+      raw.getUTCMilliseconds()
+    );
+  }
+
+  return raw;
+}
 
 async function getTutorUserIdFromBatch(batchId) {
   const gb = await GroupBatch.findById(batchId).select("tutorId").lean();
@@ -52,7 +74,11 @@ exports.createRequest = async (req, res) => {
     if (!isGroup && !isRegular) {
       return res.status(400).json({ success: false, message: "Unsupported session type" });
     }
-    if (new Date(session.startDateTime).getTime() <= Date.now()) {
+    const sessionStart = getComparableSessionStartDate(session);
+    if (!sessionStart) {
+      return res.status(400).json({ success: false, message: "Invalid session start time" });
+    }
+    if (sessionStart.getTime() <= Date.now()) {
       return res.status(400).json({ success: false, message: "Cannot reschedule past or ongoing sessions" });
     }
 
@@ -93,58 +119,109 @@ exports.createRequest = async (req, res) => {
     const friendlyTime = `${String(date)} ${String(time)}`;
 
     if (role === "student") {
-      if (isGroup) {
-        return res.status(403).json({ success: false, message: "Students cannot reschedule group batch classes" });
-      }
-      const sp = await StudentProfile.findOne({ userId }).select("_id").lean();
-      if (!sp?._id) return res.status(403).json({ success: false, message: "Student profile not found" });
-      // Regular class: ensure this student owns the class
-      const matches =
-        String(rc.studentId) === String(userId) ||
-        String(rc.studentId) === String(sp._id);
-      if (!matches) {
-        return res.status(403).json({ success: false, message: "Not authorized for this class" });
-      }
-      // create request with requesterStudentId
-      const r = await RescheduleRequest.create({
-        sessionId,
-        groupBatchId: session.groupBatchId || undefined,
-        regularClassId: session.regularClassId || undefined,
-        proposedStartDateTime: proposed,
-        reason: reason || "",
-        requesterUserId: userId,
-        requesterRole: role,
-        requesterStudentId: sp._id,
-        status: "pending",
-      });
+      return res.status(403).json({ success: false, message: "Students cannot reschedule classes" });
+    }
 
-      const tutorUserId = isGroup ? await getTutorUserIdFromBatch(session.groupBatchId) : (await (async () => {
-        const tp = await TutorProfile.findById(rc.tutorId).select("userId").lean();
-        return tp?.userId || null;
-      })());
-      if (tutorUserId) {
-        await notificationService.notifyUser(
-          tutorUserId,
-          "Reschedule requested",
-          `Student proposed ${friendlyTime}`,
-          { rescheduleRequestId: r._id, sessionId: session._id, groupBatchId: session.groupBatchId, regularClassId: session.regularClassId, newStart: r.proposedStartDateTime }
-        );
-      }
-      await AdminNotification.create({
-        title: "Reschedule requested",
-        message: `Student reschedule request (${friendlyTime})`,
-        meta: { rescheduleRequestId: r._id, sessionId: session._id, groupBatchId: session.groupBatchId, regularClassId: session.regularClassId, role, newStart: r.proposedStartDateTime },
-      });
-      wsHub.sendToRole("admin", { type: "admin_notification", data: { title: "Reschedule requested", message: `Pending approval (${friendlyTime})`, meta: { rescheduleRequestId: r._id, sessionId: session._id, groupBatchId: session.groupBatchId, regularClassId: session.regularClassId, newStart: r.proposedStartDateTime } } });
-      return res.status(200).json({ success: true, data: r });
-    } else if (role === "tutor") {
+    if (role === "tutor") {
       const tp = await TutorProfile.findOne({ userId }).select("_id").lean();
       const ownsGroup = isGroup ? (tp?._id && String(tp._id) === String(gb.tutorId)) : false;
       const ownsRegular = isRegular ? (tp?._id && String(rc.tutorId) === String(tp._id)) || String(rc.tutorId) === String(userId) : false;
       if (!(ownsGroup || ownsRegular)) {
         return res.status(403).json({ success: false, message: "Not authorized" });
       }
-      // Tutor-initiated: ask for approvals (students only)
+
+      const remainingMs = sessionStart.getTime() - Date.now();
+      const minNoticeMs = TUTOR_RESCHEDULE_MIN_HOURS * 60 * 60 * 1000;
+      if (remainingMs < minNoticeMs) {
+        return res.status(400).json({
+          success: false,
+          message: `Tutor can reschedule only at least ${TUTOR_RESCHEDULE_MIN_HOURS} hours before class start`,
+        });
+      }
+
+      // Group batch: apply reschedule immediately (no student approval required)
+      if (isGroup) {
+        const sessionDoc = await Session.findById(sessionId);
+        if (!sessionDoc) {
+          return res.status(404).json({ success: false, message: "Session not found" });
+        }
+        sessionDoc.startDateTime = proposed;
+        try {
+          const duration = computeDurationMinutes(gb?.recurring?.time, gb?.recurring?.endTime) || 60;
+          const topic = buildGroupSessionTopic(gb, new Date(sessionDoc.startDateTime));
+          const meeting = await zoomService.createZoomMeeting({
+            topic,
+            startTime: new Date(sessionDoc.startDateTime).toISOString(),
+            duration,
+          });
+          sessionDoc.meetingId = meeting.id ? String(meeting.id) : sessionDoc.meetingId || "";
+          sessionDoc.meetingPassword = meeting.password || meeting.encrypted_password || sessionDoc.meetingPassword || "";
+          sessionDoc.startUrl = meeting.start_url || sessionDoc.startUrl || "";
+          sessionDoc.joinUrl = meeting.join_url || sessionDoc.joinUrl || "";
+          sessionDoc.meetingLink = meeting.join_url || sessionDoc.meetingLink || "";
+        } catch (_) {}
+        await sessionDoc.save();
+
+        const r = await RescheduleRequest.create({
+          sessionId,
+          groupBatchId: session.groupBatchId || undefined,
+          regularClassId: session.regularClassId || undefined,
+          proposedStartDateTime: proposed,
+          reason: reason || "",
+          requesterUserId: userId,
+          requesterRole: role,
+          status: "approved",
+          approverUserId: userId,
+          approverRole: role,
+          decisionAt: new Date(),
+        });
+
+        const studentUserIds = await getEnrolledStudentUserIds(session.groupBatchId);
+        const targets = new Set([String(userId), ...studentUserIds.map(String)]);
+        for (const uid of targets) {
+          await notificationService.notifyUser(
+            uid,
+            "Class rescheduled",
+            `New time: ${friendlyTime}`,
+            {
+              sessionId: sessionDoc._id,
+              groupBatchId: session.groupBatchId,
+              rescheduleRequestId: r._id,
+              newStart: sessionDoc.startDateTime,
+              date: String(date),
+              time: String(time),
+            }
+          );
+        }
+
+        await AdminNotification.create({
+          title: "Class rescheduled",
+          message: `Tutor rescheduled group session to ${friendlyTime}`,
+          meta: {
+            sessionId: sessionDoc._id,
+            groupBatchId: session.groupBatchId,
+            rescheduleRequestId: r._id,
+            newStart: sessionDoc.startDateTime,
+            date: String(date),
+            time: String(time),
+          },
+        });
+        wsHub.sendToRole("admin", {
+          type: "admin_notification",
+          data: {
+            title: "Class rescheduled",
+            message: "Group batch session updated directly by tutor",
+            meta: { sessionId: sessionDoc._id, groupBatchId: session.groupBatchId, rescheduleRequestId: r._id },
+          },
+        });
+
+        return res.status(200).json({
+          success: true,
+          data: { sessionId: sessionDoc._id, newStart: sessionDoc.startDateTime, individual: false, autoApproved: true },
+        });
+      }
+
+      // Regular class: keep approval workflow
       const r = await RescheduleRequest.create({
         sessionId,
         groupBatchId: session.groupBatchId || undefined,

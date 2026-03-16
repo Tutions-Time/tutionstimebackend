@@ -10,6 +10,63 @@ const REGULAR_SESSION_DURATION_MINUTES = Number(
   process.env.REGULAR_SESSION_DURATION_MINUTES || 60
 );
 
+function parseTime24ToMinutes(timeStr) {
+  const m = String(timeStr || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h < 0 || h > 23 || min < 0 || min > 59) {
+    return null;
+  }
+  return h * 60 + min;
+}
+
+function parseTime12ToMinutes(timeStr) {
+  const m = String(timeStr || "")
+    .trim()
+    .match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const min = Number(m[2]);
+  const period = String(m[3]).toUpperCase();
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h < 1 || h > 12 || min < 0 || min > 59) {
+    return null;
+  }
+  h = h % 12;
+  if (period === "PM") h += 12;
+  return h * 60 + min;
+}
+
+function isTimeWithinPreferredSlots(time24, preferredTimes) {
+  const target = parseTime24ToMinutes(time24);
+  if (target === null) return false;
+  const slots = Array.isArray(preferredTimes) ? preferredTimes : [];
+  if (!slots.length) return true;
+  let parsedSlotCount = 0;
+
+  for (const slot of slots) {
+    const parts = String(slot || "")
+      .split("-")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length !== 2) continue;
+
+    const startMin = parseTime12ToMinutes(parts[0]);
+    const endMin = parseTime12ToMinutes(parts[1]);
+    if (startMin === null || endMin === null) continue;
+    parsedSlotCount += 1;
+
+    if (endMin >= startMin) {
+      if (target >= startMin && target <= endMin) return true;
+      continue;
+    }
+    if (target >= startMin || target <= endMin) return true;
+  }
+  // If legacy/invalid slot strings exist but none are parseable, don't hard block.
+  if (parsedSlotCount === 0) return true;
+  return false;
+}
+
 
 function buildDateTime(dateStr, timeStr) {
   const [year, month, day] = dateStr.split("-").map(Number);
@@ -139,6 +196,23 @@ exports.scheduleRegularClassSessions = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Regular class is not active & paid yet",
+      });
+    }
+
+    const studentProfile =
+      (await StudentProfile.findOne({ userId: rc.studentId }).select("preferredTimes").lean()) ||
+      (await StudentProfile.findById(rc.studentId).select("preferredTimes").lean());
+    const studentPreferredTimes = Array.isArray(studentProfile?.preferredTimes)
+      ? studentProfile.preferredTimes
+      : [];
+    if (
+      studentPreferredTimes.length > 0 &&
+      !isTimeWithinPreferredSlots(time, studentPreferredTimes)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select a time within student's preferred time slots",
+        preferredTimes: studentPreferredTimes,
       });
     }
 
@@ -485,7 +559,7 @@ exports.getTutorRegularClasses = async (req, res) => {
     const students = await StudentProfile.find({
       $or: [{ _id: { $in: studentUserIds } }, { userId: { $in: studentUserIds } }],
     })
-      .select("userId name photoUrl")
+      .select("userId name photoUrl preferredTimes")
       .lean();
     const studentMap = new Map();
     for (const s of students) {
@@ -571,9 +645,11 @@ exports.getTutorRegularClasses = async (req, res) => {
           userId: rc.studentId,
           name: s.name || "Student",
           photoUrl: s.photoUrl || null,
+          preferredTimes: Array.isArray(s.preferredTimes) ? s.preferredTimes : [],
         },
         studentName: s.name || "Student",
         photoUrl: s.photoUrl || null,
+        preferredTimes: Array.isArray(s.preferredTimes) ? s.preferredTimes : [],
         feedbackSummary: {
           averageOverall: avgOverall,
           commentCount: recentComments.length,
