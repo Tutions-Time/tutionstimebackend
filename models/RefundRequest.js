@@ -9,6 +9,7 @@ const refundSchema = new mongoose.Schema(
     reason: { type: String },
     reasonCode: { type: String, enum: ["CLASS_NOT_CONDUCTED","TUTOR_ABSENT_OR_LATE","WRONG_PURCHASE","QUALITY_ISSUE","TECHNICAL_ISSUE","SCHEDULE_CONFLICT","CONTENT_NOT_AS_DESCRIBED","OTHER"] },
     reasonText: { type: String },
+    upiId: { type: String },
     status: { type: String, enum: ["requested", "approved", "rejected", "processed"], default: "requested" },
     method: { type: String, enum: ["provider", "payout"] },
     providerRefundId: { type: String },
