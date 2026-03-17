@@ -98,6 +98,10 @@ const tutorProfileSchema = new mongoose.Schema(
     isVerified: { type: Boolean, default: false },
 
     // Payout details (managed outside tutor profile)
+    upiId: { type: String, trim: true },
+    accountHolderName: { type: String, trim: true },
+    bankAccountNumber: { type: String, trim: true },
+    ifsc: { type: String, trim: true, uppercase: true },
     razorpayxContactId: { type: String },
     razorpayxFundAccountId: { type: String },
   },
