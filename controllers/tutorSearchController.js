@@ -115,19 +115,24 @@ exports.searchTutors = async (req, res) => {
 
       // Fetch tutors
       const tutors = await TutorProfile.find(filter)
-        .populate('userId', 'phone role lastLogin status')
+        .populate('userId', 'phone role lastLogin status isProfileComplete')
         .sort(sort)
         .skip(skip)
         .limit(limit)
         .select(
-          'name photoUrl city pincode qualification specialization experience hourlyRate gender subjects addressLine1 lastLogin rating isFeatured availability'
+          'name photoUrl city pincode qualification specialization experience hourlyRate gender subjects addressLine1 lastLogin rating isFeatured availability kycStatus'
         )
         .lean();
 
       const activeTutors = tutors.filter((t) => {
         const st = String(t?.userId?.status || '').toLowerCase();
         return st !== 'suspended';
-      });
+      }).map((t) => ({
+        ...t,
+        isVerifiedTutor:
+          Boolean(t?.userId?.isProfileComplete) &&
+          String(t?.kycStatus || '').toLowerCase() === 'approved',
+      }));
 
       return res.status(200).json({
         success: true,
@@ -142,12 +147,31 @@ exports.searchTutors = async (req, res) => {
     // 🧠 No filters → Use AI recommendation logic
     const studentId = req.user?.id || null;
     const recommended = await getRecommendedTutors(studentId);
+    const User = require('../models/User');
+    const userIds = recommended
+      .map((t) => String(t?.userId || ''))
+      .filter(Boolean);
+    const users = userIds.length
+      ? await User.find({ _id: { $in: userIds } })
+          .select('_id isProfileComplete')
+          .lean()
+      : [];
+    const userMap = new Map(users.map((u) => [String(u._id), u]));
+    const enrichedRecommended = recommended.map((t) => {
+      const u = userMap.get(String(t?.userId || ''));
+      return {
+        ...t,
+        isVerifiedTutor:
+          Boolean(u?.isProfileComplete) &&
+          String(t?.kycStatus || '').toLowerCase() === 'approved',
+      };
+    });
 
     return res.status(200).json({
       success: true,
       mode: 'ai',
-      count: recommended.length,
-      data: recommended,
+      count: enrichedRecommended.length,
+      data: enrichedRecommended,
     });
   } catch (error) {
     console.error('Search Tutors Error:', error);
@@ -167,7 +191,7 @@ exports.getTutorById = async (req, res) => {
   try {
     const { id } = req.params;
   const tutor = await TutorProfile.findById(id)
-    .populate('userId', 'phone role email status')
+    .populate('userId', 'phone role email status isProfileComplete')
     .lean();
 
   if (!tutor) {
@@ -191,6 +215,9 @@ exports.getTutorById = async (req, res) => {
     success: true,
     data: {
       ...tutor,
+      isVerifiedTutor:
+        Boolean(tutor?.userId?.isProfileComplete) &&
+        String(tutor?.kycStatus || '').toLowerCase() === 'approved',
       reviews,
     },
   });

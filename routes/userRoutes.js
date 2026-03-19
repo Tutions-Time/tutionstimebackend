@@ -33,6 +33,13 @@ router.post(
   userController.updateTutorProfile
 );
 
+router.patch(
+  '/tutor-payout-details',
+  authenticate,
+  checkRole(['tutor']),
+  userController.updateTutorPayoutDetails
+);
+
 router.post(
   '/tutor-kyc',
   authenticate,

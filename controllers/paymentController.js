@@ -14,6 +14,7 @@ const CouponUse = require("../models/CouponUse");
 const ReferralCode = require("../models/ReferralCode");
 const ReferralUse = require("../models/ReferralUse");
 const Session = require("../models/Session");
+const RefundRequest = require("../models/RefundRequest");
 
 const HOLD_DAYS = Number(process.env.TUTOR_FUND_HOLD_DAYS || 30);
 const HOLD_MS = HOLD_DAYS * 24 * 60 * 60 * 1000;
@@ -139,6 +140,36 @@ async function getRefundContext(paymentId) {
     payoutState = settled ? "released" : "locked";
   }
   return { totalPaid, completionPercentage, refundablePercentage, refundableCap, alreadyRefunded, remainingRefundable, refundWindowValid, payoutState, payment: p };
+}
+
+async function getOutstandingRefundReservations(paymentId, excludeRequestId = null) {
+  const filter = {
+    paymentId,
+    status: { $in: ["requested", "approved"] },
+  };
+  if (excludeRequestId) filter._id = { $ne: excludeRequestId };
+
+  const rows = await RefundRequest.find(filter)
+    .select("status amount amountApproved")
+    .lean();
+
+  return rows.reduce((sum, row) => {
+    const effectiveAmount =
+      row.status === "approved"
+        ? Number(row.amountApproved ?? row.amount ?? 0)
+        : Number(row.amount ?? 0);
+    return sum + Math.max(0, effectiveAmount);
+  }, 0);
+}
+
+async function isPaymentOwnedByUser(payment, userId) {
+  try {
+    const sp = await StudentProfileModel.findById(payment.studentId).select("userId").lean();
+    const ownerUserId = sp?.userId || payment.studentId;
+    return String(ownerUserId) === String(userId);
+  } catch (_) {
+    return String(payment.studentId) === String(userId);
+  }
 }
 
 function applyReasonModifier(ctx, reasonCode) {
@@ -2137,7 +2168,7 @@ exports.listTutorPayouts = async (req, res) => {
 
 exports.createRefundRequest = async (req, res) => {
   try {
-    const { paymentId, reasonCode, reasonText, amount } = req.body;
+    const { paymentId, reasonCode, reasonText, amount, upiId } = req.body;
     const userId = req.user.id;
     if (!paymentId) {
       return res.status(400).json({ success: false, message: "paymentId is required" });
@@ -2149,19 +2180,8 @@ exports.createRefundRequest = async (req, res) => {
     if (!payment) {
       return res.status(404).json({ success: false, message: "Payment not found" });
     }
-    // Authorization: support either StudentProfile._id held in payment.studentId OR direct User._id
-    try {
-      const StudentProfile = require("../models/StudentProfile");
-      const sp = await StudentProfile.findById(payment.studentId).select("userId");
-      const ownerUserId = sp?.userId || payment.studentId;
-      if (String(ownerUserId) !== String(userId)) {
-        return res.status(403).json({ success: false, message: "Not authorized for this payment" });
-      }
-    } catch (_) {
-      // Fallback: compare directly when studentId stores User._id
-      if (String(payment.studentId) !== String(userId)) {
-        return res.status(403).json({ success: false, message: "Not authorized for this payment" });
-      }
+    if (!(await isPaymentOwnedByUser(payment, userId))) {
+      return res.status(403).json({ success: false, message: "Not authorized for this payment" });
     }
     if (!['subscription', 'note', 'group'].includes(payment.type) || payment.status !== 'paid') {
       return res.status(400).json({ success: false, message: "Refunds allowed for paid subscription/note/group payments" });
@@ -2176,10 +2196,17 @@ exports.createRefundRequest = async (req, res) => {
     if (reasonCode === "OTHER" && !(reasonText && String(reasonText).trim().length > 0)) {
       return res.status(400).json({ success: false, message: "reasonText is required for OTHER" });
     }
+    const normalizedUpiId = String(upiId || "").trim();
+    if (!normalizedUpiId || !normalizedUpiId.includes("@") || /\s/.test(normalizedUpiId)) {
+      return res.status(400).json({ success: false, message: "Valid upiId is required for refund" });
+    }
     let ctx = await getRefundContext(paymentId);
     ctx = applyReasonModifier(ctx, reasonCode);
-    const suggestedAmount = Math.max(0, Number(ctx.remainingRefundable || 0));
-    const RefundRequest = require("../models/RefundRequest");
+    const reservedAmount = await getOutstandingRefundReservations(paymentId);
+    const suggestedAmount = Math.max(0, Number(ctx.remainingRefundable || 0) - reservedAmount);
+    if (suggestedAmount <= 0) {
+      return res.status(400).json({ success: false, message: "No refundable amount remaining" });
+    }
     const rr = await RefundRequest.create({
       paymentId,
       userId,
@@ -2187,6 +2214,7 @@ exports.createRefundRequest = async (req, res) => {
       reason: reasonText || "",
       reasonCode,
       reasonText: reasonText || null,
+      upiId: normalizedUpiId,
       completionPercentage: Number(ctx.completionPercentage || 0),
       refundableCap: Number(ctx.refundableCap || 0),
       suggestedAmount: Number(suggestedAmount)
@@ -2272,6 +2300,7 @@ exports.createRefundRequest = async (req, res) => {
           studentId: userId,
           amount: suggestedAmount,
           reasonCode,
+          upiId: normalizedUpiId,
           courseLabel
         }
       );
@@ -2339,6 +2368,7 @@ exports.listRefundRequests = async (req, res) => {
         ],
       })
       .populate({ path: "userId", select: "name role" })
+      .populate({ path: "adminUserId", select: "name email role" })
       .lean();
     const data = await Promise.all(items.map(async (r) => {
       const type = r.paymentId?.type || null;
@@ -2415,7 +2445,6 @@ exports.updateRefundRequestStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, amountApproved, method, upiId, bankAccountNumber, accountHolderName, ifsc } = req.body;
-    const RefundRequest = require("../models/RefundRequest");
     const rr = await RefundRequest.findById(id);
     if (!rr) return res.status(404).json({ success: false, message: "Refund request not found" });
     if (!['approved', 'rejected', 'processed'].includes(status)) {
@@ -2430,7 +2459,8 @@ exports.updateRefundRequestStatus = async (req, res) => {
       let ctx = await getRefundContext(rr.paymentId);
       const rc2 = rr.reasonCode || null;
       if (rc2) ctx = applyReasonModifier(ctx, rc2);
-      const maxRemaining = Math.max(0, Number(ctx.remainingRefundable || 0));
+      const reservedByOthers = await getOutstandingRefundReservations(rr.paymentId, rr._id);
+      const maxRemaining = Math.max(0, Number(ctx.remainingRefundable || 0) - reservedByOthers);
       let approved = Number(amountApproved || rr.amount || 0);
       approved = Math.min(approved, maxRemaining);
       if (approved <= 0) {
@@ -2439,6 +2469,7 @@ exports.updateRefundRequestStatus = async (req, res) => {
       rr.status = 'approved';
       rr.amountApproved = approved;
       rr.method = method || rr.method || (payment.gateway === 'wallet' ? 'payout' : 'provider');
+      if (rr.upiId) rr.method = "payout";
       rr.adminUserId = req.user._id;
       await rr.save();
 
@@ -2495,13 +2526,17 @@ exports.updateRefundRequestStatus = async (req, res) => {
           await rr.save();
           return res.json({ success: true, data: rr, warning: "RazorpayX not configured; refund marked approved and pending payout" });
         }
+        const payoutUpiId = String(rr.upiId || upiId || "").trim();
+        if (!payoutUpiId) {
+          return res.status(400).json({ success: false, message: "UPI ID is required for payout refund" });
+        }
         const StudentProfile = require("../models/StudentProfile");
         const sp = await StudentProfile.findById(payment.studentId).select("name email");
         const stub = {
           _id: rr.userId,
           name: sp?.name || "Student",
           email: sp?.email || undefined,
-          upiId: (upiId || "").trim(),
+          upiId: payoutUpiId,
           accountHolderName: (accountHolderName || "").trim(),
           bankAccountNumber: (bankAccountNumber || "").trim(),
           ifsc: (ifsc || "").trim(),
@@ -2635,12 +2670,16 @@ exports.listStudentRefunds = async (req, res) => {
 exports.previewRefund = async (req, res) => {
   try {
     const { paymentId, reasonCode, reasonText } = req.body;
+    const userId = req.user.id;
     if (!paymentId) {
       return res.status(400).json({ success: false, message: "paymentId is required" });
     }
     const payment = await Payment.findById(paymentId);
     if (!payment) {
       return res.status(404).json({ success: false, message: "Payment not found" });
+    }
+    if (!(await isPaymentOwnedByUser(payment, userId))) {
+      return res.status(403).json({ success: false, message: "Not authorized for this payment" });
     }
     let ctx = await getRefundContext(paymentId);
     if (reasonCode) {
@@ -2652,6 +2691,8 @@ exports.previewRefund = async (req, res) => {
       }
       ctx = applyReasonModifier(ctx, reasonCode);
     }
+    const reservedAmount = await getOutstandingRefundReservations(paymentId);
+    const maximumRefundableAmount = Math.max(0, Number(ctx.remainingRefundable || 0) - reservedAmount);
     const suggestedRefundMethod = payment.gateway === "razorpay" ? "provider" : "payout";
     const explanation = `Completion ${(Math.round(ctx.completionPercentage * 100))}% → refundable ${(Math.round(ctx.refundablePercentage * 100))}%`;
     return res.json({
@@ -2659,7 +2700,7 @@ exports.previewRefund = async (req, res) => {
       data: {
         completionPercentage: ctx.completionPercentage,
         refundablePercentage: ctx.refundablePercentage,
-        maximumRefundableAmount: Math.max(0, Number(ctx.remainingRefundable || 0)),
+        maximumRefundableAmount,
         explanation,
         refundWindowValid: ctx.refundWindowValid,
         suggestedRefundMethod
