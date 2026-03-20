@@ -10,6 +10,29 @@ const { computeDurationMinutes, buildGroupSessionTopic } = require("../utils/ses
 const wsHub = require("../services/wsHub");
 const TUTOR_RESCHEDULE_MIN_HOURS = Number(process.env.TUTOR_RESCHEDULE_MIN_HOURS || 24);
 
+function parseProposedDateTime(date, time, mode = "regular") {
+  const [y, m, d] = String(date || "").split("-").map(Number);
+  const [hh, mm] = String(time || "").split(":").map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d) || !Number.isFinite(hh) || !Number.isFinite(mm)) {
+    return null;
+  }
+
+  if (mode === "group") {
+    // Group sessions are treated as IST wall-clock input.
+    const yyyy = String(y).padStart(4, "0");
+    const mon = String(m).padStart(2, "0");
+    const day = String(d).padStart(2, "0");
+    const hour = String(Math.max(0, Math.min(23, hh))).padStart(2, "0");
+    const min = String(Math.max(0, Math.min(59, mm))).padStart(2, "0");
+    const parsed = new Date(`${yyyy}-${mon}-${day}T${hour}:${min}:00+05:30`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  // Regular sessions keep legacy wall-clock behavior.
+  const parsed = new Date(y, (m - 1), d, hh, mm, 0, 0);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function getComparableSessionStartDate(session) {
   const raw = new Date(session?.startDateTime);
   if (Number.isNaN(raw.getTime())) return null;
@@ -87,13 +110,10 @@ exports.createRequest = async (req, res) => {
     if (isGroup && !gb) return res.status(404).json({ success: false, message: "Batch not found" });
     if (isRegular && !rc) return res.status(404).json({ success: false, message: "Regular class not found" });
 
-    const [y, m, d] = String(date || "").split("-").map(Number);
-    const [hh, mm] = String(time || "").split(":").map(Number);
-    if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d) || !Number.isFinite(hh) || !Number.isFinite(mm)) {
+    const proposed = parseProposedDateTime(date, time, isGroup ? "group" : "regular");
+    if (!proposed) {
       return res.status(400).json({ success: false, message: "Invalid date or time" });
     }
-    // Keep as-is without forcing a timezone conversion for user display purposes
-    const proposed = new Date(y, (m - 1), d, hh, mm, 0, 0);
     if (proposed.getTime() <= Date.now()) {
       return res.status(400).json({ success: false, message: "New time must be in the future" });
     }
