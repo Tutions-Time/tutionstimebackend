@@ -80,6 +80,12 @@ const studentProfileSchema = new mongoose.Schema(
 
     // Optional Profile Photo
     photoUrl: { type: String },
+
+    // Refund/Payout details (used for student refund settlements)
+    upiId: { type: String, trim: true },
+    accountHolderName: { type: String, trim: true },
+    bankAccountNumber: { type: String, trim: true },
+    ifsc: { type: String, trim: true },
   },
   { timestamps: true }
 );

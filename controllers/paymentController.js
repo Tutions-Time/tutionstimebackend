@@ -2168,7 +2168,7 @@ exports.listTutorPayouts = async (req, res) => {
 
 exports.createRefundRequest = async (req, res) => {
   try {
-    const { paymentId, reasonCode, reasonText, amount, upiId } = req.body;
+    const { paymentId, reasonCode, reasonText, amount } = req.body;
     const userId = req.user.id;
     if (!paymentId) {
       return res.status(400).json({ success: false, message: "paymentId is required" });
@@ -2196,9 +2196,27 @@ exports.createRefundRequest = async (req, res) => {
     if (reasonCode === "OTHER" && !(reasonText && String(reasonText).trim().length > 0)) {
       return res.status(400).json({ success: false, message: "reasonText is required for OTHER" });
     }
-    const normalizedUpiId = String(upiId || "").trim();
-    if (!normalizedUpiId || !normalizedUpiId.includes("@") || /\s/.test(normalizedUpiId)) {
-      return res.status(400).json({ success: false, message: "Valid upiId is required for refund" });
+    const studentProfile = await StudentProfileModel.findOne({ userId })
+      .select("upiId accountHolderName bankAccountNumber ifsc")
+      .lean();
+    const normalizedUpiId = String(studentProfile?.upiId || "").trim();
+    const accountHolderName = String(studentProfile?.accountHolderName || "").trim();
+    const bankAccountNumber = String(studentProfile?.bankAccountNumber || "").trim();
+    const ifsc = String(studentProfile?.ifsc || "").trim().toUpperCase();
+    const hasPayoutDetails =
+      normalizedUpiId &&
+      normalizedUpiId.includes("@") &&
+      !/\s/.test(normalizedUpiId) &&
+      accountHolderName &&
+      bankAccountNumber &&
+      ifsc;
+    if (!hasPayoutDetails) {
+      return res.status(400).json({
+        success: false,
+        message: "Complete payout details (UPI + bank) in profile before requesting a refund",
+        requiresPayoutDetails: true,
+        actionPath: "/dashboard/student/profile",
+      });
     }
     let ctx = await getRefundContext(paymentId);
     ctx = applyReasonModifier(ctx, reasonCode);

@@ -34,6 +34,13 @@ router.post(
 );
 
 router.patch(
+  '/student-payout-details',
+  authenticate,
+  checkRole(['student']),
+  userController.updateStudentPayoutDetails
+);
+
+router.patch(
   '/tutor-payout-details',
   authenticate,
   checkRole(['tutor']),
