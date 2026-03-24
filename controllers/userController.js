@@ -520,6 +520,99 @@ const updateTutorProfile = async (req, res) => {
 };
 
 /* ------------------------------------------------------------
+   UPDATE STUDENT PAYOUT DETAILS
+------------------------------------------------------------ */
+const updateStudentPayoutDetails = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findById(userId).select("role isProfileComplete");
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+    if (user.role !== "student") {
+      return res.status(403).json({
+        success: false,
+        message: "Only students can update payout details",
+      });
+    }
+    if (!user.isProfileComplete) {
+      return res.status(400).json({
+        success: false,
+        message: "Complete student profile before adding payout details",
+      });
+    }
+
+    const upiId = String(req.body?.upiId || "").trim();
+    const accountHolderName = String(req.body?.accountHolderName || "").trim();
+    const bankAccountNumber = String(req.body?.bankAccountNumber || "").trim();
+    const ifsc = String(req.body?.ifsc || "").trim().toUpperCase();
+
+    if (!upiId || !UPI_REGEX.test(upiId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid UPI ID is required",
+      });
+    }
+    if (!accountHolderName || accountHolderName.length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: "Account holder name is required",
+      });
+    }
+    if (!bankAccountNumber || !BANK_ACCOUNT_REGEX.test(bankAccountNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid bank account number is required",
+      });
+    }
+    if (!ifsc || !IFSC_REGEX.test(ifsc)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid IFSC is required",
+      });
+    }
+
+    const profile = await StudentProfile.findOneAndUpdate(
+      { userId },
+      {
+        $set: {
+          upiId,
+          accountHolderName,
+          bankAccountNumber,
+          ifsc,
+        },
+      },
+      { new: true }
+    );
+
+    if (!profile) {
+      return res.status(404).json({
+        success: false,
+        message: "Student profile not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Payout details updated successfully",
+      data: {
+        upiId: profile.upiId || "",
+        accountHolderName: profile.accountHolderName || "",
+        bankAccountNumber: profile.bankAccountNumber || "",
+        ifsc: profile.ifsc || "",
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Server error while updating payout details",
+      error: error.message,
+    });
+  }
+};
+
+/* ------------------------------------------------------------
    UPDATE TUTOR PAYOUT DETAILS
 ------------------------------------------------------------ */
 const updateTutorPayoutDetails = async (req, res) => {
@@ -631,6 +724,7 @@ const getAllUsers = async (req, res) => {
 module.exports = {
   getUserProfile,
   updateStudentProfile,
+  updateStudentPayoutDetails,
   updateTutorProfile,
   updateTutorPayoutDetails,
   getAllUsers,
