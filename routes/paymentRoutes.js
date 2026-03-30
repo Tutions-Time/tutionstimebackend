@@ -85,6 +85,20 @@ router.get(
 );
 
 router.get(
+  "/tutor/refunds",
+  authenticate,
+  checkRole(["tutor"]),
+  paymentController.listTutorRefundRequests
+);
+
+router.patch(
+  "/tutor/refunds/:id/review",
+  authenticate,
+  checkRole(["tutor"]),
+  paymentController.submitTutorRefundReview
+);
+
+router.get(
   "/admin/refunds",
   authenticate,
   checkRole(["admin"]),

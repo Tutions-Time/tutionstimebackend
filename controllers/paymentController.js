@@ -172,6 +172,71 @@ async function isPaymentOwnedByUser(payment, userId) {
   }
 }
 
+function matchesTutorIdentity(candidateId, tutorUserId, tutorProfileId) {
+  if (!candidateId) return false;
+  const id = String(candidateId);
+  return id === String(tutorUserId) || (tutorProfileId && id === String(tutorProfileId));
+}
+
+async function resolveTutorUserAndProfileId(tutorUserId) {
+  const tp = await TutorProfile.findOne({ userId: tutorUserId }).select("_id userId").lean();
+  return {
+    tutorUserId: String(tutorUserId),
+    tutorProfileId: tp?._id ? String(tp._id) : null,
+  };
+}
+
+async function isPaymentOwnedByTutor(payment, tutorUserId) {
+  const ids = await resolveTutorUserAndProfileId(tutorUserId);
+  if (matchesTutorIdentity(payment.tutorId, ids.tutorUserId, ids.tutorProfileId)) return true;
+
+  if (payment.type === "subscription" && payment.regularClassId) {
+    const rc = await RegularClass.findById(payment.regularClassId).select("tutorId").lean();
+    return matchesTutorIdentity(rc?.tutorId, ids.tutorUserId, ids.tutorProfileId);
+  }
+  if (payment.type === "group" && payment.groupBatchId) {
+    const gb = await GroupBatch.findById(payment.groupBatchId).select("tutorId").lean();
+    return matchesTutorIdentity(gb?.tutorId, ids.tutorUserId, ids.tutorProfileId);
+  }
+  if (payment.type === "note" && payment.noteId) {
+    const note = await Note.findById(payment.noteId).select("tutorId").lean();
+    return matchesTutorIdentity(note?.tutorId, ids.tutorUserId, ids.tutorProfileId);
+  }
+  return false;
+}
+
+async function resolveTutorUserIdFromPayment(payment) {
+  const candidate = payment?.tutorId || null;
+  if (candidate) {
+    const direct = await TutorProfile.findById(candidate).select("userId").lean();
+    if (direct?.userId) return direct.userId;
+    return candidate;
+  }
+
+  if (payment.type === "subscription" && payment.regularClassId) {
+    const rc = await RegularClass.findById(payment.regularClassId).select("tutorId").lean();
+    if (rc?.tutorId) {
+      const tp = await TutorProfile.findById(rc.tutorId).select("userId").lean();
+      return tp?.userId || rc.tutorId;
+    }
+  }
+  if (payment.type === "group" && payment.groupBatchId) {
+    const gb = await GroupBatch.findById(payment.groupBatchId).select("tutorId").lean();
+    if (gb?.tutorId) {
+      const tp = await TutorProfile.findById(gb.tutorId).select("userId").lean();
+      return tp?.userId || gb.tutorId;
+    }
+  }
+  if (payment.type === "note" && payment.noteId) {
+    const note = await Note.findById(payment.noteId).select("tutorId").lean();
+    if (note?.tutorId) {
+      const tp = await TutorProfile.findById(note.tutorId).select("userId").lean();
+      return tp?.userId || note.tutorId;
+    }
+  }
+  return null;
+}
+
 function applyReasonModifier(ctx, reasonCode) {
   let percent = ctx.refundablePercentage;
   const p = ctx.payment;
@@ -2193,8 +2258,8 @@ exports.createRefundRequest = async (req, res) => {
     if (!reasonCode || !["CLASS_NOT_CONDUCTED","TUTOR_ABSENT_OR_LATE","WRONG_PURCHASE","QUALITY_ISSUE","TECHNICAL_ISSUE","SCHEDULE_CONFLICT","CONTENT_NOT_AS_DESCRIBED","OTHER"].includes(reasonCode)) {
       return res.status(400).json({ success: false, message: "Invalid reasonCode" });
     }
-    if (reasonCode === "OTHER" && !(reasonText && String(reasonText).trim().length > 0)) {
-      return res.status(400).json({ success: false, message: "reasonText is required for OTHER" });
+    if (!(reasonText && String(reasonText).trim().length >= 5)) {
+      return res.status(400).json({ success: false, message: "Description is required (minimum 5 characters)" });
     }
     const studentProfile = await StudentProfileModel.findOne({ userId })
       .select("upiId accountHolderName bankAccountNumber ifsc")
@@ -2325,6 +2390,24 @@ exports.createRefundRequest = async (req, res) => {
     } catch (err) {
       console.error("Failed to create admin notification for refund request:", err);
     }
+
+    try {
+      const notificationService = require("../services/notificationService");
+      const tutorUserId = await resolveTutorUserIdFromPayment(payment);
+      if (tutorUserId) {
+        await notificationService.notifyUser(
+          tutorUserId,
+          "Refund Request From Student",
+          `Student ${studentName || userId} raised a refund request for ${courseLabel || payment.type}`,
+          {
+            refundRequestId: rr._id,
+            paymentId,
+            reasonCode,
+            reasonText: String(reasonText || "").trim(),
+          }
+        );
+      }
+    } catch (_) {}
 
     return res.status(201).json({
       success: true,
@@ -2462,7 +2545,7 @@ exports.listRefundRequests = async (req, res) => {
 exports.updateRefundRequestStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, amountApproved, method, upiId, bankAccountNumber, accountHolderName, ifsc } = req.body;
+    const { status, amountApproved } = req.body;
     const rr = await RefundRequest.findById(id);
     if (!rr) return res.status(404).json({ success: false, message: "Refund request not found" });
     if (!['approved', 'rejected', 'processed'].includes(status)) {
@@ -2486,8 +2569,9 @@ exports.updateRefundRequestStatus = async (req, res) => {
       }
       rr.status = 'approved';
       rr.amountApproved = approved;
-      rr.method = method || rr.method || (payment.gateway === 'wallet' ? 'payout' : 'provider');
-      if (rr.upiId) rr.method = "payout";
+      rr.method = "manual";
+      rr.providerStatus = "manual_paid";
+      rr.processedAt = new Date();
       rr.adminUserId = req.user._id;
       await rr.save();
 
@@ -2517,63 +2601,46 @@ exports.updateRefundRequestStatus = async (req, res) => {
 
       try {
         const notificationService = require("../services/notificationService");
-        await notificationService.notifyUser(rr.userId, "Refund Approved", "Your refund was approved", { refundRequestId: rr._id, amountApproved: rr.amountApproved, method: rr.method });
+        await notificationService.notifyUser(rr.userId, "Refund Approved", "Your refund was approved and will be settled manually by admin", { refundRequestId: rr._id, amountApproved: rr.amountApproved, method: rr.method });
       } catch (_) {}
-      if (rr.method === 'provider') {
-        if (payment.gateway !== 'razorpay') {
-          return res.status(400).json({ success: false, message: "Provider refund requires Razorpay payment" });
-        }
-        if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-          rr.providerStatus = 'pending';
-          await rr.save();
-          return res.json({ success: true, data: rr, warning: "Razorpay not configured; refund marked approved and pending processing" });
-        }
-        const amtPaise = Math.round(Number(rr.amountApproved) * 100);
-        const notes = { rr: String(rr._id) };
-        const r = await razorpay.payments.refund(payment.gatewayPaymentId, { amount: amtPaise, notes });
-        rr.providerRefundId = r.id;
-        rr.providerStatus = r.status || 'initiated';
-        await rr.save();
-        try {
-          await createAdminNotification("Provider refund initiated", "Refund to source via Razorpay", { refundRequestId: rr._id, paymentId: payment._id, amount: rr.amountApproved });
-        } catch (_) {}
-        return res.json({ success: true, data: rr });
-      } else if (rr.method === 'payout') {
-        if (!process.env.RAZORPAYX_KEY_ID || !process.env.RAZORPAYX_KEY_SECRET || !process.env.RAZORPAYX_ACCOUNT_NUMBER) {
-          rr.providerStatus = 'pending';
-          await rr.save();
-          return res.json({ success: true, data: rr, warning: "RazorpayX not configured; refund marked approved and pending payout" });
-        }
-        const payoutUpiId = String(rr.upiId || upiId || "").trim();
-        if (!payoutUpiId) {
-          return res.status(400).json({ success: false, message: "UPI ID is required for payout refund" });
-        }
+      payment.refundTotal = Math.max(0, Number(payment.refundTotal || 0) + Number(rr.amountApproved || 0));
+      if (!Array.isArray(payment.refunds)) payment.refunds = [];
+      if (!payment.refunds.find((x) => String(x) === String(rr._id))) payment.refunds.push(rr._id);
+      await payment.save();
+
+      try {
+        const TutorProfile = require("../models/TutorProfile");
         const StudentProfile = require("../models/StudentProfile");
-        const sp = await StudentProfile.findById(payment.studentId).select("name email");
-        const stub = {
-          _id: rr.userId,
-          name: sp?.name || "Student",
-          email: sp?.email || undefined,
-          upiId: payoutUpiId,
-          accountHolderName: (accountHolderName || "").trim(),
-          bankAccountNumber: (bankAccountNumber || "").trim(),
-          ifsc: (ifsc || "").trim(),
-          razorpayxContactId: null,
-          razorpayxFundAccountId: null,
-        };
-        const { ensureContactAndFundAccount, createPayout } = require("../services/payments/payoutProvider");
-        const { contactId, fundAccountId, useUPI } = await ensureContactAndFundAccount(stub);
-        const mode = useUPI ? "UPI" : "IMPS";
-        const p = await createPayout(fundAccountId, Number(rr.amountApproved), mode, String(rr._id));
-        rr.providerRefundId = p.id;
-        rr.providerStatus = p.status || 'initiated';
-        await rr.save();
-        const adminWalletService = require("../services/payments/walletService");
-        await adminWalletService.adminDebit(Number(rr.amountApproved), "Refund payout", { type: "refund", id: rr._id });
-        return res.json({ success: true, data: rr });
-      } else {
-        return res.status(400).json({ success: false, message: "Invalid method" });
-      }
+        const tp = await TutorProfile.findById(payment.tutorId).select("userId");
+        const sp = await StudentProfile.findById(payment.studentId).select("userId");
+        const tutorUserId = tp?.userId || payment.tutorId;
+        const studentUserId = sp?.userId || payment.studentId;
+        const commissionPercent = Number(payment.commissionPercent || 25);
+        const commissionAmount = (Number(rr.amountApproved || 0) * commissionPercent) / 100;
+        const tutorNetAmount = Math.max(0, Number(rr.amountApproved || 0) - commissionAmount);
+        const ctx = await getRefundContext(payment._id);
+        const locked = ctx.payoutState !== "released";
+        if (locked) {
+          await walletService.adminDecreaseHold(tutorNetAmount);
+          await walletService.reversePending(tutorUserId, "tutor", tutorNetAmount, "Refund adjustment", { type: "refund", id: rr._id });
+        } else {
+          await walletService.debitOrRecordAdjustment(tutorUserId, "tutor", tutorNetAmount, "Refund adjustment", { type: "refund", id: rr._id });
+        }
+        try {
+          const notificationService = require("../services/notificationService");
+          await notificationService.notifyUser(studentUserId, "Refund Processed", "Your manual refund has been processed", { refundRequestId: rr._id, amount: Number(rr.amountApproved || 0) });
+          await notificationService.notifyUser(tutorUserId, "Refund Adjustment", "A refund adjustment affected your earnings", { refundRequestId: rr._id, amount: tutorNetAmount });
+        } catch (_) {}
+      } catch (_) {}
+
+      try {
+        await createAdminNotification(
+          "Refund marked approved (manual)",
+          `Refund ${rr._id} approved after manual settlement`,
+          { refundRequestId: rr._id, paymentId: payment._id, amount: rr.amountApproved }
+        );
+      } catch (_) {}
+      return res.json({ success: true, data: rr, warning: "Manual mode: no Razorpay/RazorpayX call was made" });
     }
     if (status === 'rejected') {
       rr.status = 'rejected';
@@ -2680,6 +2747,124 @@ exports.listStudentRefunds = async (req, res) => {
       };
     });
     return res.json({ success: true, data });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.listTutorRefundRequests = async (req, res) => {
+  try {
+    const tutorUserId = req.user.id;
+    const { status } = req.query;
+
+    const filter = {};
+    if (status) filter.status = status;
+
+    const items = await RefundRequest.find(filter)
+      .sort({ createdAt: -1 })
+      .populate({
+        path: "paymentId",
+        select: "type amount currency gateway tutorId studentId regularClassId groupBatchId noteId",
+        populate: [
+          { path: "tutorId", select: "name" },
+          { path: "studentId", select: "name" },
+          {
+            path: "regularClassId",
+            select: "subject tutorId studentId",
+            populate: [{ path: "tutorId", select: "name" }, { path: "studentId", select: "name" }],
+          },
+          {
+            path: "groupBatchId",
+            select: "subject tutorId",
+            populate: [{ path: "tutorId", select: "name" }],
+          },
+          {
+            path: "noteId",
+            select: "title subject tutorId",
+            populate: [{ path: "tutorId", select: "name" }],
+          },
+        ],
+      })
+      .populate({ path: "userId", select: "name" })
+      .lean();
+
+    const visible = [];
+    for (const r of items) {
+      const payment = r.paymentId;
+      if (!payment) continue;
+      const belongs = await isPaymentOwnedByTutor(payment, tutorUserId);
+      if (!belongs) continue;
+
+      const type = payment.type || null;
+      let courseLabel = null;
+      if (type === "subscription" && payment.regularClassId) {
+        courseLabel = payment.regularClassId?.subject || null;
+      } else if (type === "group" && payment.groupBatchId) {
+        courseLabel = payment.groupBatchId?.subject || null;
+      } else if (type === "note" && payment.noteId) {
+        courseLabel = payment.noteId?.title || payment.noteId?.subject || null;
+      }
+
+      const studentName =
+        payment.studentId?.name ||
+        payment.regularClassId?.studentId?.name ||
+        r.userId?.name ||
+        null;
+
+      visible.push({
+        ...r,
+        paymentType: type,
+        paymentAmount: payment.amount || 0,
+        paymentGateway: payment.gateway || null,
+        courseLabel,
+        studentName,
+      });
+    }
+
+    return res.json({ success: true, data: visible });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+exports.submitTutorRefundReview = async (req, res) => {
+  try {
+    const tutorUserId = req.user.id;
+    const { id } = req.params;
+    const decision = String(req.body?.decision || "").trim().toLowerCase();
+    const tutorDescription = String(req.body?.tutorDescription || "").trim();
+
+    if (!["legal", "illegal"].includes(decision)) {
+      return res.status(400).json({ success: false, message: "decision must be legal or illegal" });
+    }
+    if (tutorDescription.length < 5) {
+      return res.status(400).json({ success: false, message: "Tutor description is required (minimum 5 characters)" });
+    }
+
+    const rr = await RefundRequest.findById(id);
+    if (!rr) return res.status(404).json({ success: false, message: "Refund request not found" });
+
+    const payment = await Payment.findById(rr.paymentId);
+    if (!payment) return res.status(404).json({ success: false, message: "Payment not found" });
+
+    const belongs = await isPaymentOwnedByTutor(payment, tutorUserId);
+    if (!belongs) return res.status(403).json({ success: false, message: "Not authorized" });
+
+    rr.tutorDecision = decision;
+    rr.tutorDescription = tutorDescription;
+    rr.tutorReviewedBy = tutorUserId;
+    rr.tutorReviewedAt = new Date();
+    await rr.save();
+
+    try {
+      await createAdminNotification(
+        "Tutor reviewed refund request",
+        `Tutor marked refund request ${rr._id} as ${decision}`,
+        { refundRequestId: rr._id, decision, tutorDescription }
+      );
+    } catch (_) {}
+
+    return res.json({ success: true, data: rr });
   } catch (err) {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
