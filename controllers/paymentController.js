@@ -2645,6 +2645,15 @@ exports.updateRefundRequestStatus = async (req, res) => {
     if (status === 'rejected') {
       rr.status = 'rejected';
       await rr.save();
+      try {
+        const notificationService = require("../services/notificationService");
+        await notificationService.notifyUser(
+          rr.userId,
+          "Refund Rejected",
+          "Your refund request was rejected",
+          { refundRequestId: rr._id }
+        );
+      } catch (_) {}
       return res.json({ success: true, data: rr });
     }
     if (status === 'processed') {
