@@ -130,6 +130,7 @@ const sendOTP = async (req, res) => {
       message: "OTP generated successfully",
       emailSent: !!sent,
       requestId,
+      resendIn: 30,
       expiresIn: Math.floor((expiresAt - Date.now()) / 1000),
     });
   } catch (error) {
@@ -148,7 +149,6 @@ const verifyOTP = async (req, res) => {
     const { email, otp, requestId, role, name, phone, referralCode } = req.body;
 
     if (!email || !otp || !requestId) {
-      console.log("Missing required fields:", { email, otp, requestId });
       return res.status(400).json({
         success: false,
         message: "Email, OTP, and requestId are required",
@@ -222,20 +222,21 @@ const verifyOTP = async (req, res) => {
         );
 
         user = creationResult.value;
-        // Update phone on the user (unique, may fail if clash)
+        // Update phone on the user (duplicates allowed)
         if (user) {
           if (String(user.phone || "") !== trimmedPhone) {
             user.phone = trimmedPhone;
             try {
               await user.save();
             } catch (e) {
-              if (e.code === 11000) {
-                return res.status(400).json({
-                  success: false,
-                  message: "This mobile number is already in use",
-                });
+              if (e && e.code === 11000) {
+                user.phone = undefined;
+                try {
+                  await user.save();
+                } catch (_) {}
+              } else {
+                throw e;
               }
-              throw e;
             }
           }
         }
@@ -245,12 +246,22 @@ const verifyOTP = async (req, res) => {
           try {
             const meta =
               role === "tutor"
-                ? { userId: user._id, tutorId: user._id, email: normalizedEmail, role }
-                : { userId: user._id, studentId: user._id, email: normalizedEmail, role };
+                ? {
+                    userId: user._id,
+                    tutorId: user._id,
+                    email: normalizedEmail,
+                    role,
+                  }
+                : {
+                    userId: user._id,
+                    studentId: user._id,
+                    email: normalizedEmail,
+                    role,
+                  };
             await createAdminNotification(
               "New User Signup",
               `A new ${role} signed up with email: ${normalizedEmail}`,
-              meta
+              meta,
             );
           } catch (e) {
             console.warn("New signup admin notification failed:", e.message);
@@ -262,13 +273,13 @@ const verifyOTP = async (req, res) => {
             await StudentProfile.findOneAndUpdate(
               { userId: user._id },
               { $set: { name: trimmedName, email: normalizedEmail } },
-              { new: true, upsert: true }
+              { new: true, upsert: true },
             );
           } else if (role === "tutor") {
             await TutorProfile.findOneAndUpdate(
               { userId: user._id },
               { $set: { name: trimmedName, email: normalizedEmail } },
-              { new: true, upsert: true }
+              { new: true, upsert: true },
             );
           }
         } catch (e) {

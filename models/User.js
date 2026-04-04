@@ -25,7 +25,6 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true,
     sparse: true,
-    unique: true,
     validate: {
       validator: function(v) {
         return !v || /^[0-9]{10}$/.test(v);
@@ -98,7 +97,6 @@ userSchema.pre('save', function(next) {
 });
 
 // Add index explicitly
-userSchema.index({ phone: 1 }, { unique: true, sparse: true });
 userSchema.index({ email: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('User', userSchema);

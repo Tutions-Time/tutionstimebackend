@@ -1,5 +1,6 @@
 const notificationService = require("./notificationService");
 const OtpRequest = require("../models/OtpRequest");
+const { nanoid } = require("nanoid");
 
 const generateOTP = () => {
   const code = Math.floor(100000 + Math.random() * 900000);
@@ -12,11 +13,33 @@ const normalizeEmail = (email) => {
 
 const storeOTP = async (email, purpose) => {
   const normalizedEmail = normalizeEmail(email);
+  const now = Date.now();
+  const expiresAt = new Date(now + 5 * 60 * 1000);
+  const RESEND_THROTTLE_MS = 30 * 1000;
+
+  const existing = await OtpRequest.findOne({ email: normalizedEmail, purpose })
+    .sort({ createdAt: -1 });
+
+  if (existing && new Date(existing.expiresAt).getTime() > now) {
+    const updatedAtMs = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+    if (updatedAtMs && now - updatedAtMs < RESEND_THROTTLE_MS) {
+      return { otp: existing.otp, requestId: existing.requestId, expiresAt: existing.expiresAt };
+    }
+
+    const otp = generateOTP();
+    existing.otp = otp;
+    existing.expiresAt = expiresAt;
+    existing.attempts = 0;
+    await existing.save();
+    await OtpRequest.deleteMany({ email: normalizedEmail, purpose, _id: { $ne: existing._id } });
+    return { otp, requestId: existing.requestId, expiresAt };
+  }
+
   const otp = generateOTP();
-  const requestId = Math.random().toString(36).substring(2, 15);
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes expiry
+  const requestId = nanoid(20);
 
   try {
+    await OtpRequest.deleteMany({ email: normalizedEmail, purpose });
     await OtpRequest.create({
       requestId,
       email: normalizedEmail,
@@ -34,45 +57,25 @@ const storeOTP = async (email, purpose) => {
 
 const verifyOTP = async (requestId, providedOTP, email) => {
   const normalizedEmail = normalizeEmail(email);
-  let otpData = await OtpRequest.findOne({ requestId });
-
-  if (!otpData && normalizedEmail) {
-    otpData = await OtpRequest.findOne({ email: normalizedEmail })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    if (otpData) {
-      requestId = otpData.requestId;
-      console.log("Fallback to email-based OTP entry:", {
-        fallbackRequestId: requestId,
-        email: normalizedEmail,
-      });
-    }
-  }
+  const otpData = await OtpRequest.findOne({ requestId, email: normalizedEmail });
 
   if (!otpData) {
-    console.log("OTP data not found for requestId:", requestId);
     return { valid: false, message: "Invalid or expired request ID" };
   }
 
+  const MAX_ATTEMPTS = 5;
+  if (Number(otpData.attempts || 0) >= MAX_ATTEMPTS) {
+    await OtpRequest.deleteOne({ requestId });
+    return { valid: false, message: "Too many attempts. Please request a new OTP." };
+  }
+
   if (Date.now() > new Date(otpData.expiresAt).getTime()) {
-    console.log("OTP expired:", {
-      expiresAt: otpData.expiresAt.toISOString(),
-      now: new Date().toISOString(),
-    });
     await OtpRequest.deleteOne({ requestId });
     return { valid: false, message: "OTP expired. Please request a new one." };
   }
 
   if (otpData.otp !== providedOTP) {
-    await OtpRequest.updateOne(
-      { requestId },
-      { $inc: { attempts: 1 } }
-    );
-    console.log("OTP mismatch:", {
-      provided: providedOTP,
-      expected: otpData.otp,
-    });
+    await OtpRequest.updateOne({ requestId }, { $inc: { attempts: 1 } });
     return { valid: false, message: "Invalid OTP. Please check and try again." };
   }
 

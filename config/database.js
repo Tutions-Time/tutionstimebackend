@@ -7,7 +7,7 @@ const ensurePhoneIndex = async () => {
   } catch {}
 
   try {
-    await User.collection.createIndex({ phone: 1 }, { unique: true, sparse: true });
+    await User.collection.createIndex({ phone: 1 }, { sparse: true });
   } catch (error) {
     console.warn('Unable to ensure phone index:', error.message);
   }
@@ -18,6 +18,7 @@ const connectDB = async () => {
     const conn = await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/tuitionstime', {
       useNewUrlParser: true,
       useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 30000,
     });
     await ensurePhoneIndex();
     // console.log(`MongoDB Connected: ${conn.connection.host}`);
