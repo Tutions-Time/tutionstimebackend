@@ -15,6 +15,9 @@ const ReferralCode = require("../models/ReferralCode");
 const ReferralUse = require("../models/ReferralUse");
 const Session = require("../models/Session");
 const RefundRequest = require("../models/RefundRequest");
+const {
+  recalculateSubscriptionRelease,
+} = require("../services/payments/subscriptionPayoutService");
 
 const HOLD_DAYS = Number(process.env.TUTOR_FUND_HOLD_DAYS || 30);
 const HOLD_MS = HOLD_DAYS * 24 * 60 * 60 * 1000;
@@ -443,6 +446,14 @@ exports.createSubscriptionOrder = async (req, res) => {
             commissionPercent,
             commissionAmount,
             tutorNetAmount,
+            payoutGenerated: false,
+            payoutId: null,
+            releaseAt: null,
+            fundReleaseStatus: "pending",
+            fundReleaseDate: null,
+            fundReleasedAt: null,
+            walletProcessed: false,
+            paidAt: new Date(),
           },
           { upsert: true, new: true }
         );
@@ -480,8 +491,7 @@ exports.createSubscriptionOrder = async (req, res) => {
           await grantReferralIfEligible({ studentUserId: sp?.userId || userId, paymentId: paymentDoc._id, amount: totalAmountINR });
         } catch (_) {}
 
-        const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
-        scheduleFundRelease(paymentDoc, baseDate);
+        await recalculateSubscriptionRelease(paymentDoc);
         paymentDoc.walletProcessed = true;
         await paymentDoc.save();
 
@@ -536,6 +546,14 @@ exports.createSubscriptionOrder = async (req, res) => {
         periodStart: rc.currentPeriodStart,
         periodEnd: rc.currentPeriodEnd,
         notes: `BillingType: ${billingType}, Classes: ${classes}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
+        payoutGenerated: false,
+        payoutId: null,
+        releaseAt: null,
+        fundReleaseStatus: "pending",
+        fundReleaseDate: null,
+        fundReleasedAt: null,
+        walletProcessed: false,
+        paidAt: null,
       },
       { upsert: true, new: true }
     );
@@ -1011,6 +1029,7 @@ exports.razorpayWebhook = async (req, res) => {
       payment.status = "paid";
       payment.gatewayPaymentId = paymentId;
       payment.amount = amount;
+      payment.paidAt = new Date();
       await payment.save();
 
       // UPDATE REGULAR CLASS
@@ -1070,8 +1089,7 @@ exports.razorpayWebhook = async (req, res) => {
             });
 
             // Schedule release after 30 days of period end (or startDate)
-            const baseDate = rc.currentPeriodEnd || rc.startDate || new Date();
-            scheduleFundRelease(payment, baseDate);
+            await recalculateSubscriptionRelease(payment);
             payment.walletProcessed = true;
             await payment.save();
           }
@@ -1345,6 +1363,7 @@ exports.verifyPayment = async (req, res) => {
     // Mark payment as paid
     payment.status = "paid";
     payment.gatewayPaymentId = paymentId;
+    payment.paidAt = new Date();
     await payment.save();
 
     // Update RegularClass payment status
@@ -1408,8 +1427,7 @@ exports.verifyPayment = async (req, res) => {
               paymentId: payment._id,
             });
 
-            const baseDate = rc2.currentPeriodEnd || rc2.startDate || new Date();
-            scheduleFundRelease(payment, baseDate);
+            await recalculateSubscriptionRelease(payment);
             payment.walletProcessed = true;
             await payment.save();
 

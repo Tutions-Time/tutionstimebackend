@@ -8,6 +8,9 @@ const notificationService = require("../services/notificationService");
 const zoomService = require("../services/zoomService");
 const { computeDurationMinutes, buildGroupSessionTopic } = require("../utils/sessionZoomUtils");
 const wsHub = require("../services/wsHub");
+const {
+  recalculateSubscriptionReleaseForClass,
+} = require("../services/payments/subscriptionPayoutService");
 const TUTOR_RESCHEDULE_MIN_HOURS = Number(process.env.TUTOR_RESCHEDULE_MIN_HOURS || 24);
 
 function parseProposedDateTime(date, time, mode = "regular") {
@@ -181,6 +184,9 @@ exports.createRequest = async (req, res) => {
           sessionDoc.meetingLink = meeting.join_url || sessionDoc.meetingLink || "";
         } catch (_) {}
         await sessionDoc.save();
+        if (session.regularClassId) {
+          await recalculateSubscriptionReleaseForClass(session.regularClassId);
+        }
 
         const r = await RescheduleRequest.create({
           sessionId,
@@ -365,6 +371,9 @@ exports.approve = async (req, res) => {
         session.meetingLink = meeting.join_url || session.meetingLink || "";
       } catch (_) {}
       await session.save();
+      if (session.regularClassId) {
+        await recalculateSubscriptionReleaseForClass(session.regularClassId);
+      }
       r.status = "approved";
       r.approverUserId = userId;
       r.approverRole = role;
@@ -408,6 +417,9 @@ exports.approve = async (req, res) => {
         session.meetingLink = meeting.join_url || session.meetingLink || "";
       } catch (_) {}
       await session.save();
+      if (session.regularClassId) {
+        await recalculateSubscriptionReleaseForClass(session.regularClassId);
+      }
 
       r.status = "approved";
       r.approverUserId = userId;
