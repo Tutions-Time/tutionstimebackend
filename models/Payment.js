@@ -65,6 +65,7 @@ const paymentSchema = new mongoose.Schema(
     fundReleasedAt: { type: Date },
 
     walletProcessed: { type: Boolean, default: false },
+    paidAt: { type: Date },
 
     notes: { type: String },
     refundTotal: { type: Number, default: 0 },

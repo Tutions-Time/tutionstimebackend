@@ -5,6 +5,9 @@ const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
 const Session = require("../models/Session");
 const zoomService = require("../services/zoomService");
+const {
+  recalculateSubscriptionReleaseForClass,
+} = require("../services/payments/subscriptionPayoutService");
 
 const REGULAR_SESSION_DURATION_MINUTES = Number(
   process.env.REGULAR_SESSION_DURATION_MINUTES || 60
@@ -339,6 +342,7 @@ exports.scheduleRegularClassSessions = async (req, res) => {
 
     rc.scheduleStatus = "scheduled";
     await rc.save();
+    await recalculateSubscriptionReleaseForClass(rc._id);
 
     try {
       const { createAdminNotification } = require("../services/adminNotification");
