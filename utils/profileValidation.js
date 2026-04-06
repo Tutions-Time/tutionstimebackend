@@ -106,10 +106,6 @@ const validateStudentProfileData = (data) => {
   if (!preferredTimes.length)
     errors.preferredTimes = "Preferred time slots are required";
 
-  const availability = normalizeArray(data.availability);
-  if (!availability.length)
-    errors.availability = "Availability is required";
-
   if (isEmpty(data.goals)) errors.goals = "Learning goals are required";
 
   if (isEmpty(data.photoUrl))
@@ -177,10 +173,6 @@ const validateTutorProfileData = (data, options = {}) => {
 
   if (isEmpty(data.monthlyRate) || Number(data.monthlyRate) <= 0)
     errors.monthlyRate = "Monthly rate must be greater than 0";
-
-  const availability = normalizeArray(data.availability);
-  if (!availability.length)
-    errors.availability = "Availability is required";
 
   if (isEmpty(data.bio)) errors.bio = "Bio is required";
 

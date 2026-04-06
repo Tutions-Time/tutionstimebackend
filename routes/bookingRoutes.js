@@ -120,4 +120,10 @@ router.post(
   bookingController.startRegularFromDemo
 );
 
+router.post(
+  '/tutor/:tutorId/start-regular-direct',
+  checkRole(['student']),
+  bookingController.startRegularDirect
+);
+
 module.exports = router;

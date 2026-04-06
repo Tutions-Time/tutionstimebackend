@@ -305,17 +305,6 @@ exports.createDemoBooking = async (req, res) => {
       });
     }
 
-    const avail = Array.isArray(tutorProfile.availability)
-      ? tutorProfile.availability
-      : [];
-    const isAvailable = avail.includes(date);
-    if (!isAvailable) {
-      return res.status(400).json({
-        success: false,
-        message: "Tutor not available on selected date",
-      });
-    }
-
     // Prevent double booking for same student/tutor/slot
     const existingForSameStudent = await Booking.findOne({
       studentId: req.user.id,
@@ -498,40 +487,6 @@ exports.createDemoBookingByTutor = async (req, res) => {
     const preferredDate = toStartOfDay(date);
 
     // ✅ Check tutor availability (same logic as student->tutor flow)
-    const tutorAvail = Array.isArray(tutorProfile.availability)
-      ? tutorProfile.availability
-      : [];
-    const tutorAvailable = tutorAvail.includes(date);
-    if (!tutorAvailable) {
-      return res.status(400).json({
-        success: false,
-        message: "You are not available on selected date",
-      });
-    }
-
-    const studentAvail = Array.isArray(studentProfile.availability)
-      ? studentProfile.availability
-      : [];
-    if (studentAvail.length) {
-      if (!studentAvail.includes(date)) {
-        return res.status(400).json({
-          success: false,
-          message: "Student not available on selected date",
-        });
-      }
-    } else {
-      const isSunday = (() => {
-        const d = new Date(`${date}T00:00:00Z`);
-        return d.getUTCDay() === 0;
-      })();
-      if (isSunday) {
-        return res.status(400).json({
-          success: false,
-          message: "Student not available on Sundays",
-        });
-      }
-    }
-
     // Prevent double booking for same tutor+student+slot
     const existingForSamePair = await Booking.findOne({
       studentId,
@@ -2273,7 +2228,7 @@ exports.startRegularFromDemo = async (req, res) => {
     console.log("Student Profile ID:", studentProfileId);
 
     // -------------------------------
-    // 3️⃣ Tutor profile + availability
+    // 3️⃣ Tutor profile
     // -------------------------------
     const tutorProfile = await TutorProfile.findOne({
       userId: booking.tutorId,
@@ -2288,21 +2243,8 @@ exports.startRegularFromDemo = async (req, res) => {
       });
     }
 
-    const todayStr = new Date().toISOString().slice(0, 10);
-
-    const futureDates = (tutorProfile.availability || [])
-      .filter((d) => d >= todayStr)
-      .sort();
-
-    if (!futureDates.length) {
-      return res.status(400).json({
-        success: false,
-        message: "Tutor has no upcoming availability",
-      });
-    }
-
-    const startDateStr = futureDates[0];
-    const startDateObj = toStartOfDay(startDateStr);
+    const startDateObj = toStartOfDay(new Date());
+    const startDateStr = startDateObj.toISOString().slice(0, 10);
 
     // -------------------------------
     // 4️⃣ Compute Amount
@@ -2429,6 +2371,193 @@ exports.startRegularFromDemo = async (req, res) => {
     });
   } catch (err) {
     console.error("startRegularFromDemo error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message,
+    });
+  }
+};
+
+exports.startRegularDirect = async (req, res) => {
+  try {
+    const tutorUserId = req.params.tutorId;
+    const studentUserId = req.user.id;
+    const { subject, billingType, numberOfClasses } = req.body;
+
+    if (!subject) {
+      return res.status(400).json({
+        success: false,
+        message: "subject is required",
+      });
+    }
+
+    if (!billingType || !["hourly", "monthly"].includes(billingType)) {
+      return res.status(400).json({
+        success: false,
+        message: "billingType must be 'hourly' or 'monthly'",
+      });
+    }
+
+    if (billingType === "hourly" && !numberOfClasses) {
+      return res.status(400).json({
+        success: false,
+        message: "numberOfClasses is required for hourly billing",
+      });
+    }
+
+    const studentProfileDoc = await StudentProfile.findOne({
+      userId: studentUserId,
+    })
+      .select("_id preferredTimes name")
+      .lean();
+
+    if (!studentProfileDoc) {
+      return res.status(404).json({
+        success: false,
+        message: "Student profile not found",
+      });
+    }
+
+    const tutorProfile = await TutorProfile.findOne({
+      userId: tutorUserId,
+    }).lean();
+
+    if (!tutorProfile) {
+      return res.status(404).json({
+        success: false,
+        message: "Tutor profile not found",
+      });
+    }
+
+    const tutorSubjects = Array.isArray(tutorProfile.subjects)
+      ? tutorProfile.subjects
+      : [];
+    if (!tutorSubjects.includes(subject)) {
+      return res.status(400).json({
+        success: false,
+        message: "Selected subject is not offered by this tutor",
+      });
+    }
+
+    const existingActiveClass = await RegularClass.findOne({
+      studentId: studentProfileDoc._id,
+      tutorId: tutorProfile._id,
+      subject,
+      status: "active",
+      paymentStatus: { $in: ["pending", "paid"] },
+    }).lean();
+
+    if (existingActiveClass) {
+      const existingPayment = await Payment.findOne({
+        regularClassId: existingActiveClass._id,
+        type: "subscription",
+      })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      const totalAmountINR =
+        existingActiveClass.planType === "hourly"
+          ? Number(existingActiveClass.amount || 0) *
+            Number(existingActiveClass.classCount || 0)
+          : Number(existingActiveClass.amount || 0);
+
+      return res.json({
+        success: true,
+        message: "Regular class already exists. Proceed to payment.",
+        data: {
+          regularClassId: existingActiveClass._id,
+          paymentId: existingPayment?._id || null,
+          startDate: existingActiveClass.startDate,
+          billingType: existingActiveClass.planType,
+          baseRate: existingActiveClass.amount,
+          totalAmountINR,
+        },
+      });
+    }
+
+    const startDateObj = toStartOfDay(new Date());
+    const startDateStr = startDateObj.toISOString().slice(0, 10);
+    const baseRate =
+      billingType === "hourly"
+        ? tutorProfile.hourlyRate
+        : tutorProfile.monthlyRate;
+
+    if (!baseRate) {
+      return res.status(400).json({
+        success: false,
+        message: `Tutor ${billingType} rate not set`,
+      });
+    }
+
+    const totalAmountINR =
+      billingType === "hourly"
+        ? baseRate * Number(numberOfClasses)
+        : baseRate;
+
+    const rc = await RegularClass.create({
+      studentId: studentProfileDoc._id,
+      tutorId: tutorProfile._id,
+      subject,
+      planType: billingType,
+      classCount: billingType === "hourly" ? Number(numberOfClasses) : null,
+      startDate: startDateObj,
+      amount: baseRate,
+      currency: "INR",
+      paymentStatus: "pending",
+      status: "active",
+      currentPeriodStart: startDateObj,
+      currentPeriodEnd: new Date(
+        new Date(startDateObj).setMonth(startDateObj.getMonth() + 1)
+      ),
+    });
+
+    const payment = await Payment.create({
+      regularClassId: rc._id,
+      studentId: studentProfileDoc._id,
+      tutorId: tutorProfile._id,
+      type: "subscription",
+      amount: totalAmountINR,
+      currency: "INR",
+      gateway: "razorpay",
+      status: "created",
+      notes: `DirectRegular=true, BillingType=${billingType}, Classes=${
+        numberOfClasses || ""
+      }, StartDate=${startDateStr}`,
+    });
+
+    await createAdminNotification(
+      "Direct Regular Class Started (Pending Payment)",
+      `Student ${studentProfileDoc.name || studentUserId} started regular classes directly with tutor ${tutorProfile.name || tutorUserId} for ${subject}`,
+      {
+        regularClassId: rc._id,
+        paymentId: payment._id,
+        studentId: studentUserId,
+        tutorId: tutorUserId,
+        subject,
+        billingType,
+        numberOfClasses,
+        startDate: startDateStr,
+      }
+    );
+
+    return res.json({
+      success: true,
+      message: "Regular class created. Proceed to payment.",
+      data: {
+        regularClassId: rc._id,
+        paymentId: payment._id,
+        startDate: startDateStr,
+        billingType,
+        baseRate,
+        totalAmountINR,
+        studentPreferredTimes: Array.isArray(studentProfileDoc.preferredTimes)
+          ? studentProfileDoc.preferredTimes
+          : [],
+      },
+    });
+  } catch (err) {
+    console.error("startRegularDirect error:", err);
     return res.status(500).json({
       success: false,
       message: "Server error",

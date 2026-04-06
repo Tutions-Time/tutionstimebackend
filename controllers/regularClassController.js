@@ -65,9 +65,51 @@ function isTimeWithinPreferredSlots(time24, preferredTimes) {
     }
     if (target >= startMin || target <= endMin) return true;
   }
-  // If legacy/invalid slot strings exist but none are parseable, don't hard block.
+
   if (parsedSlotCount === 0) return true;
   return false;
+}
+
+function formatDateOnly(date) {
+  return new Date(date).toISOString().slice(0, 10);
+}
+
+function startOfUtcDay(date) {
+  const d = new Date(date);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
+function addUtcDays(date, days) {
+  const base = startOfUtcDay(date);
+  base.setUTCDate(base.getUTCDate() + days);
+  return base;
+}
+
+function buildDailyDateRange(startDate, count) {
+  return Array.from({ length: count }, (_, index) =>
+    formatDateOnly(addUtcDays(startDate, index))
+  );
+}
+
+function buildMonthlyDateRange(startDate) {
+  const start = startOfUtcDay(startDate);
+  const monthStart = new Date(
+    Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1)
+  );
+  const nextMonthStart = new Date(
+    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1)
+  );
+  const dates = [];
+
+  for (
+    let cursor = new Date(monthStart);
+    cursor < nextMonthStart;
+    cursor = addUtcDays(cursor, 1)
+  ) {
+    dates.push(formatDateOnly(cursor));
+  }
+
+  return dates;
 }
 
 
@@ -219,31 +261,18 @@ exports.scheduleRegularClassSessions = async (req, res) => {
       });
     }
 
-    // Load Tutor Availability
-    if (
-      !tutorProfile ||
-      !Array.isArray(tutorProfile.availability) ||
-      tutorProfile.availability.length === 0
-    ) {
+    if (!tutorProfile) {
       return res.status(400).json({
         success: false,
-        message: "Tutor availability is not set",
-      });
-    }
-
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const futureDates = tutorProfile.availability
-      .filter((d) => d >= todayStr)
-      .sort();
-
-    if (!futureDates.length) {
-      return res.status(400).json({
-        success: false,
-        message: "Tutor has no upcoming availability",
+        message: "Tutor profile not found",
       });
     }
 
     let selectedDates = [];
+    const scheduleStartDate =
+      startOfUtcDay(rc.startDate) > startOfUtcDay(new Date())
+        ? startOfUtcDay(rc.startDate)
+        : startOfUtcDay(new Date());
 
     // ------------------------------
     // 🔥 1️⃣ HOURLY PLAN (automatic)
@@ -258,35 +287,14 @@ exports.scheduleRegularClassSessions = async (req, res) => {
         });
       }
 
-      selectedDates = futureDates.slice(0, n);
-
-      if (selectedDates.length < n) {
-        return res.status(400).json({
-          success: false,
-          message: "Tutor does not have enough availability for these classes",
-        });
-      }
+      selectedDates = buildDailyDateRange(scheduleStartDate, n);
     }
 
     // ------------------------------
     // 🔥 2️⃣ MONTHLY PLAN (automatic)
     // ------------------------------
     else if (rc.planType === "monthly") {
-      const start = new Date(rc.startDate);
-      const monthPrefix = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1))
-        .toISOString()
-        .slice(0, 7);
-      selectedDates = futureDates.filter((d) => d.startsWith(monthPrefix));
-
-      if (!selectedDates.length) {
-        const nextMonth = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
-        const nextMonthPrefix = nextMonth.toISOString().slice(0, 7);
-        selectedDates = futureDates.filter((d) => d.startsWith(nextMonthPrefix));
-      }
-
-      if (!selectedDates.length) {
-        selectedDates = futureDates.slice(0, Math.min(futureDates.length, 8));
-      }
+      selectedDates = buildMonthlyDateRange(scheduleStartDate);
     } else {
       return res.status(400).json({
         success: false,
