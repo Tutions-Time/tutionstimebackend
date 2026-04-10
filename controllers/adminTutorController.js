@@ -207,7 +207,7 @@ exports.getTutorJourney = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: 'Invalid tutor id' });
     }
-
+    
     const tutorUser = await User.findById(id).select('phone role status createdAt').lean();
     if (!tutorUser || tutorUser.role !== 'tutor') {
       return res.status(404).json({ success: false, message: 'Tutor not found' });

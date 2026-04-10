@@ -46,6 +46,32 @@ function applyCommissionFields(payment, amount, percent = DEFAULT_COMMISSION_PER
   return { commissionAmount, tutorNetAmount };
 }
 
+function isCashfreeOrderPaid(order) {
+  const status = String(order?.order_status || order?.payment_status || "").toUpperCase();
+  return status === "PAID" || status === "SUCCESS";
+}
+
+async function resolveCashfreePaymentMeta(orderId) {
+  const order = await razorpay.orders.fetch(orderId);
+  const payments = await razorpay.orders.fetchPayments(orderId).catch(() => []);
+  const settledPayment =
+    payments.find((item) =>
+      ["SUCCESS", "PAID", "CAPTURED", "PROCESSED"].includes(
+        String(item?.payment_status || item?.paymentStatus || item?.status || "").toUpperCase(),
+      ),
+    ) || payments[0] || null;
+
+  return {
+    order,
+    paymentId:
+      settledPayment?.cf_payment_id ||
+      settledPayment?.payment_id ||
+      settledPayment?.id ||
+      null,
+    orderPaid: isCashfreeOrderPaid(order),
+  };
+}
+
 async function resolveProfileName(model, id, fallback) {
   if (!id) return fallback;
   const doc = await model.findById(id).select("name").lean();
@@ -505,9 +531,6 @@ exports.createSubscriptionOrder = async (req, res) => {
       }
     } catch (_) {}
 
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-      return res.status(500).json({ success: false, message: "Razorpay not configured" });
-    }
     const safeReceipt = `rc_${Math.random().toString(36).substring(2, 10)}`;
     let order;
     try {
@@ -521,11 +544,12 @@ exports.createSubscriptionOrder = async (req, res) => {
           cls: String(classes),
           coupon: couponCode || "",
           discount: String(discount || 0),
+          userId,
         },
       });
     } catch (e) {
       const msg = (e && (e.error?.description || e.message)) || "Payment provider error";
-      console.error("Razorpay order create error:", msg);
+      console.error("Cashfree order create error:", msg);
       return res.status(500).json({ success: false, message: msg });
     }
 
@@ -540,7 +564,7 @@ exports.createSubscriptionOrder = async (req, res) => {
         type: "subscription",
         amount: totalAmountINR,
         currency: "INR",
-        gateway: "razorpay",
+        gateway: "cashfree",
         gatewayOrderId: order.id,
         status: "created",
         periodStart: rc.currentPeriodStart,
@@ -572,10 +596,11 @@ exports.createSubscriptionOrder = async (req, res) => {
 
     return res.json({
       success: true,
-      key: process.env.RAZORPAY_KEY_ID,
       orderId: order.id,
       amount: amountInPaise,
       currency: "INR",
+      paymentSessionId: order.payment_session_id,
+      provider: "cashfree",
     });
   } catch (err) {
     console.error("createSubscriptionOrder error:", err);
@@ -604,10 +629,6 @@ exports.createGroupOrder = async (req, res) => {
     const gb = await GroupBatch.findById(batchId);
     if (!gb || gb.status !== "active" || !gb.published) {
       return res.status(404).json({ success: false, message: "Batch not available" });
-    }
-
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-      return res.status(500).json({ success: false, message: "Razorpay not configured" });
     }
 
     const now = Date.now();
@@ -732,7 +753,7 @@ exports.createGroupOrder = async (req, res) => {
       amount: amountInPaise,
       currency: "INR",
       receipt: safeReceipt,
-      notes: { batchId: batchId.toString().slice(-8), studentId: sp._id.toString().slice(-8), coupon: couponCode || "", discount: String(discount || 0) },
+      notes: { batchId: batchId.toString().slice(-8), studentId: sp._id.toString().slice(-8), coupon: couponCode || "", discount: String(discount || 0), userId },
     });
 
     const paymentDoc = await Payment.create({
@@ -742,7 +763,7 @@ exports.createGroupOrder = async (req, res) => {
       tutorId: gb.tutorId,
       amount: amountINR,
       currency: "INR",
-      gateway: "razorpay",
+      gateway: "cashfree",
       gatewayOrderId: order.id,
       status: "created",
       notes: `Group batch checkout for ${batchId}, Months:${months}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
@@ -764,7 +785,14 @@ exports.createGroupOrder = async (req, res) => {
     const metrics = require("../services/metricsService");
     metrics.emit("group.checkout.initiated", { batchId }, { amount: amountINR });
 
-    return res.json({ success: true, key: process.env.RAZORPAY_KEY_ID, orderId: order.id, amount: amountInPaise, currency: "INR" });
+    return res.json({
+      success: true,
+      orderId: order.id,
+      amount: amountInPaise,
+      currency: "INR",
+      paymentSessionId: order.payment_session_id,
+      provider: "cashfree",
+    });
   } catch (err) {
     console.error("createGroupOrder error:", err);
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
@@ -875,10 +903,6 @@ exports.createNoteOrder = async (req, res) => {
       }
     } catch (_) {}
 
-    if (!process.env.RAZORPAY_KEY_ID) {
-      return res.status(500).json({ success: false, message: "Razorpay key not configured" });
-    }
-
     const safeReceipt = `nt_${Math.random().toString(36).substring(2, 10)}`;
     const order = await razorpay.orders.create({
       amount: amountInPaise,
@@ -889,6 +913,7 @@ exports.createNoteOrder = async (req, res) => {
         t: note.tutorId.toString().slice(-8),
         coupon: couponCode || "",
         discount: String(discount || 0),
+        userId,
       },
     });
 
@@ -899,19 +924,19 @@ exports.createNoteOrder = async (req, res) => {
       tutorId: note.tutorId,
       amount: amountINR,
       currency: "INR",
-      gateway: "razorpay",
+      gateway: "cashfree",
       gatewayOrderId: order.id,
       status: "created",
     });
 
     return res.json({
       success: true,
-      key: process.env.RAZORPAY_KEY_ID,
-      razorpayKey: process.env.RAZORPAY_KEY_ID,
       orderId: order.id,
       amount: amountInPaise,
       currency: "INR",
       paymentId: paymentDoc._id,
+      paymentSessionId: order.payment_session_id,
+      provider: "cashfree",
     });
   } catch (err) {
     console.error("createNoteOrder error:", err);
@@ -1326,6 +1351,135 @@ exports.razorpayxWebhook = async (req, res) => {
 };
 
 
+exports.cashfreeWebhook = async (req, res) => {
+  try {
+    const signature = req.headers["x-webhook-signature"];
+    const timestamp = req.headers["x-webhook-timestamp"];
+    const rawBody = Buffer.isBuffer(req.body)
+      ? req.body.toString("utf8")
+      : JSON.stringify(req.body || {});
+
+    if (!signature || !timestamp) {
+      return res.status(400).json({ received: false });
+    }
+
+    if (!razorpay.verifyWebhookSignature(signature, rawBody, timestamp)) {
+      return res.status(400).json({ received: false });
+    }
+
+    const event = JSON.parse(rawBody);
+    const eventType = String(event?.type || event?.event || "").toUpperCase();
+    const data = event?.data || event?.payload || {};
+    const orderId =
+      data?.order?.order_id ||
+      data?.order_id ||
+      data?.payment?.order_id ||
+      data?.payment_entity?.order_id ||
+      null;
+    const providerPaymentId =
+      data?.payment?.cf_payment_id ||
+      data?.payment?.payment_id ||
+      data?.cf_payment_id ||
+      null;
+
+    if (!orderId || !eventType.includes("PAYMENT")) {
+      return res.status(200).json({ received: true });
+    }
+
+    const payment = await Payment.findOne({ gatewayOrderId: orderId });
+    if (payment && payment.status !== "paid") {
+      payment.status = "paid";
+      payment.gatewayPaymentId = providerPaymentId || payment.gatewayPaymentId;
+      payment.paidAt = new Date();
+      await payment.save();
+    }
+
+    return res.status(200).json({ received: true });
+  } catch (err) {
+    console.error("Cashfree payment webhook error", err);
+    return res.status(500).json({ received: false });
+  }
+};
+
+exports.cashfreePayoutWebhook = async (req, res) => {
+  try {
+    const signature = req.headers["x-webhook-signature"];
+    const timestamp = req.headers["x-webhook-timestamp"];
+    const rawBody = Buffer.isBuffer(req.body)
+      ? req.body.toString("utf8")
+      : JSON.stringify(req.body || {});
+
+    if (!signature || !timestamp) {
+      return res.status(400).json({ received: false });
+    }
+
+    const payoutProvider = require("../services/payments/payoutProvider");
+    if (!payoutProvider.verifyWebhookSignature(signature, rawBody, timestamp)) {
+      return res.status(400).json({ received: false });
+    }
+
+    const event = JSON.parse(rawBody);
+    const eventType = String(event?.type || event?.event || "").toUpperCase();
+    const data = event?.data || {};
+    const transferId =
+      data?.transfer?.transfer_id ||
+      data?.transfer_id ||
+      data?.cf_transfer_id ||
+      null;
+    const status = String(
+      data?.transfer?.transfer_status || data?.transfer_status || "",
+    ).toUpperCase();
+
+    if (!transferId) return res.status(200).json({ received: true });
+
+    const payout = await Payment.findOne({
+      type: "payout",
+      gatewayPaymentId: transferId,
+    });
+    if (!payout) return res.status(200).json({ received: true });
+
+    if (status === "SUCCESS" || eventType.includes("TRANSFER_SUCCESS")) {
+      payout.status = "settled";
+      await payout.save();
+      return res.status(200).json({ received: true });
+    }
+
+    if (
+      ["FAILED", "REVERSED", "CANCELLED"].includes(status) ||
+      eventType.includes("TRANSFER_FAILED") ||
+      eventType.includes("TRANSFER_REVERSED")
+    ) {
+      payout.status = "failed";
+      await payout.save();
+
+      const tp = await TutorProfile.findById(payout.tutorId).select("userId");
+      const userId = tp?.userId || null;
+      if (userId) {
+        const Wallet = require("../models/Wallet");
+        const w = await Wallet.findOne({ userId });
+        if (w) {
+          w.balance += Number(payout.tutorNetAmount || payout.amount || 0);
+          await w.save();
+        }
+        await walletService.addTransaction({
+          userId,
+          type: "credit",
+          amount: Number(payout.tutorNetAmount || payout.amount || 0),
+          description: "Payout reversal",
+          reference: { type: "payout", id: payout._id },
+          status: "completed",
+          paymentId: payout._id,
+        });
+      }
+    }
+
+    return res.status(200).json({ received: true });
+  } catch (err) {
+    console.error("Cashfree payout webhook error", err);
+    return res.status(500).json({ received: false });
+  }
+};
+
 /**
  * POST /api/payments/verify
  * Client-side verification of Razorpay payment signature.
@@ -1334,24 +1488,15 @@ exports.razorpayxWebhook = async (req, res) => {
  */
 exports.verifyPayment = async (req, res) => {
   try {
-    const { orderId, paymentId, signature, regularClassId, billingType, numberOfClasses, noteId } = req.body;
+    const { orderId, regularClassId, billingType, numberOfClasses, noteId } = req.body;
 
-    if (!orderId || !paymentId || !signature) {
-      return res.status(400).json({ success: false, message: "orderId, paymentId, signature are required" });
+    if (!orderId) {
+      return res.status(400).json({ success: false, message: "orderId is required" });
     }
 
-    const secret = process.env.RAZORPAY_KEY_SECRET;
-    if (!secret) {
-      return res.status(500).json({ success: false, message: "Razorpay secret not configured" });
-    }
-
-    const expected = crypto
-      .createHmac("sha256", secret)
-      .update(`${orderId}|${paymentId}`)
-      .digest("hex");
-
-    if (expected !== signature) {
-      return res.status(400).json({ success: false, message: "Invalid signature" });
+    const { paymentId, orderPaid } = await resolveCashfreePaymentMeta(orderId);
+    if (!orderPaid) {
+      return res.status(400).json({ success: false, message: "Payment not completed" });
     }
 
     // Find payment by orderId
@@ -1467,7 +1612,11 @@ exports.verifyPayment = async (req, res) => {
           await recordCouponUse({ coupon, userId: studentUserIdX, paymentId: payment._id, amountDiscounted: disc });
         }
         if (studentUserIdX) {
-          await grantReferralIfEligible({ studentUserId: studentUserIdX, paymentId: payment._id, amount });
+          await grantReferralIfEligible({
+            studentUserId: studentUserIdX,
+            paymentId: payment._id,
+            amount: Number(payment.amount || 0),
+          });
         }
       } catch (_) {}
     }
@@ -1593,22 +1742,21 @@ exports.verifyPayment = async (req, res) => {
  */
 exports.verifyGroupPayment = async (req, res) => {
   try {
-    const { orderId, paymentId, signature, batchId } = req.body;
+    const { orderId, batchId } = req.body;
     const userId = req.user.id;
     const StudentProfile = require("../models/StudentProfile");
     const sp = await StudentProfile.findOne({ userId }).select("_id");
     if (!sp) {
       return res.status(404).json({ success: false, message: "Student profile not found" });
     }
-    if (!orderId || !paymentId || !signature) {
-      return res.status(400).json({ success: false, message: "orderId, paymentId, signature are required" });
+    if (!orderId) {
+      return res.status(400).json({ success: false, message: "orderId is required" });
     }
-    const secret = process.env.RAZORPAY_KEY_SECRET;
-    if (!secret) {
-      return res.status(500).json({ success: false, message: "Razorpay secret not configured" });
+
+    const { paymentId, orderPaid } = await resolveCashfreePaymentMeta(orderId);
+    if (!orderPaid) {
+      return res.status(400).json({ success: false, message: "Payment not completed" });
     }
-    const expected = crypto.createHmac("sha256", secret).update(`${orderId}|${paymentId}`).digest("hex");
-    if (expected !== signature) return res.status(400).json({ success: false, message: "Invalid signature" });
 
     const payment = await Payment.findOne({ gatewayOrderId: orderId, type: "group" });
     if (!payment) return res.status(404).json({ success: false, message: "Payment not found" });
@@ -3213,9 +3361,12 @@ exports.requestTutorPayout = async (req, res) => {
 
     const TutorProfileModel = require("../models/TutorProfile");
     const hasKeys =
-      process.env.RAZORPAYX_KEY_ID &&
-      process.env.RAZORPAYX_KEY_SECRET &&
-      process.env.RAZORPAYX_ACCOUNT_NUMBER;
+      (process.env.CASHFREE_PAYOUT_CLIENT_ID ||
+        process.env.CASHFREE_CLIENT_ID ||
+        process.env.CASHFREE_APP_ID) &&
+      (process.env.CASHFREE_PAYOUT_CLIENT_SECRET ||
+        process.env.CASHFREE_CLIENT_SECRET ||
+        process.env.CASHFREE_SECRET_KEY);
     try {
       if (!hasKeys) {
         payout.status = "created";
@@ -3225,7 +3376,11 @@ exports.requestTutorPayout = async (req, res) => {
       const { contactId, fundAccountId, useUPI } = await ensureContactAndFundAccount(tp);
       await TutorProfileModel.updateOne(
         { _id: tp._id },
-        { razorpayxContactId: contactId, razorpayxFundAccountId: fundAccountId }
+        {
+          cashfreeBeneficiaryId: fundAccountId,
+          razorpayxContactId: contactId,
+          razorpayxFundAccountId: fundAccountId,
+        }
       );
 
       const mode = useUPI ? "UPI" : "IMPS";
@@ -3235,11 +3390,12 @@ exports.requestTutorPayout = async (req, res) => {
         mode,
         String(payout._id)
       );
-      payout.gatewayPaymentId = rzpPayout.id;
+      payout.gatewayPaymentId =
+        rzpPayout.transfer_id || rzpPayout.id || payout.gatewayPaymentId;
       if (
-        rzpPayout.status === "processed" ||
-        rzpPayout.status === "queued" ||
-        rzpPayout.status === "pending"
+        ["SUCCESS", "QUEUED", "PENDING"].includes(
+          String(rzpPayout.transfer_status || rzpPayout.status || "").toUpperCase()
+        )
       ) {
         
         const adminWalletService = require("../services/payments/walletService");
@@ -3247,7 +3403,10 @@ exports.requestTutorPayout = async (req, res) => {
           type: "payout",
           id: payout._id,
         });
-        if (rzpPayout.status === "processed") {
+        if (
+          String(rzpPayout.transfer_status || rzpPayout.status || "").toUpperCase() ===
+          "SUCCESS"
+        ) {
           payout.status = "settled";
         }
         await payout.save();

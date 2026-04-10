@@ -102,6 +102,7 @@ const tutorProfileSchema = new mongoose.Schema(
     accountHolderName: { type: String, trim: true },
     bankAccountNumber: { type: String, trim: true },
     ifsc: { type: String, trim: true, uppercase: true },
+    cashfreeBeneficiaryId: { type: String },
     razorpayxContactId: { type: String },
     razorpayxFundAccountId: { type: String },
   },

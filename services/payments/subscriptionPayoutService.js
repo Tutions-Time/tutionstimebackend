@@ -193,9 +193,12 @@ async function executeSubscriptionAutoPayout(paymentDoc) {
   }
 
   const hasProviderKeys =
-    process.env.RAZORPAYX_KEY_ID &&
-    process.env.RAZORPAYX_KEY_SECRET &&
-    process.env.RAZORPAYX_ACCOUNT_NUMBER;
+    (process.env.CASHFREE_PAYOUT_CLIENT_ID ||
+      process.env.CASHFREE_CLIENT_ID ||
+      process.env.CASHFREE_APP_ID) &&
+    (process.env.CASHFREE_PAYOUT_CLIENT_SECRET ||
+      process.env.CASHFREE_CLIENT_SECRET ||
+      process.env.CASHFREE_SECRET_KEY);
 
   if (!hasProviderKeys) {
     await walletService.adminDecreaseHold(tutorNetAmount);
@@ -215,7 +218,7 @@ async function executeSubscriptionAutoPayout(paymentDoc) {
 
     await createAdminNotification(
       "Tutor payout fallback to wallet",
-      `RazorpayX not configured, payout ${payout._id} released to wallet instead of ${payoutMethod}`,
+      `Cashfree payouts not configured, payout ${payout._id} released to wallet instead of ${payoutMethod}`,
       {
         payoutId: payout._id,
         regularClassId: payment.regularClassId,
@@ -232,9 +235,11 @@ async function executeSubscriptionAutoPayout(paymentDoc) {
       tutorProfile,
     );
     if (
+      tutorProfile.cashfreeBeneficiaryId !== fundAccountId ||
       tutorProfile.razorpayxContactId !== contactId ||
       tutorProfile.razorpayxFundAccountId !== fundAccountId
     ) {
+      tutorProfile.cashfreeBeneficiaryId = fundAccountId;
       tutorProfile.razorpayxContactId = contactId;
       tutorProfile.razorpayxFundAccountId = fundAccountId;
       await tutorProfile.save();
@@ -248,7 +253,8 @@ async function executeSubscriptionAutoPayout(paymentDoc) {
       String(payout._id),
     );
 
-    payout.gatewayPaymentId = providerPayout.id;
+    payout.gatewayPaymentId =
+      providerPayout.transfer_id || providerPayout.id || payout.gatewayPaymentId;
     payout.notes = `Auto payout to tutor ${providerMode}${tutorProfile.upiId ? ` (${tutorProfile.upiId})` : ""}`;
 
     await walletService.debitWallet(
@@ -264,12 +270,11 @@ async function executeSubscriptionAutoPayout(paymentDoc) {
       id: payout._id,
     });
 
-    if (
-      providerPayout.status === "processed" ||
-      providerPayout.status === "queued" ||
-      providerPayout.status === "pending"
-    ) {
-      if (providerPayout.status === "processed") {
+    const providerStatus = String(
+      providerPayout.transfer_status || providerPayout.status || "",
+    ).toUpperCase();
+    if (["SUCCESS", "QUEUED", "PENDING"].includes(providerStatus)) {
+      if (providerStatus === "SUCCESS") {
         payout.status = "settled";
       }
 
@@ -298,7 +303,7 @@ async function executeSubscriptionAutoPayout(paymentDoc) {
       return payout;
     }
 
-    throw new Error(`Unexpected payout status: ${providerPayout.status || "unknown"}`);
+    throw new Error(`Unexpected payout status: ${providerStatus || "unknown"}`);
   } catch (error) {
     payout.status = "failed";
     payout.notes = `Auto payout failed, released to wallet: ${error.message}`;

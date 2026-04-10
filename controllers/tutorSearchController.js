@@ -2,6 +2,7 @@ const TutorProfile = require('../models/TutorProfile');
 const Session = require('../models/Session');
 const Booking = require('../models/Booking');
 const StudentProfile = require('../models/StudentProfile');
+const User = require('../models/User');
 const { buildTutorFilter, getRecommendedTutors } = require('../services/tutorService');
 
 async function gatherTutorReviews(tutorProfileId, tutorUserId) {
@@ -95,7 +96,9 @@ exports.searchTutors = async (req, res) => {
 
     if (hasFilters) {
       // 🧩 Build query filter
-      const filter = buildTutorFilter(req.query);
+      const filter = await buildTutorFilter(req.query, {
+        studentId: req.user?.role === "student" ? req.user.id : null,
+      });
 
       // Sorting
       const sortParam = req.query.sort || 'createdAt_desc';
@@ -108,10 +111,21 @@ exports.searchTutors = async (req, res) => {
         sort['createdAt'] = -1;
       }
 
+      const activeTutorUsers = await User.find({
+        role: 'tutor',
+        status: { $ne: 'suspended' },
+      })
+        .select('_id')
+        .lean();
+
+      const activeTutorUserIds = activeTutorUsers.map((u) => u._id);
+      filter.userId = { $in: activeTutorUserIds };
+
       // Pagination
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
       const skip = (page - 1) * limit;
+      const totalMatches = await TutorProfile.countDocuments(filter);
 
       // Fetch tutors
       const tutors = await TutorProfile.find(filter)
@@ -124,10 +138,7 @@ exports.searchTutors = async (req, res) => {
         )
         .lean();
 
-      const activeTutors = tutors.filter((t) => {
-        const st = String(t?.userId?.status || '').toLowerCase();
-        return st !== 'suspended';
-      }).map((t) => ({
+      const activeTutors = tutors.map((t) => ({
         ...t,
         isVerifiedTutor:
           Boolean(t?.userId?.isProfileComplete) &&
@@ -138,7 +149,7 @@ exports.searchTutors = async (req, res) => {
         success: true,
         mode: 'filter',
         page,
-        total: activeTutors.length,
+        total: totalMatches,
         count: activeTutors.length,
         data: activeTutors,
       });
@@ -147,7 +158,6 @@ exports.searchTutors = async (req, res) => {
     // 🧠 No filters → Use AI recommendation logic
     const studentId = req.user?.id || null;
     const recommended = await getRecommendedTutors(studentId);
-    const User = require('../models/User');
     const userIds = recommended
       .map((t) => String(t?.userId || ''))
       .filter(Boolean);

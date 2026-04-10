@@ -58,6 +58,12 @@ const bookingSchema = new mongoose.Schema(
       default: 'pending',
     },
     type: { type: String, enum: ['demo', 'regular'], default: 'demo' },
+    expiryReason: {
+      type: String,
+      enum: ['tutor-no-response', 'no-show'],
+      default: null,
+    },
+    expiredAt: { type: Date, default: null },
 
     // Meeting metadata
     meetingLink: { type: String, default: '' },

@@ -91,6 +91,24 @@ exports.bookingCancelledHTML = ({ tutorName, subject }) =>
     WEBSITE_URL
   );
 
+exports.bookingExpiredHTML = ({
+  headline = "Demo Request Expired",
+  message,
+  ctaLabel = "Open Dashboard",
+  ctaLink = WEBSITE_URL,
+}) =>
+  emailWrapper(
+    headline,
+    `
+      <p style="font-size:16px;color:#333;">
+        ${message}
+      </p>
+      <p style="color:#555;">You can review the latest status from your TuitionTime dashboard.</p>
+    `,
+    ctaLabel,
+    ctaLink
+  );
+
 // ==============================
 // 📨 TUTOR-SIDE EMAILS
 // ==============================
