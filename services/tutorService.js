@@ -5,7 +5,7 @@ const Booking = require('../models/Booking');
 /**
  * 🧩 Build dynamic MongoDB filter based on query params
  */
-exports.buildTutorFilter = (query) => {
+exports.buildTutorFilter = async (query, options = {}) => {
   const {
     city,
     pincode,  
@@ -20,6 +20,7 @@ exports.buildTutorFilter = (query) => {
     minRate,
     maxRate,
   } = query;
+  const { studentId = null } = options;
 
   const filter = { isVerified: true };
 
@@ -45,6 +46,22 @@ exports.buildTutorFilter = (query) => {
       ...(minRate && { $gte: +minRate }),
       ...(maxRate && { $lte: +maxRate }),
     };
+  }
+
+  if (studentId) {
+    const student = await StudentProfile.findOne({ userId: studentId })
+      .select("learningMode pincode")
+      .lean();
+
+    const isOfflineOnly = String(student?.learningMode || "").toLowerCase() === "offline";
+    const studentPincode = String(student?.pincode || "").trim();
+
+    if (isOfflineOnly) {
+      filter["teachingMode"] = { $in: ["Offline", "Both"] };
+      if (studentPincode) {
+        filter["pincode"] = studentPincode;
+      }
+    }
   }
 
   return filter;
@@ -78,8 +95,11 @@ exports.getRecommendedTutors = async (studentId) => {
   const subjects = student.subjects || [];
   const city = student.city;
   const learningGoals = student.goals || '';
+  const isOfflineOnly =
+    String(student.learningMode || "").toLowerCase() === "offline";
+  const studentPincode = String(student.pincode || "").trim();
 
-  const tutors = await TutorProfile.find({
+  const query = {
     isVerified: true,
     $or: [
       { subjects: { $in: subjects } },
@@ -87,7 +107,16 @@ exports.getRecommendedTutors = async (studentId) => {
       { _id: { $in: pastTutorIds } },
       { bio: { $regex: learningGoals, $options: 'i' } },
     ],
-  })
+  };
+
+  if (isOfflineOnly) {
+    query.teachingMode = { $in: ["Offline", "Both"] };
+    if (studentPincode) {
+      query.pincode = studentPincode;
+    }
+  }
+
+  const tutors = await TutorProfile.find(query)
     .sort({ experience: -1, rating: -1, createdAt: -1 })
     .limit(15)
     .lean();
