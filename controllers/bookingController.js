@@ -2146,7 +2146,7 @@ exports.startRegularFromDemo = async (req, res) => {
           type: "subscription",
           amount: totalAmountINR,
           currency: "INR",
-          gateway: "razorpay",
+          gateway: "cashfree",
           status: "created",
           notes: `Existing RC resume`,
         });
@@ -2177,10 +2177,11 @@ exports.startRegularFromDemo = async (req, res) => {
         data: {
           regularClassId: rc._id,
           paymentId,
-          razorpayKey: process.env.RAZORPAY_KEY_ID,
           orderId,
           amount: amountPaise,
           currency: "INR",
+          paymentSessionId: order.payment_session_id,
+          provider: "cashfree",
           startDate: rc.startDate,
           billingType: rc.planType,
           baseRate: rc.amount,
@@ -2302,7 +2303,7 @@ exports.startRegularFromDemo = async (req, res) => {
       type: "subscription",
       amount: totalAmountINR,
       currency: "INR",
-      gateway: "razorpay",
+      gateway: "cashfree",
       status: "created",
       notes: `BillingType=${billingType}, Classes=${
         numberOfClasses || ""
@@ -2359,10 +2360,11 @@ exports.startRegularFromDemo = async (req, res) => {
       data: {
         regularClassId: rc._id,
         paymentId: payment._id,
-        razorpayKey: process.env.RAZORPAY_KEY_ID,
         orderId: order.id,
         amount: amountPaise,
         currency: "INR",
+        paymentSessionId: order.payment_session_id,
+        provider: "cashfree",
         startDate: startDateStr,
         billingType,
         baseRate,
@@ -2519,7 +2521,7 @@ exports.startRegularDirect = async (req, res) => {
       type: "subscription",
       amount: totalAmountINR,
       currency: "INR",
-      gateway: "razorpay",
+      gateway: "cashfree",
       status: "created",
       notes: `DirectRegular=true, BillingType=${billingType}, Classes=${
         numberOfClasses || ""

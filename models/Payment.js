@@ -30,7 +30,7 @@ const paymentSchema = new mongoose.Schema(
     },
 
     // Razorpay order/subscription/payment IDs etc.
-    gateway: { type: String, default: "razorpay" },
+    gateway: { type: String, default: "cashfree" },
     gatewayOrderId: { type: String },
     gatewayPaymentId: { type: String },
 
