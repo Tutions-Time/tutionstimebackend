@@ -29,7 +29,7 @@ const userSchema = new mongoose.Schema({
       validator: function(v) {
         return !v || /^[0-9]{10}$/.test(v);
       },
-      message: props => `${props.value} is not a valid phone number! Must be 10 digits.`
+      message: props => `${props.value} is not a valid WhatsApp number! Must be 10 digits.`
     }
   },
   role: {
@@ -79,7 +79,7 @@ const userSchema = new mongoose.Schema({
 
 // Pre-save middleware to ensure data consistency
 userSchema.pre('save', function(next) {
-  // Ensure phone number is properly formatted
+  // Ensure WhatsApp number is properly formatted
   if (this.phone) {
     this.phone = this.phone.trim();
   }

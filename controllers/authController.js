@@ -192,13 +192,13 @@ const verifyOTP = async (req, res) => {
       if (!trimmedName || !trimmedPhone) {
         return res.status(400).json({
           success: false,
-          message: "Name and mobile number are required",
+          message: "Name and WhatsApp number are required",
         });
       }
       if (!/^[0-9]{10}$/.test(trimmedPhone)) {
         return res.status(400).json({
           success: false,
-          message: "Please provide a valid 10-digit mobile number",
+          message: "Please provide a valid 10-digit WhatsApp number",
         });
       }
 

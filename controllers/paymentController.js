@@ -735,7 +735,9 @@ exports.createGroupOrder = async (req, res) => {
                 joinedAt: new Date()
             });
         }
-        if (!gb.enrolled.includes(sp._id)) gb.enrolled.push(sp._id);
+        if (!(gb.enrolled || []).some((id) => String(id) === String(sp._id))) {
+          gb.enrolled.push(sp._id);
+        }
         
         if (hold) {
             const hIdx = gb.holds.indexOf(hold);
