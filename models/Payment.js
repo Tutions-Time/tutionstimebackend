@@ -45,6 +45,10 @@ const paymentSchema = new mongoose.Schema(
     commissionPercent: { type: Number }, // 25
     commissionAmount: { type: Number },  // 25% of amount
     tutorNetAmount: { type: Number },    // 75% of amount
+    payoutSourcePaymentIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Payment" }],
+    adminPayoutNote: { type: String, trim: true },
+    manuallyPaidBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    manuallyPaidAt: { type: Date },
 
     // Billing period (for monthly)
     periodStart: { type: Date },

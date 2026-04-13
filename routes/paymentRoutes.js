@@ -57,6 +57,21 @@ router.get(
   paymentController.listTutorPayouts
 );
 
+router.get(
+  "/admin/tutor-payables",
+  authenticate,
+  checkRole(["admin"]),
+  paymentController.listTutorPayables
+);
+
+router.post(
+  "/admin/tutor-payables/:tutorId/mark-paid",
+  authenticate,
+  checkRole(["admin"]),
+  adminActionLimiter,
+  paymentController.markTutorPayablePaid
+);
+
 router.post(
   "/refunds/request",
   authenticate,
