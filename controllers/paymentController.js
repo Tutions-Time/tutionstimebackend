@@ -47,29 +47,27 @@ function applyCommissionFields(payment, amount, percent = DEFAULT_COMMISSION_PER
   return { commissionAmount, tutorNetAmount };
 }
 
-function isCashfreeOrderPaid(order) {
-  const status = String(order?.order_status || order?.payment_status || "").toUpperCase();
-  return status === "PAID" || status === "SUCCESS";
+function isRazorpayOrderPaid(order) {
+  const status = String(order?.status || "").toLowerCase();
+  const amount = Number(order?.amount || 0);
+  const amountPaid = Number(order?.amount_paid || 0);
+  return status === "paid" || (amount > 0 && amountPaid >= amount);
 }
 
-async function resolveCashfreePaymentMeta(orderId) {
+async function resolveRazorpayPaymentMeta(orderId) {
   const order = await razorpay.orders.fetch(orderId);
   const payments = await razorpay.orders.fetchPayments(orderId).catch(() => []);
   const settledPayment =
     payments.find((item) =>
-      ["SUCCESS", "PAID", "CAPTURED", "PROCESSED"].includes(
-        String(item?.payment_status || item?.paymentStatus || item?.status || "").toUpperCase(),
+      ["CAPTURED", "AUTHORIZED"].includes(
+        String(item?.status || "").toUpperCase(),
       ),
     ) || payments[0] || null;
 
   return {
     order,
-    paymentId:
-      settledPayment?.cf_payment_id ||
-      settledPayment?.payment_id ||
-      settledPayment?.id ||
-      null,
-    orderPaid: isCashfreeOrderPaid(order),
+    paymentId: settledPayment?.id || null,
+    orderPaid: isRazorpayOrderPaid(order),
   };
 }
 
@@ -550,7 +548,7 @@ exports.createSubscriptionOrder = async (req, res) => {
       });
     } catch (e) {
       const msg = (e && (e.error?.description || e.message)) || "Payment provider error";
-      console.error("Cashfree order create error:", msg);
+      console.error("Razorpay order create error:", msg);
       return res.status(500).json({ success: false, message: msg });
     }
 
@@ -565,7 +563,7 @@ exports.createSubscriptionOrder = async (req, res) => {
         type: "subscription",
         amount: totalAmountINR,
         currency: "INR",
-        gateway: "cashfree",
+        gateway: "razorpay",
         gatewayOrderId: order.id,
         status: "created",
         periodStart: rc.currentPeriodStart,
@@ -600,8 +598,8 @@ exports.createSubscriptionOrder = async (req, res) => {
       orderId: order.id,
       amount: amountInPaise,
       currency: "INR",
-      paymentSessionId: order.payment_session_id,
-      provider: "cashfree",
+      keyId: razorpay.getKeyId(),
+      provider: "razorpay",
     });
   } catch (err) {
     console.error("createSubscriptionOrder error:", err);
@@ -764,7 +762,7 @@ exports.createGroupOrder = async (req, res) => {
       tutorId: gb.tutorId,
       amount: amountINR,
       currency: "INR",
-      gateway: "cashfree",
+      gateway: "razorpay",
       gatewayOrderId: order.id,
       status: "created",
       notes: `Group batch checkout for ${batchId}, Months:${months}, Coupon:${couponCode || ""}, Discount:${discount || 0}`,
@@ -791,8 +789,8 @@ exports.createGroupOrder = async (req, res) => {
       orderId: order.id,
       amount: amountInPaise,
       currency: "INR",
-      paymentSessionId: order.payment_session_id,
-      provider: "cashfree",
+      keyId: razorpay.getKeyId(),
+      provider: "razorpay",
     });
   } catch (err) {
     console.error("createGroupOrder error:", err);
@@ -925,7 +923,7 @@ exports.createNoteOrder = async (req, res) => {
       tutorId: note.tutorId,
       amount: amountINR,
       currency: "INR",
-      gateway: "cashfree",
+      gateway: "razorpay",
       gatewayOrderId: order.id,
       status: "created",
     });
@@ -936,8 +934,8 @@ exports.createNoteOrder = async (req, res) => {
       amount: amountInPaise,
       currency: "INR",
       paymentId: paymentDoc._id,
-      paymentSessionId: order.payment_session_id,
-      provider: "cashfree",
+      keyId: razorpay.getKeyId(),
+      provider: "razorpay",
     });
   } catch (err) {
     console.error("createNoteOrder error:", err);
@@ -1489,21 +1487,45 @@ exports.cashfreePayoutWebhook = async (req, res) => {
  */
 exports.verifyPayment = async (req, res) => {
   try {
-    const { orderId, regularClassId, billingType, numberOfClasses, noteId } = req.body;
+    const {
+      orderId: rawOrderId,
+      paymentId: rawPaymentId,
+      signature: rawSignature,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      regularClassId,
+      billingType,
+      numberOfClasses,
+      noteId,
+    } = req.body;
+    const orderId = rawOrderId || razorpay_order_id;
+    const paymentIdFromBody = rawPaymentId || razorpay_payment_id;
+    const signature = rawSignature || razorpay_signature;
 
     if (!orderId) {
       return res.status(400).json({ success: false, message: "orderId is required" });
-    }
-
-    const { paymentId, orderPaid } = await resolveCashfreePaymentMeta(orderId);
-    if (!orderPaid) {
-      return res.status(400).json({ success: false, message: "Payment not completed" });
     }
 
     // Find payment by orderId
     const payment = await Payment.findOne({ gatewayOrderId: orderId });
     if (!payment) {
       return res.status(404).json({ success: false, message: "Payment record not found" });
+    }
+
+    if (payment.status !== "paid") {
+      if (!paymentIdFromBody || !signature) {
+        return res.status(400).json({ success: false, message: "Payment verification details are required" });
+      }
+      if (!razorpay.verifyPaymentSignature(orderId, paymentIdFromBody, signature)) {
+        return res.status(400).json({ success: false, message: "Invalid payment signature" });
+      }
+    }
+
+    const { paymentId: resolvedPaymentId, orderPaid } = await resolveRazorpayPaymentMeta(orderId);
+    const paymentId = paymentIdFromBody || resolvedPaymentId;
+    if (!orderPaid && payment.status !== "paid") {
+      return res.status(400).json({ success: false, message: "Payment not completed" });
     }
 
     // Mark payment as paid
@@ -1743,7 +1765,18 @@ exports.verifyPayment = async (req, res) => {
  */
 exports.verifyGroupPayment = async (req, res) => {
   try {
-    const { orderId, batchId } = req.body;
+    const {
+      orderId: rawOrderId,
+      paymentId: rawPaymentId,
+      signature: rawSignature,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      batchId,
+    } = req.body;
+    const orderId = rawOrderId || razorpay_order_id;
+    const paymentIdFromBody = rawPaymentId || razorpay_payment_id;
+    const signature = rawSignature || razorpay_signature;
     const userId = req.user.id;
     const StudentProfile = require("../models/StudentProfile");
     const sp = await StudentProfile.findOne({ userId }).select("_id");
@@ -1752,11 +1785,6 @@ exports.verifyGroupPayment = async (req, res) => {
     }
     if (!orderId) {
       return res.status(400).json({ success: false, message: "orderId is required" });
-    }
-
-    const { paymentId, orderPaid } = await resolveCashfreePaymentMeta(orderId);
-    if (!orderPaid) {
-      return res.status(400).json({ success: false, message: "Payment not completed" });
     }
 
     const payment = await Payment.findOne({ gatewayOrderId: orderId, type: "group" });
@@ -1774,6 +1802,19 @@ exports.verifyGroupPayment = async (req, res) => {
 
     // Idempotency: if already paid, return success
     if (payment.status === "paid") return res.json({ success: true });
+
+    if (!paymentIdFromBody || !signature) {
+      return res.status(400).json({ success: false, message: "Payment verification details are required" });
+    }
+    if (!razorpay.verifyPaymentSignature(orderId, paymentIdFromBody, signature)) {
+      return res.status(400).json({ success: false, message: "Invalid payment signature" });
+    }
+
+    const { paymentId: resolvedPaymentId, orderPaid } = await resolveRazorpayPaymentMeta(orderId);
+    const paymentId = paymentIdFromBody || resolvedPaymentId;
+    if (!orderPaid) {
+      return res.status(400).json({ success: false, message: "Payment not completed" });
+    }
 
     payment.status = "paid";
     payment.gatewayPaymentId = paymentId;
@@ -1891,7 +1932,7 @@ exports.verifyGroupPayment = async (req, res) => {
       }
       // Record coupon and grant referral
       try {
-        const studentUserIdX = sp2?.userId || req.user?.id;
+        const studentUserIdX = req.user?.id;
         const noteStr = String(payment.notes || "");
         const cMatch = noteStr.match(/Coupon:([^,]*)/);
         const dMatch = noteStr.match(/Discount:(\d+)/);
