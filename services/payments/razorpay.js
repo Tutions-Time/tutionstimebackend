@@ -1,172 +1,94 @@
-const axios = require("axios");
 const crypto = require("crypto");
+const Razorpay = require("razorpay");
 
-const CASHFREE_API_VERSION = process.env.CASHFREE_API_VERSION || "2023-08-01";
-
-function providerError(message, code = "CASHFREE_NOT_CONFIGURED") {
+function providerError(message, code = "RAZORPAY_NOT_CONFIGURED") {
   const err = new Error(message);
   err.code = code;
   return err;
 }
 
-function resolveMode() {
-  const rawMode = String(
-    process.env.CASHFREE_ENV ||
-      process.env.CASHFREE_MODE ||
-      process.env.NODE_ENV ||
-      "sandbox",
-  ).toLowerCase();
-
-  return rawMode === "production" || rawMode === "live"
-    ? "production"
-    : "sandbox";
-}
-
-function resolveBaseUrl() {
-  const explicit = process.env.CASHFREE_BASE_URL;
-  if (explicit) return explicit.replace(/\/+$/, "");
-  return resolveMode() === "production"
-    ? "https://api.cashfree.com"
-    : "https://sandbox.cashfree.com";
-}
-
 function getCredentials() {
-  const clientId =
-    process.env.CASHFREE_CLIENT_ID || process.env.CASHFREE_APP_ID || "";
-  const clientSecret =
-    process.env.CASHFREE_CLIENT_SECRET || process.env.CASHFREE_SECRET_KEY || "";
+  const keyId = process.env.RAZORPAY_KEY_ID || "";
+  const keySecret = process.env.RAZORPAY_KEY_SECRET || "";
 
-  if (!clientId || !clientSecret) {
-    throw providerError("Cashfree payments not configured");
+  if (!keyId || !keySecret) {
+    throw providerError("Razorpay payments not configured");
   }
 
-  return { clientId, clientSecret };
+  return { keyId, keySecret };
 }
 
-function buildClient() {
-  const { clientId, clientSecret } = getCredentials();
-  return axios.create({
-    baseURL: `${resolveBaseUrl()}/pg`,
-    timeout: 15000,
-    headers: {
-      "x-api-version": CASHFREE_API_VERSION,
-      "x-client-id": clientId,
-      "x-client-secret": clientSecret,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
+function client() {
+  const { keyId, keySecret } = getCredentials();
+  return new Razorpay({
+    key_id: keyId,
+    key_secret: keySecret,
   });
 }
 
-function formatAmountFromPaise(amount) {
-  return Number((Number(amount || 0) / 100).toFixed(2));
-}
-
-function buildReturnUrl(orderId) {
-  const explicit = process.env.CASHFREE_RETURN_URL;
-  if (explicit) {
-    return explicit.replace("{order_id}", encodeURIComponent(orderId));
-  }
-
-  const appUrl =
-    process.env.FRONTEND_URL ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    "";
-
-  if (!appUrl) return undefined;
-  const separator = appUrl.includes("?") ? "&" : "?";
-  return `${appUrl.replace(/\/+$/, "")}/payment-status${separator}order_id=${encodeURIComponent(
-    orderId,
-  )}`;
-}
-
-function normalizeOrderResponse(data = {}, amountInPaise) {
+function normalizeOrder(order = {}) {
   return {
-    id: data.order_id,
-    amount:
-      Number.isFinite(Number(amountInPaise)) && Number(amountInPaise) > 0
-        ? Number(amountInPaise)
-        : Math.round(Number(data.order_amount || 0) * 100),
-    currency: data.order_currency || "INR",
-    payment_session_id: data.payment_session_id,
-    order_status: data.order_status,
-    cf_order_id: data.cf_order_id,
+    ...order,
+    id: order.id,
+    amount: order.amount,
+    currency: order.currency || "INR",
+    status: order.status,
   };
 }
 
 async function createOrder(payload = {}) {
   const amount = Number(payload.amount || 0);
   if (!Number.isFinite(amount) || amount <= 0) {
-    throw providerError("Invalid order amount", "CASHFREE_INVALID_AMOUNT");
+    throw providerError("Invalid order amount", "RAZORPAY_INVALID_AMOUNT");
   }
 
-  const notes = payload.notes || {};
-  const orderId =
-    payload.receipt ||
-    `order_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+  const order = await client().orders.create({
+    amount,
+    currency: payload.currency || "INR",
+    receipt: payload.receipt,
+    notes: payload.notes || {},
+  });
 
-  const customerId =
-    String(notes.customerId || notes.studentId || notes.userId || "guest")
-      .replace(/[^a-zA-Z0-9_\-]/g, "_")
-      .slice(0, 45) || `customer_${Date.now()}`;
-
-  const request = {
-    order_id: orderId,
-    order_amount: formatAmountFromPaise(amount),
-    order_currency: payload.currency || "INR",
-    customer_details: {
-      customer_id: customerId,
-      customer_name: String(notes.customerName || "Student").slice(0, 80),
-      customer_email: notes.customerEmail || "support@tuitionstime.com",
-      customer_phone: String(notes.customerPhone || "9999999999").slice(0, 15),
-    },
-    order_meta: {},
-    order_note:
-      typeof payload.notes === "string"
-        ? payload.notes
-        : JSON.stringify(notes).slice(0, 450),
-  };
-
-  const returnUrl = buildReturnUrl(orderId);
-  if (returnUrl) {
-    request.order_meta.return_url = returnUrl;
-  }
-
-  const response = await buildClient().post("/orders", request);
-  return normalizeOrderResponse(response.data, amount);
+  return normalizeOrder(order);
 }
 
 async function fetchOrder(orderId) {
-  const response = await buildClient().get(`/orders/${orderId}`);
-  return response.data;
+  if (!orderId) throw providerError("Missing order id", "RAZORPAY_MISSING_ORDER");
+  return normalizeOrder(await client().orders.fetch(orderId));
 }
 
 async function fetchOrderPayments(orderId) {
-  const response = await buildClient().get(`/orders/${orderId}/payments`);
-  return Array.isArray(response.data) ? response.data : [];
+  if (!orderId) return [];
+  const response = await client().orders.fetchPayments(orderId);
+  return Array.isArray(response?.items) ? response.items : [];
 }
 
 async function refund(paymentId, amountInPaise, meta = {}) {
-  const response = await buildClient().post(`/orders/payments/${paymentId}/refunds`, {
-    refund_amount: formatAmountFromPaise(amountInPaise),
-    refund_id:
-      meta.refundId ||
-      `refund_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
-    refund_note: meta.note || "Refund processed",
+  if (!paymentId) throw providerError("Missing payment id", "RAZORPAY_MISSING_PAYMENT");
+  return client().payments.refund(paymentId, {
+    amount: Number(amountInPaise || 0),
+    notes: meta || {},
   });
-  return response.data;
 }
 
-function verifyWebhookSignature(signature, rawBody, timestamp) {
-  const { clientSecret } = getCredentials();
-  if (!signature || !rawBody || !timestamp) return false;
-  const payload = `${timestamp}${rawBody}`;
-  const generated = crypto
-    .createHmac("sha256", clientSecret)
-    .update(payload)
-    .digest("base64");
-  return generated === signature;
+function verifyPaymentSignature(orderId, paymentId, signature) {
+  const { keySecret } = getCredentials();
+  if (!orderId || !paymentId || !signature) return false;
+  const expected = crypto
+    .createHmac("sha256", keySecret)
+    .update(`${orderId}|${paymentId}`)
+    .digest("hex");
+  return expected === signature;
+}
+
+function verifyWebhookSignature(signature, rawBody) {
+  const secret = process.env.RAZORPAY_WEBHOOK_SECRET || "";
+  if (!signature || !rawBody || !secret) return false;
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(rawBody)
+    .digest("hex");
+  return expected === signature;
 }
 
 module.exports = {
@@ -178,6 +100,7 @@ module.exports = {
   payments: {
     refund,
   },
+  getKeyId: () => getCredentials().keyId,
+  verifyPaymentSignature,
   verifyWebhookSignature,
-  resolveMode,
 };

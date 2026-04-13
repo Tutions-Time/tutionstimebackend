@@ -18,6 +18,39 @@ function featureEnabled() {
 
 const { nanoid } = require('nanoid');
 
+function getSeatStats(batch, now = Date.now()) {
+  const seatCap = Math.max(0, Number(batch?.seatCap || 0));
+  const enrolledIds = new Set((batch?.enrolled || []).map((id) => String(id)));
+  const activeHoldIds = new Set(
+    (batch?.holds || [])
+      .filter((hold) => {
+        return (
+          hold?.studentId &&
+          hold.status === "active" &&
+          new Date(hold.expiresAt).getTime() > now &&
+          !enrolledIds.has(String(hold.studentId))
+        );
+      })
+      .map((hold) => String(hold.studentId))
+  );
+  const enrolledCount = enrolledIds.size;
+  const activeHoldCount = activeHoldIds.size;
+  const reservedCount = enrolledCount + activeHoldCount;
+  const liveSeats = Math.max(0, seatCap - reservedCount);
+  return { seatCap, enrolledCount, activeHoldCount, reservedCount, liveSeats };
+}
+
+function removeExpiredHolds(batch, now = new Date()) {
+  if (!batch) return;
+  const nowMs = now.getTime();
+  batch.holds = (batch.holds || []).map((hold) => {
+    if (hold.status === "active" && new Date(hold.expiresAt).getTime() <= nowMs) {
+      hold.status = "released";
+    }
+    return hold;
+  });
+}
+
 
 function toDayName(d) {
   const map = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -321,8 +354,8 @@ exports.createBatch = async (req, res) => {
       published: payload.published,
       batchStartDate: payload.recurring.startDate,
       batchEndDate: payload.recurring.endDate,
-      enrollmentOpenAt: payload.recurring.startDate,
-      enrollmentCloseAt: addDays(payload.recurring.startDate, 7),
+      enrollmentOpenAt: new Date(),
+      enrollmentCloseAt: payload.recurring.endDate,
     });
 
     // Generate sessions only for the first week to stay within Zoom limits
@@ -487,8 +520,8 @@ exports.editBatch = async (req, res) => {
       };
       gb.batchStartDate = startDate;
       gb.batchEndDate = endDate;
-      gb.enrollmentOpenAt = startDate;
-      gb.enrollmentCloseAt = addDays(startDate, 7);
+      gb.enrollmentOpenAt = gb.enrollmentOpenAt || new Date();
+      gb.enrollmentCloseAt = endDate;
 
       shouldRegenerateSessions = true;
     }
@@ -615,11 +648,9 @@ exports.myBatches = async (req, res) => {
 
     const items = await GroupBatch.find({ tutorId: tp._id }).sort({ createdAt: -1 }).lean();
     
-    const now = Date.now();
     const data = items.map((b) => {
-      const enrolledCount = (b.enrolled || []).length;
-      const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount);
-      return { ...b, liveSeats };
+      const seatStats = getSeatStats(b);
+      return { ...b, ...seatStats };
     });
 
     res.json({ success: true, data });
@@ -691,8 +722,7 @@ exports.listBatches = async (req, res) => {
     const visibleItems = items.filter(b => !suspendedTutorIds.has(String(b.tutorId)));
 
     const data = visibleItems.map((b) => {
-      const enrolledCount = (b.enrolled || []).length;
-      const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount);
+      const seatStats = getSeatStats(b, now);
       const myEnrollment = spId ? (b.enrollmentDetails || []).find((e) => String(e.studentId) === String(spId)) : null;
       const isEnrolledForCurrentUser = spId
         ? (b.enrolled || []).some((s) => String(s) === String(spId))
@@ -707,7 +737,7 @@ exports.listBatches = async (req, res) => {
           : b.batchType;
       return {
         ...b,
-        liveSeats,
+        ...seatStats,
         isEnrolledForCurrentUser,
         hasActiveHoldForCurrentUser,
         myPaymentId,
@@ -740,8 +770,7 @@ exports.getBatch = async (req, res) => {
       }
     } catch (_) {}
     const now = Date.now();
-    const enrolledCount = (b.enrolled || []).length;
-    const liveSeats = Math.max(0, Number(b.seatCap || 0) - enrolledCount);
+    const seatStats = getSeatStats(b, now);
 
     let myEnrollment = null;
     try {
@@ -754,7 +783,7 @@ exports.getBatch = async (req, res) => {
       }
     } catch (_) {}
 
-    res.json({ success: true, data: { ...b, liveSeats, myEnrollment } });
+    res.json({ success: true, data: { ...b, ...seatStats, myEnrollment } });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
@@ -772,39 +801,50 @@ exports.joinBatch = async (req, res) => {
     const ttlMin = Number(process.env.GROUP_SEAT_HOLD_TTL_MIN || 15);
     const expires = new Date(now.getTime() + ttlMin * 60 * 1000);
 
-    const b = await GroupBatch.findOneAndUpdate(
-      {
-        _id: batchId,
-        status: "active",
-        published: true,
-        $or: [
-          { enrollmentOpenAt: { $exists: false } },
-          { enrollmentOpenAt: { $lte: now } }
-        ],
-        $or: [
-          { enrollmentCloseAt: { $exists: false } },
-          { enrollmentCloseAt: { $gte: now } }
-        ],
-        $expr: {
-          $gt: [
-            "$seatCap",
-            { $add: [ { $size: "$enrolled" }, { $size: { $filter: { input: "$holds", as: "h", cond: { $and: [ { $eq: ["$$h.status", "active"] }, { $gt: ["$$h.expiresAt", now] } ] } } } } ] }
-          ]
-        }
-      },
-      { $push: { holds: { studentId: sp._id, expiresAt: expires } } },
-      { new: true }
-    );
+    const b = await GroupBatch.findOne({
+      _id: batchId,
+      status: "active",
+      published: true,
+    });
     if (!b) {
-      // minimal waitlist handling
-      await GroupBatch.findOneAndUpdate(
+      return res.status(404).json({ success: false, message: "Batch not available" });
+    }
+
+    if (b.enrollmentCloseAt && new Date(b.enrollmentCloseAt).getTime() < now.getTime()) {
+      return res.status(409).json({ success: false, message: "Enrollment is closed" });
+    }
+
+    removeExpiredHolds(b, now);
+
+    const isEnrolled = (b.enrolled || []).some((id) => String(id) === String(sp._id));
+    if (isEnrolled) {
+      return res.json({ success: true, alreadyEnrolled: true, reservationId: `${batchId}:${sp._id}` });
+    }
+
+    const existingHold = (b.holds || []).find(
+      (hold) =>
+        String(hold.studentId) === String(sp._id) &&
+        hold.status === "active" &&
+        new Date(hold.expiresAt).getTime() > now.getTime()
+    );
+    if (existingHold) {
+      existingHold.expiresAt = expires;
+      await b.save();
+      return res.json({ success: true, reservationId: `${batchId}:${sp._id}`, expiresAt: expires });
+    }
+
+    const seatStats = getSeatStats(b, now.getTime());
+    if (seatStats.liveSeats <= 0) {
+      await GroupBatch.updateOne(
         { _id: batchId, status: "active", published: true },
         { $addToSet: { waitlist: sp._id } }
       );
       return res.status(409).json({ success: false, message: "No seats available; added to waitlist" });
     }
 
-    const hold = (b.holds || []).find((h) => String(h.studentId) === String(sp._id) && h.status === "active" && new Date(h.expiresAt).getTime() >= now.getTime());
+    b.holds.push({ studentId: sp._id, expiresAt: expires, status: "active" });
+    await b.save();
+
     await createAdminNotification("Seat reserved", `Hold created for batch ${batchId}`, { batchId, studentId: sp._id });
     metrics.emit("group.hold", { batchId }, { ttlMin });
     res.json({ success: true, reservationId: `${batchId}:${sp._id}`, expiresAt: expires });

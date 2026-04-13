@@ -37,7 +37,13 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 app.options("*", cors(corsOptions));
-// Cashfree webhooks must receive the raw body for signature verification.
+// Razorpay webhooks must receive the raw body for signature verification.
+app.post(
+  "/api/payments/razorpay/webhook",
+  express.raw({ type: "application/json" }),
+  paymentController.razorpayWebhook,
+);
+
 app.post(
   "/api/payments/cashfree/webhook",
   express.raw({ type: "application/json" }),
