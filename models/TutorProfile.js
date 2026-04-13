@@ -82,6 +82,17 @@ const tutorProfileSchema = new mongoose.Schema(
     // KYC and Verification
     aadhaarUrls: [String],
     panUrl: { type: String },
+    payoutDetailsStatus: {
+      type: String,
+      enum: ["pending", "submitted", "approved", "rejected"],
+      default: "pending",
+    },
+    kycDocumentsStatus: {
+      type: String,
+      enum: ["pending", "submitted", "approved", "rejected"],
+      default: "pending",
+    },
+    kycRejectionReason: { type: String, trim: true },
     kycStatus: {
       type: String,
       enum: ["pending", "submitted", "approved", "rejected"],

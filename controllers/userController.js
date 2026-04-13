@@ -13,6 +13,39 @@ const { createAdminNotification } = require("../services/adminNotification");
 const UPI_REGEX = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const BANK_ACCOUNT_REGEX = /^[0-9]{9,18}$/;
+
+function hasTutorPayoutDetails(profile) {
+  return Boolean(
+    profile?.upiId &&
+      profile?.accountHolderName &&
+      profile?.bankAccountNumber &&
+      profile?.ifsc
+  );
+}
+
+function hasTutorKycDocuments(profile) {
+  return Boolean(profile?.aadhaarUrls?.length && profile?.panUrl);
+}
+
+function getCombinedTutorKycStatus(profile) {
+  if (!profile) return "pending";
+  if (
+    profile.payoutDetailsStatus === "approved" &&
+    profile.kycDocumentsStatus === "approved"
+  ) {
+    return "approved";
+  }
+  if (
+    profile.payoutDetailsStatus === "rejected" ||
+    profile.kycDocumentsStatus === "rejected"
+  ) {
+    return "rejected";
+  }
+  if (hasTutorPayoutDetails(profile) && hasTutorKycDocuments(profile)) {
+    return "submitted";
+  }
+  return "pending";
+}
                                                          
 /* ------------------------------------------------------------
    GET USER PROFILE
@@ -42,6 +75,7 @@ const getUserProfile = async (req, res) => {
         roleDetails = {
           kycStatus: tutor.kycStatus || "pending",
           hasKyc: !!(tutor.aadhaarUrls?.length || tutor.panUrl),
+          hasPayoutDetails: hasTutorPayoutDetails(tutor),
           isVerified: tutor.status === "approved",
         };
         profile = tutor;
@@ -306,7 +340,9 @@ const uploadTutorKyc = async (req, res) => {
 
     tutor.aadhaarUrls = aadhaarUrls.length ? aadhaarUrls : tutor.aadhaarUrls;
     tutor.panUrl = panUrl;
-    tutor.kycStatus = "submitted";
+    tutor.kycDocumentsStatus = "submitted";
+    tutor.kycRejectionReason = "";
+    tutor.kycStatus = getCombinedTutorKycStatus(tutor);
 
     await tutor.save();
 
@@ -318,7 +354,9 @@ const uploadTutorKyc = async (req, res) => {
         {
           tutorId: tutor._id,
           userId: userId,
-          kycStatus: "submitted",
+          kycStatus: tutor.kycStatus,
+          kycDocumentsStatus: tutor.kycDocumentsStatus,
+          payoutDetailsStatus: tutor.payoutDetailsStatus || "pending",
         }
       );
     } catch (e) {
@@ -327,7 +365,9 @@ const uploadTutorKyc = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "KYC documents submitted successfully",
+      message: hasTutorPayoutDetails(tutor)
+        ? "KYC documents submitted successfully"
+        : "KYC documents saved. Add payout details to submit KYC for review",
       data: tutor,
     });
   } catch (error) {
@@ -674,6 +714,8 @@ const updateTutorPayoutDetails = async (req, res) => {
           accountHolderName,
           bankAccountNumber,
           ifsc,
+          payoutDetailsStatus: "submitted",
+          kycRejectionReason: "",
         },
       },
       { new: true }
@@ -686,14 +728,36 @@ const updateTutorPayoutDetails = async (req, res) => {
       });
     }
 
+    profile.kycStatus = getCombinedTutorKycStatus(profile);
+    await profile.save();
+
+    try {
+      await createAdminNotification(
+        "Tutor Payout Details Submitted",
+        `Tutor ${profile.name || profile._id} submitted payout details for KYC review`,
+        {
+          tutorId: profile._id,
+          userId,
+          kycStatus: profile.kycStatus,
+          payoutDetailsStatus: profile.payoutDetailsStatus,
+        }
+      );
+    } catch (e) {
+      console.warn("Tutor payout admin notification failed:", e.message);
+    }
+
     return res.status(200).json({
       success: true,
-      message: "Payout details updated successfully",
+      message: hasTutorKycDocuments(profile)
+        ? "Payout details submitted successfully"
+        : "Payout details saved. Upload KYC documents to submit for review",
       data: {
         upiId: profile.upiId || "",
         accountHolderName: profile.accountHolderName || "",
         bankAccountNumber: profile.bankAccountNumber || "",
         ifsc: profile.ifsc || "",
+        payoutDetailsStatus: profile.payoutDetailsStatus || "pending",
+        kycStatus: profile.kycStatus || "pending",
       },
     });
   } catch (error) {

@@ -10,6 +10,21 @@ const Note = require('../models/Note');
 const Transaction = require('../models/Transaction');
 const StudentProfile = require('../models/StudentProfile');
 
+const KYC_STATUSES = ['pending', 'submitted', 'approved', 'rejected'];
+
+function hasPayoutDetails(profile) {
+  return Boolean(
+    profile?.upiId &&
+      profile?.accountHolderName &&
+      profile?.bankAccountNumber &&
+      profile?.ifsc
+  );
+}
+
+function hasKycDocuments(profile) {
+  return Boolean(profile?.aadhaarUrls?.length && profile?.panUrl);
+}
+
 // ✅ Get all tutors with joined KYC and performance info
 exports.getAllTutors = async (req, res) => {
   try {
@@ -119,6 +134,13 @@ exports.getAllTutors = async (req, res) => {
       profilePhoto: t.profile?.photoUrl || null,
       profileComplete: !!t.isProfileComplete,
       kyc: t.profile?.kycStatus || 'pending',
+      payoutDetailsStatus: t.profile?.payoutDetailsStatus || (hasPayoutDetails(t.profile) ? 'submitted' : 'pending'),
+      kycDocumentsStatus: t.profile?.kycDocumentsStatus || (hasKycDocuments(t.profile) ? 'submitted' : 'pending'),
+      kycRejectionReason: t.profile?.kycRejectionReason || '',
+      upiId: t.profile?.upiId || '',
+      accountHolderName: t.profile?.accountHolderName || '',
+      bankAccountNumber: t.profile?.bankAccountNumber || '',
+      ifsc: t.profile?.ifsc || '',
       aadhaarUrls: t.profile?.aadhaarUrls || [],
       panUrl: t.profile?.panUrl || null,
       rating: t.profile?.rating || 0,
@@ -152,21 +174,30 @@ exports.getAllTutors = async (req, res) => {
 exports.updateKycStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { kyc } = req.body; // 'approved' | 'rejected' | 'pending'
+    const { kyc, reason = '' } = req.body; // 'approved' | 'rejected' | 'pending'
 
-    const update = {
-      isVerified: kyc === 'approved',
-      kycStatus: kyc,
-    };
-    const tutorProfile = await TutorProfile.findOneAndUpdate(
-      { userId: id },
-      update,
-      { new: true }
-    );
+    if (!KYC_STATUSES.includes(kyc)) {
+      return res.status(400).json({ success: false, message: 'Invalid KYC status' });
+    }
 
+    const tutorProfile = await TutorProfile.findOne({ userId: id });
     if (!tutorProfile) {
       return res.status(404).json({ success: false, message: 'Tutor profile not found' });
     }
+
+    if (kyc === 'approved' && (!hasPayoutDetails(tutorProfile) || !hasKycDocuments(tutorProfile))) {
+      return res.status(400).json({
+        success: false,
+        message: 'UPI, bank details, Aadhaar, and PAN are required before approval',
+      });
+    }
+
+    tutorProfile.isVerified = kyc === 'approved';
+    tutorProfile.kycStatus = kyc;
+    tutorProfile.payoutDetailsStatus = kyc;
+    tutorProfile.kycDocumentsStatus = kyc;
+    tutorProfile.kycRejectionReason = kyc === 'rejected' ? String(reason || '').trim() : '';
+    await tutorProfile.save();
 
     res.status(200).json({
       success: true,
