@@ -139,6 +139,25 @@ exports.releasePendingToAvailable = async (userId, role, amount, description, re
   return wallet;
 };
 
+exports.clearPendingForManualPayout = async (userId, role, amount, description, reference, paymentId) => {
+  const wallet = await this.ensureWallet(userId, role);
+  const value = Number(amount || 0);
+  wallet.pendingBalance = Math.max(0, Number(wallet.pendingBalance || 0) - value);
+  await wallet.save();
+
+  await Transaction.create({
+    userId,
+    type: "credit",
+    amount: value,
+    description,
+    reference,
+    paymentId,
+    status: "completed",
+  });
+
+  return wallet;
+};
+
 exports.addTransaction = async ({ userId, type, amount, description, reference, status, regularClassId, paymentId }) => {
   return Transaction.create({ userId, type, amount, description, reference, status, regularClassId, paymentId });
 };

@@ -15,6 +15,7 @@ const ReferralCode = require("../models/ReferralCode");
 const ReferralUse = require("../models/ReferralUse");
 const Session = require("../models/Session");
 const RefundRequest = require("../models/RefundRequest");
+const notificationService = require("../services/notificationService");
 const {
   recalculateSubscriptionRelease,
 } = require("../services/payments/subscriptionPayoutService");
@@ -2122,6 +2123,37 @@ const computeAdminAmount = (payment) => {
   return 0;
 };
 
+const payableForPayment = (payment) => {
+  const amount = Number(payment.amount || 0);
+  const commissionPercent = Number(payment.commissionPercent ?? DEFAULT_COMMISSION_PERCENT);
+  const commissionAmount =
+    typeof payment.commissionAmount === "number"
+      ? Number(payment.commissionAmount || 0)
+      : (amount * commissionPercent) / 100;
+  const refundTotal = Number(payment.refundTotal || 0);
+  const refundTutorShare = (refundTotal * commissionPercent) / 100;
+  const grossAfterRefund = Math.max(0, amount - refundTotal);
+  const tutorNetAmount =
+    typeof payment.tutorNetAmount === "number"
+      ? Number(payment.tutorNetAmount || 0)
+      : Math.max(0, amount - commissionAmount);
+  const tutorPayable = Math.max(0, tutorNetAmount - (refundTotal - refundTutorShare));
+  return {
+    grossAfterRefund,
+    commissionPercent,
+    commissionAmount: Math.max(0, grossAfterRefund - tutorPayable),
+    tutorPayable,
+    refundTotal,
+  };
+};
+
+const maskAccountNumber = (value) => {
+  const raw = String(value || "");
+  if (!raw) return "";
+  if (raw.length <= 4) return raw;
+  return `${"*".repeat(Math.max(0, raw.length - 4))}${raw.slice(-4)}`;
+};
+
 exports.listAllPaymentsHistory = async (req, res) => {
   try {
     const { from, to, status, type, page = 1, limit = 50, student, tutor } = req.query;
@@ -2394,6 +2426,424 @@ exports.listTutorPayouts = async (req, res) => {
   } catch (err) {
     console.error("listTutorPayouts error:", err);
     res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+/**
+ * Admin: list tutors with unpaid payable amounts after platform commission.
+ * GET /api/payments/admin/tutor-payables?status=pending|paid&from=YYYY-MM-DD&to=YYYY-MM-DD&q=Tutor
+ */
+exports.listTutorPayables = async (req, res) => {
+  try {
+    const { status = "pending", from, to, q = "" } = req.query;
+    const dateFilter = {};
+    if (from || to) {
+      dateFilter.createdAt = {};
+      if (from) dateFilter.createdAt.$gte = new Date(from);
+      if (to) dateFilter.createdAt.$lte = new Date(to);
+    }
+
+    if (status === "paid") {
+      const payouts = await Payment.find({ type: "payout", status: "settled", ...dateFilter })
+        .sort({ manuallyPaidAt: -1, updatedAt: -1 })
+        .populate({ path: "tutorId", select: "userId name email upiId accountHolderName bankAccountNumber ifsc" })
+        .lean();
+
+      const paidRows = payouts
+        .map((p) => ({
+          payoutId: p._id,
+          tutorId: p.tutorId?._id || p.tutorId,
+          tutorUserId: p.tutorId?.userId || null,
+          tutorName: p.tutorId?.name || "Tutor",
+          tutorEmail: p.tutorId?.email || "",
+          sourceCount: Array.isArray(p.payoutSourcePaymentIds) ? p.payoutSourcePaymentIds.length : 0,
+          grossAmount: Number(p.amount || 0),
+          commissionAmount: Number(p.commissionAmount || 0),
+          payableAmount: Number(p.tutorNetAmount || p.amount || 0),
+          status: p.status,
+          paidAt: p.manuallyPaidAt || p.updatedAt,
+          note: p.adminPayoutNote || p.notes || "",
+          upiId: p.tutorId?.upiId || "",
+          bank: p.tutorId?.bankAccountNumber
+            ? {
+                accountHolderName: p.tutorId?.accountHolderName || "",
+                bankAccountNumber: p.tutorId?.bankAccountNumber || "",
+                maskedAccountNumber: maskAccountNumber(p.tutorId?.bankAccountNumber),
+                ifsc: p.tutorId?.ifsc || "",
+              }
+            : null,
+        }))
+        .filter((row) =>
+          q ? String(row.tutorName || "").toLowerCase().includes(String(q).toLowerCase()) : true
+        );
+
+      return res.json({
+        success: true,
+        data: paidRows,
+        totals: {
+          tutors: paidRows.length,
+          grossAmount: paidRows.reduce((sum, r) => sum + Number(r.grossAmount || 0), 0),
+          commissionAmount: paidRows.reduce((sum, r) => sum + Number(r.commissionAmount || 0), 0),
+          payableAmount: paidRows.reduce((sum, r) => sum + Number(r.payableAmount || 0), 0),
+        },
+      });
+    }
+
+    const sourceFilter = {
+      type: { $in: ["subscription", "note", "group"] },
+      status: "paid",
+      fundReleaseStatus: { $ne: "released" },
+      ...dateFilter,
+    };
+    const sourcePayments = await Payment.find(sourceFilter)
+      .sort({ createdAt: -1 })
+      .populate({ path: "tutorId", select: "userId name email upiId accountHolderName bankAccountNumber ifsc kycStatus" })
+      .lean();
+
+    const rowsByTutor = new Map();
+    for (const p of sourcePayments) {
+      const tutorProfile = p.tutorId;
+      const tutorProfileId = String(tutorProfile?._id || p.tutorId || "");
+      if (!tutorProfileId) continue;
+      const payable = payableForPayment(p);
+      if (payable.tutorPayable <= 0) continue;
+
+      if (!rowsByTutor.has(tutorProfileId)) {
+        rowsByTutor.set(tutorProfileId, {
+          tutorId: tutorProfile?._id || p.tutorId,
+          tutorUserId: tutorProfile?.userId || null,
+          tutorName: tutorProfile?.name || "Tutor",
+          tutorEmail: tutorProfile?.email || "",
+          kycStatus: tutorProfile?.kycStatus || "pending",
+          upiId: tutorProfile?.upiId || "",
+          bank: tutorProfile?.bankAccountNumber
+            ? {
+                accountHolderName: tutorProfile?.accountHolderName || "",
+                bankAccountNumber: tutorProfile?.bankAccountNumber || "",
+                maskedAccountNumber: maskAccountNumber(tutorProfile?.bankAccountNumber),
+                ifsc: tutorProfile?.ifsc || "",
+              }
+            : null,
+          sourcePaymentIds: [],
+          sourceCount: 0,
+          grossAmount: 0,
+          refundAmount: 0,
+          commissionAmount: 0,
+          payableAmount: 0,
+          latestPaymentAt: p.createdAt,
+          status: "pending",
+        });
+      }
+      const row = rowsByTutor.get(tutorProfileId);
+      row.sourcePaymentIds.push(p._id);
+      row.sourceCount += 1;
+      row.grossAmount += payable.grossAfterRefund;
+      row.refundAmount += payable.refundTotal;
+      row.commissionAmount += payable.commissionAmount;
+      row.payableAmount += payable.tutorPayable;
+      if (new Date(p.createdAt) > new Date(row.latestPaymentAt)) row.latestPaymentAt = p.createdAt;
+    }
+
+    const withdrawalRequests = await Payment.find({
+      type: "payout",
+      status: "created",
+      ...dateFilter,
+    })
+      .sort({ createdAt: -1 })
+      .populate({ path: "tutorId", select: "userId name email upiId accountHolderName bankAccountNumber ifsc kycStatus" })
+      .lean();
+
+    let rows = [
+      ...Array.from(rowsByTutor.values()),
+      ...withdrawalRequests.map((p) => {
+        const tutorProfile = p.tutorId;
+        return {
+          payoutId: p._id,
+          tutorId: tutorProfile?._id || p.tutorId,
+          tutorUserId: tutorProfile?.userId || null,
+          tutorName: tutorProfile?.name || "Tutor",
+          tutorEmail: tutorProfile?.email || "",
+          kycStatus: tutorProfile?.kycStatus || "pending",
+          upiId: tutorProfile?.upiId || "",
+          bank: tutorProfile?.bankAccountNumber
+            ? {
+                accountHolderName: tutorProfile?.accountHolderName || "",
+                bankAccountNumber: tutorProfile?.bankAccountNumber || "",
+                maskedAccountNumber: maskAccountNumber(tutorProfile?.bankAccountNumber),
+                ifsc: tutorProfile?.ifsc || "",
+              }
+            : null,
+          sourcePaymentIds: [],
+          sourceCount: 1,
+          requestType: "withdrawal",
+          grossAmount: Number(p.amount || 0),
+          refundAmount: 0,
+          commissionAmount: Number(p.commissionAmount || 0),
+          payableAmount: Number(p.tutorNetAmount || p.amount || 0),
+          latestPaymentAt: p.createdAt,
+          note: p.adminPayoutNote || p.notes || "",
+          status: "pending",
+        };
+      }),
+    ].sort((a, b) => Number(b.payableAmount) - Number(a.payableAmount));
+    if (q) {
+      const needle = String(q).toLowerCase();
+      rows = rows.filter((row) =>
+        [row.tutorName, row.tutorEmail, row.upiId, row.bank?.accountHolderName]
+          .some((value) => String(value || "").toLowerCase().includes(needle))
+      );
+    }
+
+    return res.json({
+      success: true,
+      data: rows,
+      totals: {
+        tutors: rows.length,
+        grossAmount: rows.reduce((sum, r) => sum + Number(r.grossAmount || 0), 0),
+        refundAmount: rows.reduce((sum, r) => sum + Number(r.refundAmount || 0), 0),
+        commissionAmount: rows.reduce((sum, r) => sum + Number(r.commissionAmount || 0), 0),
+        payableAmount: rows.reduce((sum, r) => sum + Number(r.payableAmount || 0), 0),
+      },
+    });
+  } catch (err) {
+    console.error("listTutorPayables error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+/**
+ * Admin: mark a tutor's pending payout as paid after manual transfer.
+ * POST /api/payments/admin/tutor-payables/:tutorId/mark-paid
+ */
+exports.markTutorPayablePaid = async (req, res) => {
+  try {
+    const { tutorId } = req.params;
+    const { sourcePaymentIds = [], payoutId = "", note = "" } = req.body || {};
+    if (!mongoose.Types.ObjectId.isValid(tutorId)) {
+      return res.status(400).json({ success: false, message: "Invalid tutor id" });
+    }
+
+    const tutorProfile = await TutorProfile.findById(tutorId).select(
+      "userId name email upiId accountHolderName bankAccountNumber ifsc"
+    );
+    if (!tutorProfile) {
+      return res.status(404).json({ success: false, message: "Tutor not found" });
+    }
+
+    if (payoutId) {
+      if (!mongoose.Types.ObjectId.isValid(payoutId)) {
+        return res.status(400).json({ success: false, message: "Invalid payout id" });
+      }
+      const payout = await Payment.findOne({ _id: payoutId, tutorId: tutorProfile._id, type: "payout", status: "created" });
+      if (!payout) {
+        return res.status(404).json({ success: false, message: "Withdrawal request not found" });
+      }
+
+      const payableAmount = Math.round(Number(payout.tutorNetAmount || payout.amount || 0) * 100) / 100;
+      if (payableAmount <= 0) {
+        return res.status(400).json({ success: false, message: "Payable amount is zero" });
+      }
+
+      payout.status = "settled";
+      payout.adminPayoutNote = String(note || "").trim();
+      payout.notes = note ? `Tutor payout. Note: ${String(note).trim()}` : "Tutor payout";
+      payout.manuallyPaidAt = new Date();
+      payout.paidAt = new Date();
+      if (mongoose.Types.ObjectId.isValid(req.user?.id)) payout.manuallyPaidBy = req.user.id;
+      await payout.save();
+
+      try {
+        await walletService.adminDebit(payableAmount, "Tutor payout", {
+          type: "payout",
+          id: payout._id,
+        });
+      } catch (walletErr) {
+        const adminWallet = await walletService.getAdminWallet();
+        adminWallet.balance = Math.max(0, Number(adminWallet.balance || 0) - payableAmount);
+        await adminWallet.save();
+        console.warn("Withdrawal payout admin wallet debit adjusted:", walletErr.message);
+      }
+
+      const Transaction = require("../models/Transaction");
+      if (tutorProfile.userId) {
+        await Transaction.updateMany(
+          {
+            userId: tutorProfile.userId,
+            "reference.type": "payout",
+            "reference.id": payout._id,
+          },
+          {
+            $set: {
+              type: "credit",
+              description: "Credited to your bank account",
+              status: "completed",
+              paymentId: payout._id,
+            },
+          }
+        );
+
+        const amountLabel = `₹${payableAmount.toLocaleString("en-IN", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`;
+        const body = note
+          ? `You got paid ${amountLabel}. Note from admin: ${String(note).trim()}`
+          : `You got paid ${amountLabel}.`;
+        await notificationService.notifyUser(tutorProfile.userId, "Tutor payout paid", body, {
+          payoutId: payout._id,
+          amount: payableAmount,
+          route: "/wallet",
+        });
+      }
+
+      await createAdminNotification(
+        "Tutor payout marked paid",
+        `Paid ₹${payableAmount.toLocaleString("en-IN")} to ${tutorProfile.name || "Tutor"}`,
+        { payoutId: payout._id, tutorId: tutorProfile._id, amount: payableAmount }
+      );
+
+      return res.json({
+        success: true,
+        message: "Tutor payout marked as paid",
+        data: {
+          payoutId: payout._id,
+          tutorId: tutorProfile._id,
+          tutorName: tutorProfile.name || "Tutor",
+          grossAmount: Number(payout.amount || 0),
+          refundAmount: 0,
+          commissionAmount: Number(payout.commissionAmount || 0),
+          payableAmount,
+          status: payout.status,
+          paidAt: payout.manuallyPaidAt,
+          note: payout.adminPayoutNote || "",
+        },
+      });
+    }
+
+    const sourceFilter = {
+      tutorId,
+      type: { $in: ["subscription", "note", "group"] },
+      status: "paid",
+      fundReleaseStatus: { $ne: "released" },
+    };
+    if (Array.isArray(sourcePaymentIds) && sourcePaymentIds.length) {
+      sourceFilter._id = { $in: sourcePaymentIds.filter((id) => mongoose.Types.ObjectId.isValid(id)) };
+    }
+
+    const sources = await Payment.find(sourceFilter);
+    if (!sources.length) {
+      return res.status(400).json({ success: false, message: "No pending payable payments found" });
+    }
+
+    let grossAmount = 0;
+    let refundAmount = 0;
+    let commissionAmount = 0;
+    let payableAmount = 0;
+    for (const source of sources) {
+      const payable = payableForPayment(source);
+      grossAmount += payable.grossAfterRefund;
+      refundAmount += payable.refundTotal;
+      commissionAmount += payable.commissionAmount;
+      payableAmount += payable.tutorPayable;
+    }
+    payableAmount = Math.round(payableAmount * 100) / 100;
+    if (payableAmount <= 0) {
+      return res.status(400).json({ success: false, message: "Payable amount is zero" });
+    }
+
+    const payout = await Payment.create({
+      tutorId: tutorProfile._id,
+      type: "payout",
+      amount: Math.round(grossAmount * 100) / 100,
+      currency: "INR",
+      gateway: "manual",
+      commissionPercent: DEFAULT_COMMISSION_PERCENT,
+      commissionAmount: Math.round(commissionAmount * 100) / 100,
+      tutorNetAmount: payableAmount,
+      payoutSourcePaymentIds: sources.map((p) => p._id),
+      status: "settled",
+      notes: note ? `Manual tutor payout. Note: ${String(note).trim()}` : "Manual tutor payout",
+      adminPayoutNote: String(note || "").trim(),
+      ...(mongoose.Types.ObjectId.isValid(req.user?.id) && { manuallyPaidBy: req.user.id }),
+      manuallyPaidAt: new Date(),
+      paidAt: new Date(),
+    });
+
+    try {
+      await walletService.adminDebit(payableAmount, "Manual tutor payout", {
+        type: "payout",
+        id: payout._id,
+      });
+    } catch (walletErr) {
+      const adminWallet = await walletService.getAdminWallet();
+      adminWallet.balance = Math.max(0, Number(adminWallet.balance || 0) - payableAmount);
+      await adminWallet.save();
+      console.warn("Manual payout admin wallet debit adjusted:", walletErr.message);
+    }
+    await walletService.adminDecreaseHold(payableAmount);
+
+    if (tutorProfile.userId) {
+      await walletService.clearPendingForManualPayout(
+        tutorProfile.userId,
+        "tutor",
+        payableAmount,
+        "Payout received",
+        { type: "payout", id: payout._id },
+        payout._id
+      );
+
+      await Payment.updateMany(
+        { _id: { $in: sources.map((p) => p._id) } },
+        {
+          $set: {
+            payoutGenerated: true,
+            payoutId: payout._id,
+            fundReleaseStatus: "released",
+            fundReleasedAt: payout.manuallyPaidAt,
+          },
+        }
+      );
+
+      const amountLabel = `₹${payableAmount.toLocaleString("en-IN", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+      const body = note
+        ? `You got paid ${amountLabel}. Note from admin: ${String(note).trim()}`
+        : `You got paid ${amountLabel}.`;
+      await notificationService.notifyUser(tutorProfile.userId, "Tutor payout paid", body, {
+        payoutId: payout._id,
+        amount: payableAmount,
+        sourcePaymentIds: sources.map((p) => p._id),
+        route: "/wallet",
+      });
+    }
+
+    await createAdminNotification(
+      "Tutor payout marked paid",
+      `Paid ₹${payableAmount.toLocaleString("en-IN")} to ${tutorProfile.name || "Tutor"}`,
+      { payoutId: payout._id, tutorId: tutorProfile._id, amount: payableAmount }
+    );
+
+    return res.json({
+      success: true,
+      message: "Tutor payout marked as paid",
+      data: {
+        payoutId: payout._id,
+        tutorId: tutorProfile._id,
+        tutorName: tutorProfile.name || "Tutor",
+        grossAmount,
+        refundAmount,
+        commissionAmount,
+        payableAmount,
+        status: payout.status,
+        paidAt: payout.manuallyPaidAt,
+        note: payout.adminPayoutNote || "",
+      },
+    });
+  } catch (err) {
+    console.error("markTutorPayablePaid error:", err);
+    return res.status(500).json({ success: false, message: err.message || "Server error" });
   }
 };
 
@@ -3358,6 +3808,18 @@ exports.requestTutorPayout = async (req, res) => {
         details: { availableBalance, pendingBalance, requestedAmount: Number(amount) },
       });
     }
+
+    await createAdminNotification(
+      "Tutor withdrawal requested",
+      `Tutor ${tp.name || tp._id} requested a withdrawal of ₹${Number(amount).toLocaleString("en-IN")}`,
+      { payoutId: payout._id, tutorId: tp._id, amount: Number(amount), upi: tp.upiId || null }
+    );
+
+    return res.json({
+      success: true,
+      message: "Your withdrawal request has been submitted. Money will be transferred to your bank account soon.",
+      data: { payoutId: payout._id, mode: "manual" },
+    });
 
     const TutorProfileModel = require("../models/TutorProfile");
     const hasKeys =
