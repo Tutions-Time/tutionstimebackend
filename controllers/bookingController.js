@@ -5,6 +5,7 @@ const RegularClass = require("../models/RegularClass");
 const Session = require("../models/Session");
 const Payment = require("../models/Payment");
 const User = require('../models/User');
+const mongoose = require("mongoose");
 const notificationService = require('../services/notificationService');
 const emailTpl = require('../templates/emailTemplates');
 const AdminNotification = require('../models/AdminNotification');
@@ -26,6 +27,25 @@ const BOOKING_TZ_OFFSET_MIN = Number(process.env.BOOKING_TZ_OFFSET_MIN || 330);
 function toStartOfDay(dateStr) {
   const d = new Date(dateStr);
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function isValidDateInput(dateStr) {
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
+  return !Number.isNaN(d.getTime());
+}
+
+function isValidTimeInput(timeStr) {
+  return parseTime24ToMinutes(timeStr) !== null;
+}
+
+function resolveObjectIdString(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    return String(value.id || value._id || value.userId || "");
+  }
+  return String(value);
 }
 
 function addMinutesToTime(timeStr, minutesToAdd) {
@@ -415,14 +435,51 @@ exports.createDemoBooking = async (req, res) => {
 exports.createDemoBookingByTutor = async (req, res) => {
   try {
     const tutorId = req.user.id; // logged-in tutor
-    const { studentId, subject, date, time, note, studentLearningMode } =
+    const { studentId: rawStudentId, subject, date, time, note, studentLearningMode } =
       req.body;
     console.log("createDemoBookingByTutor req.body:", req.body);
+
+    const studentId = resolveObjectIdString(rawStudentId);
 
     if (!studentId || !subject || !date || !time) {
       return res.status(400).json({
         success: false,
         message: "studentId, subject, date, time are required",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(studentId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid studentId",
+      });
+    }
+
+    if (!isValidDateInput(date)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid date",
+      });
+    }
+
+    if (!isValidTimeInput(time)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid time. Use HH:mm format",
+      });
+    }
+
+    const preferredDate = toStartOfDay(date);
+    const today = new Date();
+    const todayStart = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate()
+    );
+    if (preferredDate < todayStart) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select a date from today onwards",
       });
     }
 
@@ -483,8 +540,6 @@ exports.createDemoBookingByTutor = async (req, res) => {
         preferredTimes: studentPreferredTimes,
       });
     }
-
-    const preferredDate = toStartOfDay(date);
 
     // ✅ Check tutor availability (same logic as student->tutor flow)
     // Prevent double booking for same tutor+student+slot
@@ -571,6 +626,19 @@ exports.createDemoBookingByTutor = async (req, res) => {
     return res.status(201).json({ success: true, data: booking });
   } catch (err) {
     console.error("createDemoBookingByTutor error:", err);
+    if (err?.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A demo booking already exists for this student, tutor, date, and time.",
+      });
+    }
+    if (err?.name === "CastError" || err?.name === "ValidationError") {
+      return res.status(400).json({
+        success: false,
+        message: err.message,
+      });
+    }
     return res.status(500).json({
       success: false,
       message: "Failed to create demo booking by tutor",
