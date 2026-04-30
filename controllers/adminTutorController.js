@@ -185,13 +185,6 @@ exports.updateKycStatus = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Tutor profile not found' });
     }
 
-    if (kyc === 'approved' && (!hasPayoutDetails(tutorProfile) || !hasKycDocuments(tutorProfile))) {
-      return res.status(400).json({
-        success: false,
-        message: 'UPI, bank details, Aadhaar, and PAN are required before approval',
-      });
-    }
-
     tutorProfile.isVerified = kyc === 'approved';
     tutorProfile.kycStatus = kyc;
     tutorProfile.payoutDetailsStatus = kyc;
