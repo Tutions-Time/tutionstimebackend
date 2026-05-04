@@ -3,6 +3,8 @@ const router = express.Router();
 const adminController = require('../controllers/adminController');
 const { authenticate, checkRole } = require('../middleware/auth');
 const { getBookingByIdForAdmin } = require('../controllers/bookingController');
+const uploadS3 = require('../middleware/uploadS3');
+const blogController = require('../controllers/blogController');
 
 
 const adminTutorController = require('../controllers/adminTutorController.js');
@@ -47,6 +49,11 @@ router.get('/dashboard/activity', adminController.getDashboardActivity);
 router.get('/sessions', adminController.listAdminSessions);
 router.get('/classes-monitor', adminController.listAdminClassesMonitor);
 router.post('/uploads/migrate-to-s3', adminController.migrateUploadsToS3);
+
+router.get('/blogs', blogController.listAdminBlogs);
+router.post('/blogs', uploadS3.single('image'), blogController.createBlog);
+router.put('/blogs/:id', uploadS3.single('image'), blogController.updateBlog);
+router.delete('/blogs/:id', blogController.deleteBlog);
 
 // バ. Tutor journey (demos, sessions, batches, notes, payments)
 router.get('/tutors/:id/journey', adminTutorController.getTutorJourney);
