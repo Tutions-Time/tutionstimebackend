@@ -4,6 +4,17 @@ const PHONE_REGEX = /^[0-9]{10}$/;
 
 const isEmpty = (v) => v === undefined || v === null || String(v).trim() === "";
 
+const buildRateOptions = (start, end, step) =>
+  Array.from(
+    { length: Math.floor((end - start) / step) + 1 },
+    (_, index) => start + index * step
+  );
+
+const HOURLY_RATE_OPTIONS = buildRateOptions(400, 2000, 100);
+const MONTHLY_RATE_OPTIONS = buildRateOptions(3500, 10000, 100);
+
+const isAllowedRate = (value, options) => options.includes(Number(value));
+
 const normalizeArray = (val) => {
   if (!val) return [];
   if (Array.isArray(val)) return val.filter(Boolean);
@@ -39,10 +50,6 @@ const validateStudentProfileData = (data) => {
 
   if (isEmpty(data.addressLine1))
     errors.addressLine1 = "Address line 1 is required";
-  if (isEmpty(data.addressLine2))
-    errors.addressLine2 = "Address line 2 is required";
-  if (isEmpty(data.addressLine2))
-    errors.addressLine2 = "Address line 2 is required";
   if (isEmpty(data.city)) errors.city = "City is required";
   if (isEmpty(data.state)) errors.state = "State is required";
   if (isEmpty(data.pincode) || !PINCODE_REGEX.test(String(data.pincode)))
@@ -137,8 +144,6 @@ const validateTutorProfileData = (data, options = {}) => {
 
   if (isEmpty(data.addressLine1))
     errors.addressLine1 = "Address line 1 is required";
-  if (isEmpty(data.addressLine2))
-    errors.addressLine2 = "Address line 2 is required";
   if (isEmpty(data.city)) errors.city = "City is required";
   if (isEmpty(data.state)) errors.state = "State is required";
   if (isEmpty(data.pincode) || !PINCODE_REGEX.test(String(data.pincode)))
@@ -168,11 +173,17 @@ const validateTutorProfileData = (data, options = {}) => {
   if (!groupSizes.length && isEmpty(data.groupSize))
     errors.groupSizes = "Select at least one group size";
 
-  if (isEmpty(data.hourlyRate) || Number(data.hourlyRate) <= 0)
-    errors.hourlyRate = "Hourly rate must be greater than 0";
+  if (isEmpty(data.hourlyRate)) {
+    errors.hourlyRate = "Hourly rate is required";
+  } else if (!isAllowedRate(data.hourlyRate, HOURLY_RATE_OPTIONS)) {
+    errors.hourlyRate = "Select an hourly rate from Rs.400 to Rs.2000";
+  }
 
-  if (isEmpty(data.monthlyRate) || Number(data.monthlyRate) <= 0)
-    errors.monthlyRate = "Monthly rate must be greater than 0";
+  if (isEmpty(data.monthlyRate)) {
+    errors.monthlyRate = "Monthly rate is required";
+  } else if (!isAllowedRate(data.monthlyRate, MONTHLY_RATE_OPTIONS)) {
+    errors.monthlyRate = "Select a monthly rate from Rs.3500 to Rs.10000";
+  }
 
   if (isEmpty(data.bio)) errors.bio = "Bio is required";
 
