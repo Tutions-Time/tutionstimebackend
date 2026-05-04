@@ -64,6 +64,9 @@ const studentProfileSchema = new mongoose.Schema(
     tutorGenderOther: { type: String, trim: true },
     preferredTimes: [String],
 
+    // Budget preference
+    budget: { type: String, trim: true },
+
     // Learning Goals
     goals: { type: String, trim: true },
 

@@ -229,7 +229,10 @@ const updateStudentProfile = async (req, res) => {
         gender: resolvedGender || "",
         genderOther: resolvedGender === "Other" ? b.genderOther || "" : "",
         addressLine1: b.addressLine1 || "",
-        addressLine2: b.addressLine2 || "",
+        addressLine2:
+          typeof b.addressLine2 === "undefined"
+            ? existingProfile?.addressLine2 || ""
+            : b.addressLine2 || "",
         city: b.city || "",
         state: b.state || "",
         pincode: b.pincode || "",
@@ -260,6 +263,10 @@ const updateStudentProfile = async (req, res) => {
           resolvedTutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
       preferredTimes: normalizeArray(b.preferredTimes),
       availability: normalizeArray(b.availability),
+      budget:
+        typeof b.budget === "undefined"
+          ? existingProfile?.budget || ""
+          : b.budget || "",
       goals: b.goals || "",
       photoUrl: resolvedPhotoUrl,
     };
@@ -418,9 +425,7 @@ const updateTutorProfile = async (req, res) => {
       monthlyRate,
       availability,
       bio,
-      achievements,
       addressLine1,
-      addressLine2,
       city,
       state,
       pincode,
@@ -431,17 +436,19 @@ const updateTutorProfile = async (req, res) => {
 
     // â­ AWS S3 returns file.location
     let photoUrl = null,
-      demoVideoUrl = null,
       resumeUrl = null;
 
     if (req.files?.photo)
       photoUrl = req.files.photo[0].location;
 
-    if (req.files?.demoVideo)
-      demoVideoUrl = req.files.demoVideo[0].location;
-
     if (req.files?.resume)
       resumeUrl = req.files.resume[0].location;
+
+    const uploadedAadhaarUrls = req.files?.aadhaar
+      ? req.files.aadhaar.map((file) => file.location).filter(Boolean)
+      : [];
+    const uploadedPanUrl = req.files?.pan?.[0]?.location || null;
+    const hasUploadedGovProof = uploadedAadhaarUrls.length > 0 || Boolean(uploadedPanUrl);
 
       const parsedGroupSizes = normalizeArray(groupSizes);
       const sanitizeOther = (arr) => {
@@ -452,8 +459,11 @@ const updateTutorProfile = async (req, res) => {
         return arr;
       };
     const resolvedPhotoUrl = photoUrl || existingProfile?.photoUrl || "";
-    const resolvedDemoVideoUrl = demoVideoUrl || existingProfile?.demoVideoUrl || "";
     const resolvedResumeUrl = resumeUrl || existingProfile?.resumeUrl || "";
+    const resolvedAadhaarUrls = uploadedAadhaarUrls.length
+      ? uploadedAadhaarUrls
+      : existingProfile?.aadhaarUrls || [];
+    const resolvedPanUrl = uploadedPanUrl || existingProfile?.panUrl || "";
     const resolvedIsAgeConfirmed =
       typeof isAgeConfirmed === "undefined"
         ? Boolean(existingProfile?.isAgeConfirmed)
@@ -486,22 +496,28 @@ const updateTutorProfile = async (req, res) => {
       availability: normalizedAvailability,
       altPhone: altPhone || existingProfile?.altPhone || "",
       bio,
-      achievements,
       isAgeConfirmed: resolvedIsAgeConfirmed,
       addressLine1,
-      addressLine2,
+      addressLine2:
+        typeof req.body.addressLine2 === "undefined"
+          ? existingProfile?.addressLine2 || ""
+          : req.body.addressLine2 || "",
       city,
       state,
       pincode,
       ...(resolvedPhotoUrl && { photoUrl: resolvedPhotoUrl }),
-      ...(resolvedDemoVideoUrl && { demoVideoUrl: resolvedDemoVideoUrl }),
       ...(resolvedResumeUrl && { resumeUrl: resolvedResumeUrl }),
+      ...(resolvedAadhaarUrls.length && { aadhaarUrls: resolvedAadhaarUrls }),
+      ...(resolvedPanUrl && { panUrl: resolvedPanUrl }),
+      ...(hasUploadedGovProof && {
+        kycDocumentsStatus: "submitted",
+        kycRejectionReason: "",
+      }),
     };
 
     const validationPayload = {
       ...profileData,
       photoUrl: resolvedPhotoUrl,
-      demoVideoUrl: resolvedDemoVideoUrl,
       resumeUrl: resolvedResumeUrl,
       isAgeConfirmed: resolvedIsAgeConfirmed,
     };
@@ -520,11 +536,13 @@ const updateTutorProfile = async (req, res) => {
       { new: true, upsert: true }
     );
 
+    if (hasUploadedGovProof) {
+      profile.kycStatus = getCombinedTutorKycStatus(profile);
+      await profile.save();
+    }
+
     const safeProfile = profile?.toObject ? profile.toObject() : profile || {};
-    const isComplete = isTutorProfileComplete({
-      ...safeProfile,
-      demoVideoUrl: resolvedDemoVideoUrl || safeProfile.demoVideoUrl || "",
-    });
+    const isComplete = isTutorProfileComplete(safeProfile);
     if (user.isProfileComplete !== isComplete) {
       user.isProfileComplete = isComplete;
       await user.save();

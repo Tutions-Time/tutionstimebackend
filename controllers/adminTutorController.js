@@ -52,7 +52,7 @@ exports.getAllTutors = async (req, res) => {
       {
         $lookup: {
           from: 'tutorprofiles',
-          localField: '_id',
+          localField: '_id',    
           foreignField: 'userId',
           as: 'profile',
         },

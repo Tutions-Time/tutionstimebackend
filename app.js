@@ -83,6 +83,7 @@ app.use("/api/payments", require("./routes/paymentRoutes"));
 app.use("/api/notes", require("./routes/noteRoutes"));
 app.use("/api/wallet", require("./routes/walletRoutes"));
 app.use("/api/tutors", require("./routes/tutorRoutes"));
+app.use("/api/blogs", require("./routes/blogRoutes"));
 
 app.use("/api/meta", require("./routes/metaRoutes.js"));
 app.use(

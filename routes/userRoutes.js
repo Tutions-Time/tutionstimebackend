@@ -28,7 +28,8 @@ router.post(
   uploadS3.fields([
     { name: 'photo', maxCount: 1 },
     { name: 'resume', maxCount: 1 },
-    { name: 'demoVideo', maxCount: 1 }
+    { name: 'aadhaar', maxCount: 1 },
+    { name: 'pan', maxCount: 1 }
   ]),
   userController.updateTutorProfile
 );
