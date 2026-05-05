@@ -128,6 +128,17 @@ exports.listAdminBlogs = async (req, res) => {
   }
 };
 
+exports.getAdminBlogById = async (req, res) => {
+  try {
+    const blog = await Blog.findById(req.params.id).lean();
+    if (!blog) return res.status(404).json({ success: false, message: "Blog not found" });
+
+    res.json({ success: true, data: blog });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.createBlog = async (req, res) => {
   try {
     const payload = buildBlogPayload(req.body, req.file);
