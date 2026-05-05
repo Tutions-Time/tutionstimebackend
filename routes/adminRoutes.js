@@ -51,6 +51,7 @@ router.get('/classes-monitor', adminController.listAdminClassesMonitor);
 router.post('/uploads/migrate-to-s3', adminController.migrateUploadsToS3);
 
 router.get('/blogs', blogController.listAdminBlogs);
+router.get('/blogs/:id', blogController.getAdminBlogById);
 router.post('/blogs', uploadS3.single('image'), blogController.createBlog);
 router.put('/blogs/:id', uploadS3.single('image'), blogController.updateBlog);
 router.delete('/blogs/:id', blogController.deleteBlog);
