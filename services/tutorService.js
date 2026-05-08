@@ -2,6 +2,26 @@ const TutorProfile = require('../models/TutorProfile');
 const StudentProfile = require('../models/StudentProfile');
 const Booking = require('../models/Booking');
 
+const parseStudentBudget = (budget = '') => {
+  const text = String(budget || '');
+  const hourly = Number(text.match(/Hourly:\s*(?:Rs\.?|₹)?\s*(\d+)/i)?.[1] || 0);
+  const monthly = Number(text.match(/Monthly:\s*(?:Rs\.?|₹)?\s*(\d+)/i)?.[1] || 0);
+
+  return {
+    hourly: Number.isFinite(hourly) && hourly > 0 ? hourly : null,
+    monthly: Number.isFinite(monthly) && monthly > 0 ? monthly : null,
+  };
+};
+
+const mergeMaxRate = (existing, max) => {
+  if (!max) return existing;
+  const current = existing && typeof existing === 'object' ? existing : {};
+  return {
+    ...current,
+    $lte: current.$lte ? Math.min(Number(current.$lte), max) : max,
+  };
+};
+
 /**
  * 🧩 Build dynamic MongoDB filter based on query params
  */
@@ -50,17 +70,25 @@ exports.buildTutorFilter = async (query, options = {}) => {
 
   if (studentId) {
     const student = await StudentProfile.findOne({ userId: studentId })
-      .select("learningMode pincode")
+      .select("learningMode pincode budget")
       .lean();
 
     const isOfflineOnly = String(student?.learningMode || "").toLowerCase() === "offline";
     const studentPincode = String(student?.pincode || "").trim();
+    const budget = parseStudentBudget(student?.budget);
 
     if (isOfflineOnly) {
       filter["teachingMode"] = { $in: ["Offline", "Both"] };
       if (studentPincode) {
         filter["pincode"] = studentPincode;
       }
+    }
+
+    if (budget.hourly) {
+      filter["hourlyRate"] = mergeMaxRate(filter["hourlyRate"], budget.hourly);
+    }
+    if (budget.monthly) {
+      filter["monthlyRate"] = mergeMaxRate(filter["monthlyRate"], budget.monthly);
     }
   }
 
@@ -98,6 +126,7 @@ exports.getRecommendedTutors = async (studentId) => {
   const isOfflineOnly =
     String(student.learningMode || "").toLowerCase() === "offline";
   const studentPincode = String(student.pincode || "").trim();
+  const budget = parseStudentBudget(student.budget);
 
   const query = {
     isVerified: true,
@@ -114,6 +143,13 @@ exports.getRecommendedTutors = async (studentId) => {
     if (studentPincode) {
       query.pincode = studentPincode;
     }
+  }
+
+  if (budget.hourly) {
+    query.hourlyRate = { $lte: budget.hourly };
+  }
+  if (budget.monthly) {
+    query.monthlyRate = { $lte: budget.monthly };
   }
 
   const tutors = await TutorProfile.find(query)
