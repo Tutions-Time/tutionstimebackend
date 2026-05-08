@@ -38,21 +38,41 @@ exports.searchStudents = async (req, res) => {
       ...studentFilters
     };
 
-    // get students
     const students = await StudentProfile.find(finalFilter)
       .sort(sort)
-      .skip(skip)
-      .limit(limit)
       .lean();
 
-    const total = await StudentProfile.countDocuments(finalFilter);
+    const leads = students.flatMap((student) => {
+      const preferredTimes = Array.isArray(student.preferredTimes)
+        ? student.preferredTimes.filter(Boolean)
+        : [];
+
+      if (!preferredTimes.length) {
+        return [{
+          ...student,
+          profileId: student._id,
+          leadId: String(student._id),
+          preferredTimeSlot: "",
+        }];
+      }
+
+      return preferredTimes.map((slot, index) => ({
+        ...student,
+        profileId: student._id,
+        leadId: `${student._id}:${index}`,
+        preferredTimeSlot: slot,
+        preferredTimes: [slot],
+      }));
+    });
+
+    const paginatedLeads = leads.slice(skip, skip + limit);
 
     return res.status(200).json({
       success: true,
       page,
-      total,
-      count: students.length,
-      data: students
+      total: leads.length,
+      count: paginatedLeads.length,
+      data: paginatedLeads
     });
   } catch (error) {
     console.error("Search Students Error:", error);
