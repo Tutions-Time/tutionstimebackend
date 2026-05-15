@@ -22,6 +22,49 @@ const mergeMaxRate = (existing, max) => {
   };
 };
 
+const normalizeMode = (value = '') => String(value || '').trim().toLowerCase();
+const normalizePincode = (value = '') => String(value || '').trim();
+
+const studentSupportsOffline = (student) => {
+  const mode = normalizeMode(student?.learningMode);
+  return mode === 'offline' || mode === 'both' || mode === 'online and offline';
+};
+
+const impossibleTutorFilter = () => ({ _id: { $exists: false } });
+
+const addOfflineOnlyTutorVisibility = (filter, student, requestedTeachingMode) => {
+  const studentPincode = normalizePincode(student?.pincode);
+  const canSeeOffline = studentSupportsOffline(student) && Boolean(studentPincode);
+  const requestedMode = normalizeMode(requestedTeachingMode);
+
+  if (requestedMode === 'offline' || requestedMode === 'offline only') {
+    if (!canSeeOffline) return impossibleTutorFilter();
+    return {
+      ...filter,
+      teachingMode: 'Offline',
+      pincode: studentPincode,
+    };
+  }
+
+  if (!requestedMode) {
+    const visibilityRule = canSeeOffline
+      ? {
+          $or: [
+            { teachingMode: { $ne: 'Offline' } },
+            { teachingMode: 'Offline', pincode: studentPincode },
+          ],
+        }
+      : { teachingMode: { $ne: 'Offline' } };
+
+    return {
+      ...filter,
+      $and: [...(filter.$and || []), visibilityRule],
+    };
+  }
+
+  return filter;
+};
+
 /**
  * 🧩 Build dynamic MongoDB filter based on query params
  */
@@ -90,6 +133,8 @@ exports.buildTutorFilter = async (query, options = {}) => {
     if (budget.monthly) {
       filter["monthlyRate"] = mergeMaxRate(filter["monthlyRate"], budget.monthly);
     }
+
+    return addOfflineOnlyTutorVisibility(filter, student, teachingMode);
   }
 
   return filter;
@@ -102,7 +147,10 @@ exports.getRecommendedTutors = async (studentId) => {
   const student = await StudentProfile.findOne({ userId: studentId }).lean();
 
   if (!student) {
-    const tutors = await TutorProfile.find({ isVerified: true })
+    const tutors = await TutorProfile.find({
+      isVerified: true,
+      teachingMode: { $ne: "Offline" },
+    })
       .sort({ createdAt: -1 })
       .limit(10)
       .lean();
@@ -152,7 +200,9 @@ exports.getRecommendedTutors = async (studentId) => {
     query.monthlyRate = { $lte: budget.monthly };
   }
 
-  const tutors = await TutorProfile.find(query)
+  const tutors = await TutorProfile.find(
+    addOfflineOnlyTutorVisibility(query, student)
+  )
     .sort({ experience: -1, rating: -1, createdAt: -1 })
     .limit(15)
     .lean();

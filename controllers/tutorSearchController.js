@@ -134,7 +134,7 @@ exports.searchTutors = async (req, res) => {
         .skip(skip)
         .limit(limit)
         .select(
-          'name photoUrl city pincode qualification specialization experience hourlyRate monthlyRate gender subjects addressLine1 lastLogin rating isFeatured availability kycStatus'
+          'name photoUrl city pincode qualification specialization experience hourlyRate monthlyRate gender subjects teachingMode addressLine1 lastLogin rating isFeatured availability kycStatus'
         )
         .lean();
 
