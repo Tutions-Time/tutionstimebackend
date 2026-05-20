@@ -1,123 +1,115 @@
 // middleware/uploadS3.js
+//
+// Kept under the same module name because routes already import uploadS3.
+// New uploads are stored on this server only. Existing AWS URLs already saved
+// in MongoDB are preserved by controllers and continue to be returned as-is.
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 
-// Env-driven S3 configuration
-// support multiple env var names for compatibility
-const S3_BUCKET = process.env.AWS_S3_BUCKET || process.env.AWS_BUCKET;
-const S3_REGION = process.env.AWS_REGION;
-const S3_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY;
-const S3_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY || process.env.AWS_SECRET_KEY;
-
-const useS3 = Boolean(S3_BUCKET && S3_REGION && S3_ACCESS_KEY_ID && S3_SECRET_ACCESS_KEY);
-
-// Fallback local uploads directory
 const uploadsDir = path.join(process.cwd(), "uploads");
-try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch (_) {}
+try {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+} catch (_) {}
 
 const MAX_FILE_SIZES = {
   photo: 10 * 1024 * 1024,
   resume: 10 * 1024 * 1024,
   demoVideo: 200 * 1024 * 1024,
+  recording: 200 * 1024 * 1024,
   pdf: 150 * 1024 * 1024,
   notes: 150 * 1024 * 1024,
+  assignment: 150 * 1024 * 1024,
 };
 const GLOBAL_MAX_FILE_SIZE = 200 * 1024 * 1024;
 
-// Memory storage for S3; disk for fallback
-const storage = useS3 ? multer.memoryStorage() : multer.diskStorage({
+function getSubdir(file) {
+  switch (file.fieldname) {
+    case "photo":
+      return "photos";
+    case "resume":
+      return "resumes";
+    case "aadhaar":
+    case "pan":
+    case "bankProof":
+      return "kyc";
+    case "demoVideo":
+    case "recording":
+      return "videos";
+    case "certificate":
+      return file.mimetype === "application/pdf"
+        ? path.join("certificates", "pdfs")
+        : path.join("certificates", "images");
+    case "pdf":
+    case "notes":
+    case "assignment":
+      return "documents";
+    case "previews":
+    case "image":
+      return "images";
+    default:
+      return "misc";
+  }
+}
+
+const storage = multer.diskStorage({
   destination: function (_req, file, cb) {
-    cb(null, uploadsDir);
+    const dest = path.join(uploadsDir, getSubdir(file));
+    try {
+      fs.mkdirSync(dest, { recursive: true });
+      cb(null, dest);
+    } catch (err) {
+      cb(err);
+    }
   },
   filename: function (req, file, cb) {
     const ext = path.extname(file.originalname);
-    const base = path.basename(file.originalname, ext).replace(/[^A-Za-z0-9_-]/g, "_");
-    const sessionId = req.params?.id || "general";
-    const unique = `${file.fieldname}-${Date.now()}-${Math.round(Math.random()*1e9)}`;
-    cb(null, `${sessionId}-${base}-${unique}${ext}`);
+    const base = path
+      .basename(file.originalname, ext)
+      .replace(/[^A-Za-z0-9_-]/g, "_");
+    const scope = req.params?.id || "general";
+    const unique = `${file.fieldname}-${Date.now()}-${Math.round(
+      Math.random() * 1e9,
+    )}`;
+    cb(null, `${scope}-${base}-${unique}${ext}`);
   },
 });
 
 const upload = multer({ storage, limits: { fileSize: GLOBAL_MAX_FILE_SIZE } });
 
-// Initialize S3 client if configured
-let s3 = null;
-if (useS3) {
-  s3 = new S3Client({
-    region: S3_REGION,
-    credentials: { accessKeyId: S3_ACCESS_KEY_ID, secretAccessKey: S3_SECRET_ACCESS_KEY },
-  });
-}
-
-function buildKey(req, file) {
-  const ext = path.extname(file.originalname);
-  const base = path.basename(file.originalname, ext).replace(/[^A-Za-z0-9_-]/g, "_");
-  const scope = req.params?.id || "general";
-  const unique = `${file.fieldname}-${Date.now()}-${Math.round(Math.random()*1e9)}`;
-  return `uploads/${scope}-${base}-${unique}${ext}`;
-}
-
-async function uploadFileToS3(req, file) {
-  const key = buildKey(req, file);
-  const contentType = file.mimetype || "application/octet-stream";
-  await s3.send(new PutObjectCommand({
-    Bucket: S3_BUCKET,
-    Key: key,
-    Body: file.buffer,
-    ContentType: contentType,
-    // ACL: "public-read",
-  }));
-  const location = `https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com/${key}`;
-  file.location = location;
-  file.key = key;
-}
-
-async function ensureLocations(req) {
+function ensureLocations(req) {
   if (!req) return;
 
-  // S3 path: upload and set location
-  if (useS3) {
-    if (req.file && !req.file.location) {
-      await uploadFileToS3(req, req.file);
-    }
-    if (req.files) {
-      const groups = Object.values(req.files).filter(Array.isArray);
-      for (const arr of groups) {
-        for (const f of arr) {
-          if (!f.location) await uploadFileToS3(req, f);
-        }
-      }
-    }
-    return;
-  }
+  const requestBaseUrl =
+    req.protocol && req.get?.("host") ? `${req.protocol}://${req.get("host")}` : "";
+  const baseUrl = process.env.BASE_URL || requestBaseUrl;
+  const mapFile = (file) => {
+    if (!file || file.location || !file.path) return;
 
-  // Fallback: local disk – set location based on BASE_URL
-  const baseUrl = process.env.BASE_URL || "";
-  const mapFile = (f) => {
-    if (!f.location && f.path) {
-      const rel = path.join("uploads", path.basename(f.path)).replace(/\\/g, "/");
-      f.location = baseUrl ? `${baseUrl.replace(/\/$/, "")}/${rel}` : `/${rel}`;
-      f.key = rel; // emulate s3 key for local
-    }
+    const rel = path.relative(process.cwd(), file.path).replace(/\\/g, "/");
+    file.location = baseUrl
+      ? `${baseUrl.replace(/\/$/, "")}/${rel}`
+      : `/${rel}`;
+    file.key = rel;
   };
+
   if (req.file) mapFile(req.file);
-  if (req.files) {
-    Object.keys(req.files).forEach((k) => {
-      const arr = req.files[k];
-      if (Array.isArray(arr)) arr.forEach(mapFile);
-    });
+  if (Array.isArray(req.files)) {
+    req.files.forEach(mapFile);
+  } else if (req.files) {
+    Object.values(req.files)
+      .filter(Array.isArray)
+      .forEach((arr) => arr.forEach(mapFile));
   }
 }
 
 function wrapMw(mw) {
   return async (req, res, next) => {
-    mw(req, res, async (err) => {
+    mw(req, res, (err) => {
       if (err) return next(err);
       try {
         enforceFileSizeLimits(req);
-        await ensureLocations(req);
+        ensureLocations(req);
         next();
       } catch (e) {
         next(e);
@@ -134,16 +126,16 @@ function enforceFileSizeLimits(req) {
     const limit = MAX_FILE_SIZES[file.fieldname];
     if (!limit) return;
     if (file.size > limit) {
-      const err = new Error(
-        `${file.fieldname} exceeds ${toMb(limit)}MB limit`
-      );
+      const err = new Error(`${file.fieldname} exceeds ${toMb(limit)}MB limit`);
       err.statusCode = 413;
       throw err;
     }
   };
 
   if (req.file) check(req.file);
-  if (req.files) {
+  if (Array.isArray(req.files)) {
+    req.files.forEach(check);
+  } else if (req.files) {
     Object.values(req.files)
       .filter(Array.isArray)
       .forEach((arr) => arr.forEach(check));
