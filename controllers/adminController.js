@@ -11,195 +11,19 @@ const DeviceToken = require("../models/DeviceToken");
 const Notification = require("../models/Notification");
 const Wallet = require("../models/Wallet");
 const mongoose = require("mongoose");
-const fs = require("fs");
-const path = require("path");
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { logActivity } = require("../services/loggerService");
 const {
   DEFAULT_SESSION_DURATION_MINUTES,
   computeDurationMinutes,
 } = require("../utils/sessionZoomUtils");
 
-// S3 config (support multiple env names)
-const S3_BUCKET = process.env.AWS_S3_BUCKET || process.env.AWS_BUCKET;
-const S3_REGION = process.env.AWS_REGION;
-const S3_ACCESS_KEY_ID =
-  process.env.AWS_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY;
-const S3_SECRET_ACCESS_KEY =
-  process.env.AWS_SECRET_ACCESS_KEY || process.env.AWS_SECRET_KEY;
-const useS3 = Boolean(
-  S3_BUCKET && S3_REGION && S3_ACCESS_KEY_ID && S3_SECRET_ACCESS_KEY,
-);
-const s3 = useS3
-  ? new S3Client({
-      region: S3_REGION,
-      credentials: {
-        accessKeyId: S3_ACCESS_KEY_ID,
-        secretAccessKey: S3_SECRET_ACCESS_KEY,
-      },
-    })
-  : null;
-
-function guessContentType(filename) {
-  const ext = String(filename).toLowerCase();
-  if (ext.endsWith(".png")) return "image/png";
-  if (ext.endsWith(".jpg") || ext.endsWith(".jpeg")) return "image/jpeg";
-  if (ext.endsWith(".gif")) return "image/gif";
-  if (ext.endsWith(".svg")) return "image/svg+xml";
-  if (ext.endsWith(".pdf")) return "application/pdf";
-  if (ext.endsWith(".mp4")) return "video/mp4";
-  if (ext.endsWith(".webm")) return "video/webm";
-  if (ext.endsWith(".mov")) return "video/quicktime";
-  return "application/octet-stream";
-}
-
-function extractLocalPath(url) {
-  if (!url) return null;
-  const str = String(url);
-  const idx = str.indexOf("/uploads/");
-  if (idx === -1) return null;
-  const rel = str.substring(idx + 1); // 'uploads/...'
-  const base = path.basename(rel);
-  const p1 = path.join(process.cwd(), "uploads", base);
-  const p2 = path.join(__dirname, "..", "uploads", base);
-  if (fs.existsSync(p1)) return p1;
-  if (fs.existsSync(p2)) return p2;
-  return null;
-}
-
-async function putS3(buffer, key, contentType) {
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: key,
-      Body: buffer,
-      ContentType: contentType,
-      ACL: "public-read",
-    }),
-  );
-  return `https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com/${key}`;
-}
-
-async function migrateField(doc, field, updates) {
-  const url = doc[field];
-  if (!url) return false;
-  if (/s3\.amazonaws\.com\//i.test(String(url))) return false;
-  const localPath = extractLocalPath(url);
-  if (!localPath) return false;
-  const buffer = fs.readFileSync(localPath);
-  const base = path.basename(localPath);
-  const key = `uploads/migrated/${base}`;
-  const ct = guessContentType(base);
-  const s3Url = await putS3(buffer, key, ct);
-  updates[field] = s3Url;
-  // add corresponding key fields where applicable
-  if (field === "pdfUrl") updates["pdfKey"] = key;
-  return true;
-}
-
-async function migrateArrayField(doc, field, updates) {
-  const arr = Array.isArray(doc[field]) ? doc[field] : [];
-  if (!arr.length) return false;
-  const migrated = [];
-  for (const url of arr) {
-    if (/s3\.amazonaws\.com\//i.test(String(url))) {
-      migrated.push(url);
-      continue;
-    }
-    const localPath = extractLocalPath(url);
-    if (!localPath) {
-      migrated.push(url);
-      continue;
-    }
-    const buffer = fs.readFileSync(localPath);
-    const base = path.basename(localPath);
-    const key = `uploads/migrated/${base}`;
-    const ct = guessContentType(base);
-    const s3Url = await putS3(buffer, key, ct);
-    migrated.push(s3Url);
-  }
-  updates[field] = migrated;
-  if (field === "previewImageUrls")
-    updates["previewImageKeys"] = migrated.map((u) => {
-      const idx = String(u).indexOf("/uploads/migrated/");
-      return idx !== -1 ? String(u).substring(idx + 1) : "";
-    });
-  return true;
-}
-
 const migrateUploadsToS3 = async (req, res) => {
   try {
-    if (!useS3) {
-      return res
-        .status(400)
-        .json({ success: false, message: "S3 env vars not configured" });
-    }
-
-    const result = {
-      StudentProfile: 0,
-      TutorProfile: 0,
-      Session: 0,
-      Note: 0,
-      missing: 0,
-    };
-
-    // StudentProfile: photoUrl
-    const sps = await StudentProfile.find({
-      photoUrl: { $exists: true, $ne: null },
+    return res.status(410).json({
+      success: false,
+      message:
+        "S3 upload migration is disabled. New uploads are stored on this server.",
     });
-    for (const sp of sps) {
-      const updates = {};
-      const ok = await migrateField(sp, "photoUrl", updates);
-      if (ok) {
-        await StudentProfile.updateOne({ _id: sp._id }, { $set: updates });
-        result.StudentProfile++;
-      } else if (!/s3\.amazonaws\.com\//.test(String(sp.photoUrl))) {
-        result.missing++;
-      }
-    }
-
-    // TutorProfile: photoUrl, resumeUrl, demoVideoUrl, aadhaarUrls, panUrl
-    const tps = await TutorProfile.find({});
-    for (const tp of tps) {
-      const updates = {};
-      await migrateField(tp, "photoUrl", updates);
-      await migrateField(tp, "resumeUrl", updates);
-      await migrateField(tp, "demoVideoUrl", updates);
-      await migrateArrayField(tp, "aadhaarUrls", updates);
-      await migrateField(tp, "panUrl", updates);
-      if (Object.keys(updates).length) {
-        await TutorProfile.updateOne({ _id: tp._id }, { $set: updates });
-        result.TutorProfile++;
-      }
-    }
-
-    // Session: recordingUrl, notesUrl, assignmentUrl
-    const sess = await Session.find({});
-    for (const s of sess) {
-      const updates = {};
-      await migrateField(s, "recordingUrl", updates);
-      await migrateField(s, "notesUrl", updates);
-      await migrateField(s, "assignmentUrl", updates);
-      if (Object.keys(updates).length) {
-        await Session.updateOne({ _id: s._id }, { $set: updates });
-        result.Session++;
-      }
-    }
-
-    // Note: pdfUrl, previewImageUrls
-    const Note = require("../models/Note");
-    const notes = await Note.find({});
-    for (const n of notes) {
-      const updates = {};
-      await migrateField(n, "pdfUrl", updates);
-      await migrateArrayField(n, "previewImageUrls", updates);
-      if (Object.keys(updates).length) {
-        await Note.updateOne({ _id: n._id }, { $set: updates });
-        result.Note++;
-      }
-    }
-
-    return res.json({ success: true, message: "Migration completed", result });
   } catch (err) {
     console.error("migrateUploadsToS3 error:", err);
     return res
