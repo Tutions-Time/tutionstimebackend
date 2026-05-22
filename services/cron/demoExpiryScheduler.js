@@ -13,8 +13,10 @@ const DEMO_DURATION_MINUTES = Number(
 const DEMO_EXPIRE_GRACE_MINUTES = Number(
   process.env.DEMO_EXPIRE_GRACE_MINUTES || 5
 );
-const DEMO_PENDING_TUTOR_ACCEPT_EXPIRY_HOURS = Number(
-  process.env.DEMO_PENDING_TUTOR_ACCEPT_EXPIRY_HOURS || 5
+const DEMO_PENDING_ACCEPT_EXPIRY_HOURS = Number(
+  process.env.DEMO_PENDING_ACCEPT_EXPIRY_HOURS ||
+    process.env.DEMO_PENDING_TUTOR_ACCEPT_EXPIRY_HOURS ||
+    5
 );
 
 function parseTime(timeStr) {
@@ -54,7 +56,47 @@ function getBookingEndDatetime(booking) {
   return endDate;
 }
 
-async function notifyPendingTutorAcceptanceExpired(booking) {
+function getPendingExpiryContext(booking, { studentName, tutorName, subject }) {
+  const expiryHours = DEMO_PENDING_ACCEPT_EXPIRY_HOURS;
+
+  if (booking.requestedBy === "tutor") {
+    return {
+      reason: "student-no-response",
+      nonResponderName: studentName,
+      requesterName: tutorName,
+      studentEmailMessage:
+        `The demo request from <strong>${tutorName}</strong> for ` +
+        `<strong>${subject}</strong> expired because you did not accept it within ${expiryHours} hours. Please Book Again if you still want the demo.`,
+      tutorEmailMessage:
+        `Your demo request for <strong>${subject}</strong> expired because ` +
+        `<strong>${studentName}</strong> did not accept it within ${expiryHours} hours. Please Book Again.`,
+      studentInAppMessage:
+        `The demo request from ${tutorName} expired because you did not accept it within ${expiryHours} hours. Please Book Again.`,
+      tutorInAppMessage:
+        `Your demo request with ${studentName} expired because it was not accepted within ${expiryHours} hours. Please Book Again.`,
+      realtimeMessage: `The student did not accept the demo request within ${expiryHours} hours.`,
+    };
+  }
+
+  return {
+    reason: "tutor-no-response",
+    nonResponderName: tutorName,
+    requesterName: studentName,
+    studentEmailMessage:
+      `Your demo request for <strong>${subject}</strong> expired because ` +
+      `<strong>${tutorName}</strong> did not accept it within ${expiryHours} hours. Please Book Again.`,
+    tutorEmailMessage:
+      `The demo request from <strong>${studentName}</strong> for ` +
+      `<strong>${subject}</strong> expired because you did not accept it within ${expiryHours} hours.`,
+    studentInAppMessage:
+      `Your demo request with ${tutorName} expired because it was not accepted within ${expiryHours} hours. Please Book Again.`,
+    tutorInAppMessage:
+      `The demo request from ${studentName} expired because it was not accepted within ${expiryHours} hours.`,
+    realtimeMessage: `The tutor did not accept the demo request within ${expiryHours} hours.`,
+  };
+}
+
+async function notifyPendingAcceptanceExpired(booking) {
   try {
     const [studentUser, tutorUser, studentProfile, tutorProfile] =
       await Promise.all([
@@ -71,9 +113,11 @@ async function notifyPendingTutorAcceptanceExpired(booking) {
     const studentName = studentProfile?.name || "Student";
     const tutorName = tutorProfile?.name || "Tutor";
     const subject = booking.subject || "the demo class";
-    const reasonText =
-      `The demo request for <strong>${subject}</strong> expired because ` +
-      `<strong>${tutorName}</strong> did not accept it within 5 hours.`;
+    const context = getPendingExpiryContext(booking, {
+      studentName,
+      tutorName,
+      subject,
+    });
 
     if (studentUser?.email && notificationService?.sendEmail) {
       await notificationService.sendEmail(
@@ -82,7 +126,8 @@ async function notifyPendingTutorAcceptanceExpired(booking) {
         "",
         emailTpl.bookingExpiredHTML({
           headline: "Demo Request Expired",
-          message: reasonText,
+          message: context.studentEmailMessage,
+          ctaLabel: "Book Again",
         })
       );
     }
@@ -94,9 +139,8 @@ async function notifyPendingTutorAcceptanceExpired(booking) {
         "",
         emailTpl.bookingExpiredHTML({
           headline: "Demo Request Expired",
-          message:
-            `The demo request from <strong>${studentName}</strong> for ` +
-            `<strong>${subject}</strong> expired because it was not accepted within 5 hours.`,
+          message: context.tutorEmailMessage,
+          ctaLabel: "Book Again",
         })
       );
     }
@@ -105,14 +149,14 @@ async function notifyPendingTutorAcceptanceExpired(booking) {
       await notificationService.createInApp(
         booking.studentId,
         "Demo Request Expired",
-        `Your demo request with ${tutorName} expired because it was not accepted within 5 hours.`,
-        { bookingId: booking._id, reason: "tutor-no-response" }
+        context.studentInAppMessage,
+        { bookingId: booking._id, reason: context.reason }
       );
       await notificationService.createInApp(
         booking.tutorId,
         "Demo Request Expired",
-        `The demo request from ${studentName} expired because it was not accepted within 5 hours.`,
-        { bookingId: booking._id, reason: "tutor-no-response" }
+        context.tutorInAppMessage,
+        { bookingId: booking._id, reason: context.reason }
       );
     }
   } catch (err) {
@@ -120,14 +164,13 @@ async function notifyPendingTutorAcceptanceExpired(booking) {
   }
 }
 
-async function expirePendingStudentRequests(now) {
+async function expirePendingRequests(now) {
   const threshold = new Date(
-    now.getTime() - DEMO_PENDING_TUTOR_ACCEPT_EXPIRY_HOURS * 60 * 60 * 1000
+    now.getTime() - DEMO_PENDING_ACCEPT_EXPIRY_HOURS * 60 * 60 * 1000
   );
 
   const pendingBookings = await Booking.find({
     type: "demo",
-    requestedBy: "student",
     status: "pending",
     createdAt: { $lte: threshold },
     studentJoinedAt: null,
@@ -135,16 +178,22 @@ async function expirePendingStudentRequests(now) {
   });
 
   for (const booking of pendingBookings) {
+    const context = getPendingExpiryContext(booking, {
+      studentName: "Student",
+      tutorName: "Tutor",
+      subject: booking.subject || "the demo class",
+    });
+
     booking.status = "expired";
-    booking.expiryReason = "tutor-no-response";
+    booking.expiryReason = context.reason;
     booking.expiredAt = now;
     await booking.save();
 
-    await notifyPendingTutorAcceptanceExpired(booking);
+    await notifyPendingAcceptanceExpired(booking);
 
     realtimeEvents.notifyBookingStatusUpdate(booking, {
       title: "Demo request expired",
-      message: "The tutor did not accept the demo request within 5 hours.",
+      message: context.realtimeMessage,
       body: "We have marked the demo request as expired for both student and tutor.",
     });
   }
@@ -153,7 +202,7 @@ async function expirePendingStudentRequests(now) {
 async function runOnce() {
   const now = new Date();
 
-  await expirePendingStudentRequests(now);
+  await expirePendingRequests(now);
 
   const threshold = new Date(
     now.getTime() -

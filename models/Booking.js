@@ -60,7 +60,7 @@ const bookingSchema = new mongoose.Schema(
     type: { type: String, enum: ['demo', 'regular'], default: 'demo' },
     expiryReason: {
       type: String,
-      enum: [null, 'tutor-no-response', 'no-show'],
+      enum: [null, 'tutor-no-response', 'student-no-response', 'no-show'],
       default: null,
     },
     expiredAt: { type: Date, default: null },
