@@ -237,7 +237,7 @@ function validateBatchInput(tp, body) {
   // Price per student from payload (fallback to tutor profile if missing)
   const priceInput = body.pricePerMonth ?? body.pricePerStudent ?? tp.monthlyRate;
   const pricePerStudent = Number(priceInput);
-  if (!Number.isFinite(pricePerStudent) || pricePerStudent <= 0) errors.push("Invalid price per month");
+  if (!Number.isFinite(pricePerStudent) || pricePerStudent <= 0) errors.push("Invalid monthly price per student");
   payload.pricePerStudent = pricePerStudent;
 
   const description = body.description ? String(body.description).trim() : "";
