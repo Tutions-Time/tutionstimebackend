@@ -209,6 +209,11 @@ function validateBatchInput(tp, body) {
   const boards = Array.isArray(tp.boards) ? tp.boards : [];
   const payload = {};
 
+  const billingType = String(body.billingType || body.planType || "").trim().toLowerCase();
+  if (billingType === "hourly") {
+    errors.push("Hourly billing is only available for one-to-one classes");
+  }
+
   const subject = String(body.subject || "").trim();
   if (!subject || !subjects.includes(subject)) errors.push("Invalid subject");
   payload.subject = subject;
@@ -403,6 +408,17 @@ exports.editBatch = async (req, res) => {
     if (!tp || String(gb.tutorId) !== String(tp._id)) return res.status(403).json({ success: false, message: "Not authorized" });
 
     const update = { ...(req.body || {}) };
+    const billingType = String(update.billingType || update.planType || "").trim().toLowerCase();
+    if (billingType === "hourly") {
+      return res.status(422).json({
+        success: false,
+        message: "Validation failed",
+        errors: ["Hourly billing is only available for one-to-one classes"],
+      });
+    }
+    delete update.billingType;
+    delete update.planType;
+    delete update.numberOfClasses;
     const sameDate = (a, b) => {
       if (!a || !b) return false;
       const da = new Date(a);

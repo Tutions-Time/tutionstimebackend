@@ -32,7 +32,7 @@ const migrateUploadsToS3 = async (req, res) => {
   }
 };
 
-// Get all users with pagination + filters + search + referral fields
+// Get all users with pagination + filters + search
 const getAllUsers = async (req, res) => {
   try {
     const {
@@ -104,48 +104,6 @@ const getAllUsers = async (req, res) => {
     const tutorMap = new Map(
       tutorProfiles.map((p) => [p.userId.toString(), p]),
     );
-
-    // Referral: own code and used code
-    let codeMap = new Map();
-    try {
-      const ReferralCode = require("../models/ReferralCode");
-      const codes = await ReferralCode.find({ ownerUserId: { $in: userIds } })
-        .select("ownerUserId code")
-        .lean();
-      codeMap = new Map(codes.map((c) => [c.ownerUserId.toString(), c.code]));
-    } catch (_) {}
-
-    // Referrer resolution for display
-    const referrerIds = users
-      .map((u) => u.referrerUserId)
-      .filter(Boolean)
-      .map((id) => id.toString());
-    let refRoleMap = new Map();
-    let refTutorNameMap = new Map();
-    let refStudentNameMap = new Map();
-    if (referrerIds.length) {
-      const refUsers = await User.find({ _id: { $in: referrerIds } })
-        .select("_id role")
-        .lean();
-      refRoleMap = new Map(refUsers.map((ru) => [ru._id.toString(), ru.role]));
-      const refTutorProfiles = await TutorProfile.find({
-        userId: { $in: referrerIds },
-      })
-        .select("userId name")
-        .lean();
-      refTutorNameMap = new Map(
-        refTutorProfiles.map((p) => [p.userId.toString(), p.name]),
-      );
-      const StudentProfile = require("../models/StudentProfile");
-      const refStudentProfiles = await StudentProfile.find({
-        userId: { $in: referrerIds },
-      })
-        .select("userId name")
-        .lean();
-      refStudentNameMap = new Map(
-        refStudentProfiles.map((p) => [p.userId.toString(), p.name]),
-      );
-    }
 
     const baseUrl = (process.env.BASE_URL || "").replace(/\/$/, "");
     const mergedUsers = users.map((u) => {
@@ -226,17 +184,6 @@ const getAllUsers = async (req, res) => {
         lastLogin: u.lastLogin,
         createdAt: u.createdAt,
         profilePhoto: photoUrl,
-        referralCode: codeMap.get(u._id.toString()) || null,
-        referralCodeUsed: u.referralCodeUsed || null,
-        referrerUserId: u.referrerUserId || null,
-        referrerName:
-          (u.referrerUserId &&
-            (refTutorNameMap.get(u.referrerUserId.toString()) ||
-              refStudentNameMap.get(u.referrerUserId.toString()))) ||
-          null,
-        referrerRole:
-          (u.referrerUserId && refRoleMap.get(u.referrerUserId.toString())) ||
-          null,
       };
     });
 
@@ -276,7 +223,6 @@ const getUserById = async (req, res) => {
 
     let profile;
     let roleDetails = {};
-    let referralCodeStr = null;
     const userObj = user.toObject ? user.toObject() : user;
 
     if (user.role === "student") {
@@ -292,18 +238,11 @@ const getUserById = async (req, res) => {
       }
     }
 
-    try {
-      const ReferralCode = require("../models/ReferralCode");
-      const mine = await ReferralCode.findOne({ ownerUserId: userId }).lean();
-      referralCodeStr = mine?.code || null;
-    } catch (_) {}
-
     res.status(200).json({
       success: true,
       data: {
         user: { ...userObj, id: user._id },
         profile: profile || null,
-        referralCode: referralCodeStr,
         roleDetails,
       },
     });

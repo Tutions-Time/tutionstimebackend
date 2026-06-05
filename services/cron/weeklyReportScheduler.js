@@ -75,7 +75,7 @@ async function sendWeeklyReports() {
       const sum = await studentWeeklySummary(s.userId);
       if (s.email && notificationService?.sendEmail) {
         const html = `<h3>Your Weekly Learning Summary</h3><p>Sessions: ${sum.sessions}</p><p>Completed: ${sum.completed}</p><p>Attendance: ${sum.attendanceRate}%</p><p>Assignments received: ${sum.assignments}</p>`;
-        await notificationService.sendEmail(s.email, "Weekly Summary - TuitionTime", "", html);
+        await notificationService.sendEmail(s.email, "Weekly Summary - tuitionstime", "", html);
       }
       try {
         await AdminNotification.create({ title: "Weekly summary sent (student)", message: `Sent to ${s.name}`, meta: { userId: s.userId, ...sum } });
@@ -98,7 +98,7 @@ async function sendWeeklyReports() {
           <p>Materials uploaded: Notes ${sum.materials.notes}, Assignments ${sum.materials.assignments}, Recordings ${sum.materials.recordings}</p>
           ${sum.topComments.length ? `<p>Top comments:</p><ul>${sum.topComments.map(c=>`<li>${c}</li>`).join("")}</ul>` : ""}
         `;
-        await notificationService.sendEmail(t.email, "Weekly Summary - TuitionTime", "", html);
+        await notificationService.sendEmail(t.email, "Weekly Summary - tuitionstime", "", html);
       }
       if (notificationService?.createInApp) {
         await notificationService.createInApp(t.userId, "Weekly Summary", `Sessions ${sum.sessions}, Completed ${sum.completed}, Rating ${sum.averageRating.toFixed(1)}`, { type: "weekly", period: "7d" });

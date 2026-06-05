@@ -67,12 +67,6 @@ const userSchema = new mongoose.Schema({
     push: { type: Boolean, default: true },
     inapp: { type: Boolean, default: true }
   },
-  // Referral fields
-  referrerUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-  referralCodeUsed: { type: String, default: null },
-  referralRewardGranted: { type: Boolean, default: false },
-  referralSignupBonusGranted: { type: Boolean, default: false },
-  referralStudentRewardGranted: { type: Boolean, default: false }
 }, {
   timestamps: true
 });

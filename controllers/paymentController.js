@@ -11,8 +11,6 @@ const { default: mongoose } = require("mongoose");
 const GroupBatch = require("../models/GroupBatch");
 const Coupon = require("../models/Coupon");
 const CouponUse = require("../models/CouponUse");
-const ReferralCode = require("../models/ReferralCode");
-const ReferralUse = require("../models/ReferralUse");
 const Session = require("../models/Session");
 const RefundRequest = require("../models/RefundRequest");
 const notificationService = require("../services/notificationService");
@@ -291,113 +289,6 @@ function applyReasonModifier(ctx, reasonCode) {
   return { ...ctx, refundablePercentage: percent, refundableCap: cap, remainingRefundable: remaining };
 }
 
-async function grantReferralIfEligible({ studentUserId, paymentId, amount }) {
-  // Entry: attempt referral grant for the given student and payment context
-  console.log("getreffer", studentUserId, paymentId, amount);
-  try {
-    // Resolve user (supports both User._id and StudentProfile._id inputs)
-    const User = require("../models/User");
-    const ReferralSettings = require("../models/ReferralSettings");
-    let user = await User.findById(studentUserId);
-    if (!user) {
-      const StudentProfile = require("../models/StudentProfile");
-      const sp = await StudentProfile.findById(studentUserId).select("userId");
-      if (sp?.userId) {
-        user = await User.findById(sp.userId);
-      }
-    }
-    // Guard: must have a linked referrer
-    if (!user || !user.referrerUserId) { console.log("referral:skip-no-user-or-referrer", { userPresent: !!user, referrer: user?.referrerUserId }); return; }
-    // Load referral code and referrer role for reward computation
-    const rc = user.referralCodeUsed ? await ReferralCode.findOne({ code: user.referralCodeUsed }) : null;
-    const referrer = await User.findById(user.referrerUserId).select("role");
-    const settings = await ReferralSettings.findOne();
-    const defaultStudent = 100;
-    const defaultTutor = 100;
-    const rewardAmount = (referrer?.role === "tutor"
-      ? (settings?.tutorRewardAmount ?? defaultTutor)
-      : (settings?.studentRewardAmount ?? defaultStudent));
-    // Guard: respect code max usage
-    if (rc && rc.maxUses && rc.usedCount >= rc.maxUses) { console.log("referral:skip-code-limit", { code: rc.code, usedCount: rc.usedCount, maxUses: rc.maxUses }); return; }
-    const refRole = referrer?.role === "student" ? "student" : "tutor";
-
-    let changed = false;
-
-    // 1) Credit referrer if not already granted
-    if (!user.referralRewardGranted) {
-      const aw1 = await walletService.getAdminWallet();
-      if ((aw1?.balance || 0) < rewardAmount) {
-        await walletService.adminCredit(rewardAmount, "Referral fund top-up", { type: "referral", id: paymentId });
-      }
-      await walletService.adminDebit(rewardAmount, "Referral reward", { type: "referral", id: paymentId });
-      await walletService.creditWallet(user.referrerUserId, refRole, rewardAmount, "Referral reward", { type: "referral", id: paymentId });
-      user.referralRewardGranted = true;
-      console.log("referral:granted-referrer", { referrerUserId: user.referrerUserId, amount: rewardAmount, paymentId });
-      changed = true;
-    }
-
-    // 2) Credit student signup bonus if configured and not yet granted
-    const bonus = settings?.referredUserBonusAmount ?? 0;
-    if (bonus > 0 && !user.referralSignupBonusGranted) {
-      const aw2 = await walletService.getAdminWallet();
-      if ((aw2?.balance || 0) < bonus) {
-        await walletService.adminCredit(bonus, "Referral fund top-up", { type: "referral", id: paymentId });
-      }
-      await walletService.adminDebit(bonus, "Referral signup bonus", { type: "referral", id: paymentId });
-      await walletService.creditWallet(user._id, "student", bonus, "Referral signup bonus", { type: "referral", id: paymentId });
-      user.referralSignupBonusGranted = true;
-      console.log("referral:granted-student-bonus", { studentUserId: user._id, bonus, paymentId });
-      changed = true;
-    }
-
-    // 3) Credit student referral reward (full) if not yet granted
-    if (!user.referralStudentRewardGranted) {
-      const aw3 = await walletService.getAdminWallet();
-      if ((aw3?.balance || 0) < rewardAmount) {
-        await walletService.adminCredit(rewardAmount, "Referral fund top-up", { type: "referral", id: paymentId });
-      }
-      await walletService.adminDebit(rewardAmount, "Referral student reward", { type: "referral", id: paymentId });
-      await walletService.creditWallet(user._id, "student", rewardAmount, "Referral student reward", { type: "referral", id: paymentId });
-      user.referralStudentRewardGranted = true;
-      console.log("referral:granted-student-reward", { studentUserId: user._id, amount: rewardAmount, paymentId });
-      changed = true;
-    }
-
-    // 4) Record referral usage and attach paymentId idempotently
-    if (rc) {
-      const existing = await ReferralUse.findOne({ referralCodeId: rc._id, referredUserId: user._id });
-      if (!existing) {
-        await ReferralUse.create({ referralCodeId: rc._id, referrerUserId: user.referrerUserId, referredUserId: user._id, paymentId, rewardGranted: true, amountGranted: rewardAmount });
-        rc.usedCount = (rc.usedCount || 0) + 1;
-        await rc.save();
-      } else if (paymentId && !existing.paymentId) {
-        existing.paymentId = paymentId;
-        await existing.save();
-      }
-    }
-
-    // 5) Persist flags if any grants occurred
-    if (changed) await user.save();
-
-    // 6) Notifications (best-effort)
-    try {
-      const notificationService = require("../services/notificationService");
-      await notificationService.notifyUser(
-        user.referrerUserId,
-        "Referral Reward Granted",
-        `A referral reward was credited`,
-        { paymentId, amountGranted: rewardAmount }
-      );
-      await notificationService.notifyUser(
-        user._id,
-        "Referral Bonus Applied", 
-        bonus > 0 ? `A signup bonus was credited` : `Referral applied`,
-        { paymentId, bonusAmount: bonus }
-      );
-    } catch (_) {}
-  } catch (_) {}
-}
-
 /**
  * STUDENT: Create Razorpay ORDER for a regular class
  * Supports weekly / monthly / number-of-classes multiplier.
@@ -513,7 +404,6 @@ exports.createSubscriptionOrder = async (req, res) => {
             const coupon = await Coupon.findOne({ code: (couponCode || "").trim() });
             await recordCouponUse({ coupon, userId: sp?.userId || userId, paymentId: paymentDoc._id, amountDiscounted: discount });
           }
-          await grantReferralIfEligible({ studentUserId: sp?.userId || userId, paymentId: paymentDoc._id, amount: totalAmountINR });
         } catch (_) {}
 
         await recalculateSubscriptionRelease(paymentDoc);
@@ -618,6 +508,13 @@ exports.createSubscriptionOrder = async (req, res) => {
 exports.createGroupOrder = async (req, res) => {
   try {
     const { batchId, reservationId, couponCode } = req.body;
+    const billingType = String(req.body?.billingType || req.body?.planType || "").trim().toLowerCase();
+    if (billingType === "hourly") {
+      return res.status(400).json({
+        success: false,
+        message: "Hourly billing is only available for one-to-one classes",
+      });
+    }
     const months = Number(req.body?.months ?? 1);
     const userId = req.user.id;
     const StudentProfile = require("../models/StudentProfile");
@@ -710,7 +607,6 @@ exports.createGroupOrder = async (req, res) => {
             const coupon = await Coupon.findOne({ code: (couponCode || "").trim() });
             await recordCouponUse({ coupon, userId, paymentId: paymentDoc._id, amountDiscounted: discount });
           }
-          await grantReferralIfEligible({ studentUserId: userId, paymentId: paymentDoc._id, amount: amountINR });
         } catch (_) {}
 
         await createAdminNotification(
@@ -891,7 +787,6 @@ exports.createNoteOrder = async (req, res) => {
             const coupon = await Coupon.findOne({ code: (couponCode || "").trim() });
             await recordCouponUse({ coupon, userId: studentUserId, paymentId: paymentDoc._id, amountDiscounted: discount });
           }
-          await grantReferralIfEligible({ studentUserId, paymentId: paymentDoc._id, amount: amountINR });
         } catch (_) {}
 
         await createAdminNotification(
@@ -1123,7 +1018,7 @@ exports.razorpayWebhook = async (req, res) => {
           console.error("Wallet update error:", walletErr.message);
         }
 
-        // Record coupon usage and grant referral after successful capture
+        // Record coupon usage after successful capture
         try {
           const couponCode = notes && notes.coupon;
           const discountVal = Number(notes && notes.discount ? notes.discount : 0) || 0;
@@ -1131,7 +1026,6 @@ exports.razorpayWebhook = async (req, res) => {
             const coupon = await Coupon.findOne({ code: couponCode });
             await recordCouponUse({ coupon, userId: studentUserId, paymentId: payment._id, amountDiscounted: discountVal });
           }
-          await grantReferralIfEligible({ studentUserId, paymentId: payment._id, amount });
         } catch (_) {}
       }
 
@@ -1221,7 +1115,6 @@ exports.razorpayWebhook = async (req, res) => {
             const sp3 = await StudentProfile.findById(payment.studentId).select("userId");
             const studentUserId3 = sp3?.userId;
             if (studentUserId3) {
-              await grantReferralIfEligible({ studentUserId: studentUserId3, paymentId: payment._id, amount: amt });
             }
           } catch (_) {}
 
@@ -1622,7 +1515,7 @@ exports.verifyPayment = async (req, res) => {
         console.error("Wallet update error:", walletErr.message);
       }
 
-      // Coupon/referral recording for subscription (client verify)
+      // Coupon recording for subscription (client verify)
       try {
         const StudentProfile = require("../models/StudentProfile");
         const sp3 = await StudentProfile.findById(payment.studentId).select("userId");
@@ -1635,13 +1528,6 @@ exports.verifyPayment = async (req, res) => {
         if (code && studentUserIdX) {
           const coupon = await Coupon.findOne({ code });
           await recordCouponUse({ coupon, userId: studentUserIdX, paymentId: payment._id, amountDiscounted: disc });
-        }
-        if (studentUserIdX) {
-          await grantReferralIfEligible({
-            studentUserId: studentUserIdX,
-            paymentId: payment._id,
-            amount: Number(payment.amount || 0),
-          });
         }
       } catch (_) {}
     }
@@ -1716,13 +1602,11 @@ exports.verifyPayment = async (req, res) => {
             );
           } catch (_) {}
         }
-        // 6) Referral grant (client verify path): link student and award if eligible
         try {
           const StudentProfile = require("../models/StudentProfile");
           const sp4 = await StudentProfile.findById(payment.studentId).select("userId");
           const studentUserIdY = sp4?.userId || req.user?.id;
           if (studentUserIdY) {
-            await grantReferralIfEligible({ studentUserId: studentUserIdY, paymentId: payment._id, amount: payment.amount || Number(note.price) || 0 });
           }
         } catch (_) {}
       } catch (walletErr) {
@@ -1932,7 +1816,7 @@ exports.verifyGroupPayment = async (req, res) => {
           );
         } catch (_) {}
       }
-      // Record coupon and grant referral
+      // Record coupon usage
       try {
         const studentUserIdX = req.user?.id;
         const noteStr = String(payment.notes || "");
@@ -1945,7 +1829,6 @@ exports.verifyGroupPayment = async (req, res) => {
           await recordCouponUse({ coupon, userId: studentUserIdX, paymentId: payment._id, amountDiscounted: disc });
         }
         if (studentUserIdX) {
-          await grantReferralIfEligible({ studentUserId: studentUserIdX, paymentId: payment._id, amount });
         }
       } catch (_) {}
     } catch (walletErr) {
@@ -2247,44 +2130,11 @@ exports.listAllPaymentsHistory = async (req, res) => {
           .lean()
       : [];
 
-    // Referral transactions (credits to referrer or referred student)
-    const Transaction = require("../models/Transaction");
-    const refTxs = include("referral")
-      ? await Transaction.find({
-          ...buildPaymentDateFilter({ from, to }),
-          'reference.type': 'referral'
-        })
-          .sort({ createdAt: -1 })
-          .populate({ path: 'userId', select: 'role' })
-          .lean()
-      : [];
-
-    // Names for referral rows
-    const userIds = refTxs.map(t => String(t.userId?._id || t.userId));
-    const StudentProfile = require("../models/StudentProfile");
-    const TutorProfile = require("../models/TutorProfile");
-    const sps = userIds.length ? await StudentProfile.find({ userId: { $in: userIds } }).select("userId name").lean() : [];
-    const tps = userIds.length ? await TutorProfile.find({ userId: { $in: userIds } }).select("userId name").lean() : [];
-    const spName = sps.reduce((acc, s) => { acc[String(s.userId)] = s.name || 'Student'; return acc; }, {});
-    const tpName = tps.reduce((acc, t) => { acc[String(t.userId)] = t.name || 'Tutor'; return acc; }, {});
-
-    // Referral code enrichment (if available)
-    const ReferralUseModel = require("../models/ReferralUse");
-    const refUses = userIds.length
-      ? await ReferralUseModel.find(from || to ? { createdAt: { ...(from ? { $gte: new Date(from) } : {}), ...(to ? { $lte: new Date(to) } : {}) } } : {})
-          .populate({ path: 'referralCodeId', select: 'code' })
-          .lean()
-      : [];
-    const byReferrer = refUses.reduce((acc, ru) => { acc[String(ru.referrerUserId)] = ru; return acc; }, {});
-    const byReferred = refUses.reduce((acc, ru) => { acc[String(ru.referredUserId)] = ru; return acc; }, {});
-
     const allPayments = [...subs, ...notes, ...groups];
     const allIds = allPayments.map((p) => p._id);
     const CouponUse = require("../models/CouponUse");
     const coupons = allIds.length ? await CouponUse.find({ paymentId: { $in: allIds } }).populate({ path: "couponId", select: "code value type" }).lean() : [];
-    const referrals = allIds.length ? await ReferralUseModel.find({ paymentId: { $in: allIds } }).populate({ path: "referralCodeId", select: "code" }).lean() : [];
     const cuMap = coupons.reduce((acc, c) => { acc[String(c.paymentId)] = c; return acc; }, {});
-    const ruMap = referrals.reduce((acc, r) => { acc[String(r.paymentId)] = r; return acc; }, {});
 
     const parseNotes = (n) => {
       const s = String(n || "");
@@ -2314,9 +2164,6 @@ exports.listAllPaymentsHistory = async (req, res) => {
         adminAmount,
         couponCode: (cuMap[String(p._id)]?.couponId?.code) || parseNotes(p.notes).couponCode || "",
         couponDiscount: (cuMap[String(p._id)]?.amountDiscounted) ?? parseNotes(p.notes).couponDiscount ?? 0,
-        referralCode: ruMap[String(p._id)]?.referralCodeId?.code || "",
-        referralAmount: ruMap[String(p._id)]?.amountGranted || 0,
-        referralRewardGranted: Boolean(ruMap[String(p._id)]?.rewardGranted),
         tutorNetAmount: tutorNet,
         fundReleaseStatus: releaseStatus,
         fundReleaseDate: p.fundReleaseDate,
@@ -2339,31 +2186,6 @@ exports.listAllPaymentsHistory = async (req, res) => {
       payoutUpi: p.tutorId?.upiId || null,
     }));
 
-    // Build referral rows
-    let mapReferral = refTxs.map((t) => ({
-      _id: t._id,
-      type: 'referral',
-      amount: t.amount,
-      currency: 'INR',
-      status: t.status,
-      gateway: '',
-      gatewayOrderId: '',
-      gatewayPaymentId: '',
-      createdAt: t.createdAt,
-      studentName: (t.userId?.role === 'student') ? (spName[String(t.userId?._id || t.userId)] || 'Student') : '—',
-      tutorName: (t.userId?.role === 'tutor') ? (tpName[String(t.userId?._id || t.userId)] || 'Tutor') : '—',
-      couponCode: '',
-      couponDiscount: 0,
-      referralCode: (byReferrer[String(t.userId?._id || t.userId)]?.referralCodeId?.code) || (byReferred[String(t.userId?._id || t.userId)]?.referralCodeId?.code) || '',
-      referralAmount: t.amount,
-      referralRewardGranted: t.status === 'completed',
-      adminAmount: 0,
-      fundReleaseStatus: 'released',
-      fundReleaseDate: t.createdAt,
-      fundReleasedAt: t.createdAt,
-      pendingReleaseAmount: 0,
-      refundAmount: 0,
-    }));
 
     const nameMatch = (n, q) => (q ? String(n || "").toLowerCase().includes(String(q).toLowerCase()) : true);
     if (student) {
@@ -2371,20 +2193,15 @@ exports.listAllPaymentsHistory = async (req, res) => {
       mapNote = mapNote.filter((r) => nameMatch(r.studentName, student));
       mapGroup = mapGroup.filter((r) => nameMatch(r.studentName, student));
       mapPayout = mapPayout.filter((r) => nameMatch(r.studentName, student));
-      mapReferral = mapReferral.filter((r) => nameMatch(r.studentName, student));
     }
     if (tutor) {
       mapSub = mapSub.filter((r) => nameMatch(r.tutorName, tutor));
       mapNote = mapNote.filter((r) => nameMatch(r.tutorName, tutor));
       mapGroup = mapGroup.filter((r) => nameMatch(r.tutorName, tutor));
       mapPayout = mapPayout.filter((r) => nameMatch(r.tutorName, tutor));
-      mapReferral = mapReferral.filter((r) => nameMatch(r.tutorName, tutor));
     }
 
-    const combinedAll = [...mapSub, ...mapNote, ...mapGroup, ...mapPayout, ...mapReferral].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    if (type === 'referral') {
-      console.log('Admin history referral count:', mapReferral.length, 'from', refTxs.length);
-    }
+    const combinedAll = [...mapSub, ...mapNote, ...mapGroup, ...mapPayout].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     const total = combinedAll.length;
     const start = (pageNum - 1) * limitNum;
     const data = combinedAll.slice(start, start + limitNum);
@@ -3693,18 +3510,10 @@ exports.getAdminRevenueTimeseries = async (req, res) => {
       { $group: { _id: bucketFmt, total: { $sum: "$amount" }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } },
     ]);
-    // Referral totals from wallet transactions (credits for referral rewards/bonuses)
-    const Transaction = require("../models/Transaction");
-    const refs = await Transaction.aggregate([
-      { $match: { status: { $in: ["completed", "locked"] }, createdAt: { $gte: start, $lte: end }, 'reference.type': 'referral' } },
-      { $group: { _id: bucketFmt, total: { $sum: "$amount" }, count: { $sum: 1 } } },
-      { $sort: { _id: 1 } },
-    ]);
     const seriesDates = new Set([...
       subs.map((x) => x._id),
       ...notes.map((x) => x._id),
       ...groups.map((x) => x._id),
-      ...refs.map((x) => x._id),
     ]);
     const commissionPercent = 25;
     const merged = Array.from(seriesDates).sort().map((d) => {
@@ -3714,7 +3523,6 @@ exports.getAdminRevenueTimeseries = async (req, res) => {
       const subTotal = s?.total || 0;
       const noteTotal = n?.total || 0;
       const groupTotal = g?.total || 0;
-      const refTotal = (refs.find((x) => x._id === d)?.total) || 0;
       const commissionTotal = Math.round(((subTotal + noteTotal + groupTotal) * commissionPercent) / 100);
       return {
         date: d,
@@ -3724,8 +3532,6 @@ exports.getAdminRevenueTimeseries = async (req, res) => {
         noteCount: n?.count || 0,
         groupTotal,
         groupCount: g?.count || 0,
-        referralTotal: refTotal,
-        referralCount: (refs.find((x) => x._id === d)?.count) || 0,
         commissionTotal,
       };
     });
@@ -3743,7 +3549,6 @@ exports.getAdminRevenueTimeseries = async (req, res) => {
       subscriptionTotal: merged.reduce((sum, x) => sum + x.subscriptionTotal, 0),
       noteTotal: merged.reduce((sum, x) => sum + x.noteTotal, 0),
       groupTotal: merged.reduce((sum, x) => sum + (x.groupTotal || 0), 0),
-      referralTotal: merged.reduce((sum, x) => sum + (x.referralTotal || 0), 0),
       commissionTotal: merged.reduce((sum, x) => sum + x.commissionTotal, 0),
       refundTotal,
       pendingReleaseTotal,

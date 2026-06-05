@@ -122,7 +122,7 @@ async function notifyPendingAcceptanceExpired(booking) {
     if (studentUser?.email && notificationService?.sendEmail) {
       await notificationService.sendEmail(
         studentUser.email,
-        "Demo Request Expired - TuitionTime",
+        "Demo Request Expired - tuitionstime",
         "",
         emailTpl.bookingExpiredHTML({
           headline: "Demo Request Expired",
@@ -135,7 +135,7 @@ async function notifyPendingAcceptanceExpired(booking) {
     if (tutorUser?.email && notificationService?.sendEmail) {
       await notificationService.sendEmail(
         tutorUser.email,
-        "Demo Request Expired - TuitionTime",
+        "Demo Request Expired - tuitionstime",
         "",
         emailTpl.bookingExpiredHTML({
           headline: "Demo Request Expired",

@@ -111,7 +111,7 @@ function getBookingEndDateTime(booking) {
 }
 
 function buildDemoTopic(booking) {
-  const subject = booking?.subject || "TuitionTime Demo";
+  const subject = booking?.subject || "tuitionstime Demo";
   if (booking?.preferredDate) {
     const dateLabel = new Date(booking.preferredDate).toLocaleDateString("en-IN");
     return `${subject} (${dateLabel})`;
@@ -745,7 +745,7 @@ async function notifyTutorDemoBooking({
 
       await notificationService.sendEmail(
         studentEmail,
-        "New Demo Request from Tutor - TuitionTime",
+        "New Demo Request from Tutor - tuitionstime",
         "",
         html
       );
@@ -806,7 +806,7 @@ function notifyDemoConfirmed({
         });
         await notificationService.sendEmail(
           studentEmail,
-          "Demo Confirmed - TuitionTime",
+          "Demo Confirmed - tuitionstime",
           "",
           html
         );
@@ -822,7 +822,7 @@ function notifyDemoConfirmed({
         });
         await notificationService.sendEmail(
           tutorEmail,
-          "Demo Confirmed - TuitionTime",
+          "Demo Confirmed - tuitionstime",
           "",
           html
         );
@@ -911,7 +911,7 @@ function notifyDemoCancelled({
         });
         await notificationService.sendEmail(
           studentEmail,
-          "Demo Cancelled - TuitionTime",
+          "Demo Cancelled - tuitionstime",
           "",
           html
         );
@@ -1379,7 +1379,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
 
         await notificationService.sendEmail(
           studentUser.email,
-          "Demo Confirmed - TuitionTime",
+          "Demo Confirmed - tuitionstime",
           "",
           html
         );
@@ -1399,7 +1399,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
 
         await notificationService.sendEmail(
           tutorUser.email,
-          "Demo Confirmed - TuitionTime",
+          "Demo Confirmed - tuitionstime",
           "",
           html
         );
@@ -1475,7 +1475,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
 
         await notificationService.sendEmail(
           tutorUser.email,
-          "Demo Cancelled - TuitionTime",
+          "Demo Cancelled - tuitionstime",
           "",
           html
         );
@@ -1567,7 +1567,7 @@ exports.addFeedback = async (req, res) => {
         });
         await notificationService.sendEmail(
           tutorUser.email,
-          "New Feedback Received - TuitionTime",
+          "New Feedback Received - tuitionstime",
           "",
           html
         );
