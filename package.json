@@ -1,7 +1,7 @@
 {
   "name": "tuitionstime-backend",
   "version": "1.0.0",
-  "description": "Backend API for Tuitionstime platform",
+  "description": "Backend API for tuitionstime platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

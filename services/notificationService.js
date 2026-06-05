@@ -7,6 +7,7 @@ const User = require("../models/User");
 const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
 const wsHub = require("./wsHub");
+const emailTemplates = require("../templates/emailTemplates");
 
 exports.createInApp = async (userId, title, body, meta = {}) => {
   try {
@@ -27,17 +28,30 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+const isFullHtmlDocument = (html) =>
+  /<!doctype\s+html|<html[\s>]/i.test(String(html || ""));
+
+const buildEmailHtml = (subject, text, html) => {
+  if (html && isFullHtmlDocument(html)) return html;
+  return emailTemplates.genericEmailHTML({
+    title: subject,
+    message: text,
+    html: html || "",
+  });
+};
+
 exports.sendEmail = async (to, subject, text, html = null) => {
   if (!transporter) return console.error("No transporter configured");
   if (!to) return console.warn("Missing recipient email");
 
   try {
+    const normalizedText = String(text || "").trim();
     const mailOptions = {
-      from: process.env.FROM_EMAIL || "TuitionTime <no-reply@tuitiontime.com>",
+      from: process.env.FROM_EMAIL || "tuitionstime <no-reply@tuitionstime.com>",
       to,
       subject,
-      text,
-      html: html || `<p>${text.replace(/\n/g, "<br/>")}</p>`,
+      text: normalizedText,
+      html: buildEmailHtml(subject, normalizedText, html),
     };
 
     const info = await transporter.sendMail(mailOptions);

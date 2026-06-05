@@ -40,7 +40,7 @@ const buildBlogPayload = (body, file, existing = null) => {
     status,
     metaTitle: String(body.metaTitle || body.title || "").trim(),
     metaDescription: String(body.metaDescription || body.excerpt || "").trim(),
-    authorName: String(body.authorName || existing?.authorName || "TuitionsTime Team").trim(),
+    authorName: String(body.authorName || existing?.authorName || "tuitionstime Team").trim(),
     publishedAt: nextPublishedAt,
   };
 };

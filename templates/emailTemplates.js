@@ -1,13 +1,30 @@
 // ==============================
-// ✉️  TuitionTime Email Templates (Styled & Branded)
+// ✉️  tuitionstime Email Templates (Styled & Branded)
 // ==============================
 
 const BRAND_COLOR = "#FFD54F";
 const TEXT_COLOR = "#222";
-const LOGO_URL = "https://tuitiontime.com/logo.png"; // ⬅️ replace with your actual logo URL
-const INSTAGRAM_URL = "https://instagram.com/tuitiontime";
-const LINKEDIN_URL = "https://linkedin.com/company/tuitiontime";
-const WEBSITE_URL = "https://tuitiontime.com/dashboard";
+const LOGO_URL = "https://tuitionstime.com/logo.png"; // ⬅️ replace with your actual logo URL
+const INSTAGRAM_URL = "https://instagram.com/tuitionstime";
+const LINKEDIN_URL = "https://www.linkedin.com/company/tuitionstime/";
+const WEBSITE_URL = "https://tuitionstime.com/dashboard";
+
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const textToHtml = (value) =>
+  escapeHtml(value)
+    .split(/\n{2,}/)
+    .map(
+      (paragraph) =>
+        `<p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">${paragraph.replace(/\n/g, "<br/>")}</p>`,
+    )
+    .join("");
 
 const emailWrapper = (title, body, buttonLabel = null, buttonLink = null) => `
 <!DOCTYPE html>
@@ -22,7 +39,7 @@ const emailWrapper = (title, body, buttonLabel = null, buttonLink = null) => `
     <!-- Header -->
     <tr>
       <td align="center" bgcolor="${BRAND_COLOR}" style="padding:25px 20px;">
-        <img src="${LOGO_URL}" alt="TuitionTime" style="height:50px;margin-bottom:5px;" />
+        <img src="${LOGO_URL}" alt="tuitionstime" style="height:50px;margin-bottom:5px;" />
         <h2 style="margin:0;font-size:22px;color:${TEXT_COLOR};">${title}</h2>
       </td>
     </tr>
@@ -48,7 +65,7 @@ const emailWrapper = (title, body, buttonLabel = null, buttonLink = null) => `
     <!-- Footer -->
     <tr>
       <td align="center" style="padding:25px;background:#fafafa;border-top:1px solid #eee;">
-        <p style="margin:0;color:#999;font-size:13px;">© 2025 <strong>TuitionTime</strong>. All rights reserved.</p>
+        <p style="margin:0;color:#999;font-size:13px;">© 2025 <strong>tuitionstime</strong>. All rights reserved.</p>
         <p style="margin:6px 0;">
           <a href="${INSTAGRAM_URL}" style="color:#999;text-decoration:none;margin:0 6px;">Instagram</a> • 
           <a href="${LINKEDIN_URL}" style="color:#999;text-decoration:none;margin:0 6px;">LinkedIn</a> • 
@@ -85,7 +102,7 @@ exports.bookingCancelledHTML = ({ tutorName, subject }) =>
       <p style="font-size:16px;color:#333;">
         Your demo with <strong>${tutorName}</strong> for <strong>${subject}</strong> has been cancelled.
       </p>
-      <p style="color:#555;">You can request another demo anytime from your TuitionTime dashboard.</p>
+      <p style="color:#555;">You can request another demo anytime from your tuitionstime dashboard.</p>
     `,
     "Book Another Demo",
     WEBSITE_URL
@@ -103,10 +120,42 @@ exports.bookingExpiredHTML = ({
       <p style="font-size:16px;color:#333;">
         ${message}
       </p>
-      <p style="color:#555;">You can review the latest status from your TuitionTime dashboard.</p>
+      <p style="color:#555;">You can review the latest status from your tuitionstime dashboard.</p>
     `,
     ctaLabel,
     ctaLink
+  );
+
+exports.genericEmailHTML = ({
+  title = "tuitionstime Update",
+  message = "",
+  html = "",
+  ctaLabel = null,
+  ctaLink = null,
+}) =>
+  emailWrapper(
+    escapeHtml(title),
+    html || textToHtml(message),
+    ctaLabel,
+    ctaLink
+  );
+
+exports.otpEmailHTML = ({ otp, purpose = "continue" }) =>
+  emailWrapper(
+    "Your tuitionstime OTP",
+    `
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        Use this one-time password to ${escapeHtml(purpose)}.
+      </p>
+      <div style="text-align:center;margin:28px 0;">
+        <span style="display:inline-block;letter-spacing:8px;font-size:32px;font-weight:800;color:${TEXT_COLOR};background:#fff8d8;border:1px solid #f1d15a;border-radius:10px;padding:14px 20px;">
+          ${escapeHtml(otp)}
+        </span>
+      </div>
+      <p style="font-size:14px;line-height:1.6;color:#666;margin:0;">
+        This code expires in 5 minutes. If you did not request this, you can safely ignore this email.
+      </p>
+    `
   );
 
 // ==============================
@@ -121,7 +170,7 @@ exports.tutorDemoRequestHTML = ({ studentName, subject, date }) =>
         <strong>${studentName}</strong> requested a demo for <strong>${subject}</strong> on <b>${date}</b>.
       </p>
       <p style="margin-top:10px;color:#555;">
-        Please log in to your TuitionTime dashboard to confirm or cancel this request.
+        Please log in to your tuitionstime dashboard to confirm or cancel this request.
       </p>
     `,
     "View in Dashboard",

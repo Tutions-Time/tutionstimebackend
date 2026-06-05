@@ -17,7 +17,7 @@ const blogSchema = new mongoose.Schema(
     },
     metaTitle: { type: String, default: "", trim: true },
     metaDescription: { type: String, default: "", trim: true, maxlength: 180 },
-    authorName: { type: String, default: "TuitionsTime Team", trim: true },
+    authorName: { type: String, default: "tuitionstime Team", trim: true },
     createdBy: { type: String, default: null },
     publishedAt: { type: Date, default: null },
   },

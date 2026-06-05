@@ -9,6 +9,7 @@ const {
   isTutorProfileComplete,
 } = require("../utils/profileValidation");
 const { createAdminNotification } = require("../services/adminNotification");
+const notificationService = require("../services/notificationService");
 
 const UPI_REGEX = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
@@ -46,6 +47,59 @@ function getCombinedTutorKycStatus(profile) {
   }
   return "pending";
 }
+
+async function notifyTutorsForStudentPincode(studentProfile, studentUserId) {
+  const pincode = String(studentProfile?.pincode || "").trim();
+  if (!pincode) return;
+
+  const tutors = await TutorProfile.find({ pincode })
+    .select("_id userId name email subjects city pincode")
+    .lean();
+  if (!tutors.length) return;
+
+  const tutorUserIds = tutors.map((t) => t.userId).filter(Boolean);
+  if (!tutorUserIds.length) return;
+
+  const activeTutorUsers = await User.find({
+    _id: { $in: tutorUserIds },
+    role: "tutor",
+    status: "active",
+    isDeleted: { $ne: true },
+    isProfileComplete: true,
+  })
+    .select("_id")
+    .lean();
+  const activeTutorUserIds = new Set(activeTutorUsers.map((u) => String(u._id)));
+
+  const studentName = studentProfile?.name || "A student";
+  const subjects = Array.isArray(studentProfile?.subjects)
+    ? studentProfile.subjects.filter(Boolean).slice(0, 3).join(", ")
+    : "";
+  const classText = studentProfile?.classLevel ? `, ${studentProfile.classLevel}` : "";
+  const subjectText = subjects ? ` for ${subjects}` : "";
+  const title = "New student near you";
+  const body = `${studentName}${subjectText}${classText} registered from your pincode ${pincode}.`;
+
+  const matchingTutors = tutors.filter(
+    (t) => t.userId && activeTutorUserIds.has(String(t.userId))
+  );
+
+  await Promise.all(
+    matchingTutors.map(async (t) => {
+      const meta = {
+        type: "student_pincode_match",
+        studentProfileId: studentProfile._id,
+        studentUserId,
+        tutorProfileId: t._id,
+        pincode,
+      };
+      await notificationService.createInApp(t.userId, title, body, meta);
+      if (t.email) {
+        await notificationService.sendEmail(t.email, title, body);
+      }
+    })
+  );
+}
                                                          
 /* ------------------------------------------------------------
    GET USER PROFILE
@@ -59,13 +113,6 @@ const getUserProfile = async (req, res) => {
 
     let profile = null;
     let roleDetails = {};
-    let referralCodeStr = null;
-
-    try {
-      const ReferralCode = require("../models/ReferralCode");
-      const mine = await ReferralCode.findOne({ ownerUserId: userId }).lean();
-      referralCodeStr = mine?.code || null;
-    } catch (_) {}
 
     if (user.role === "student") {
       profile = await StudentProfile.findOne({ userId }).lean();
@@ -97,7 +144,6 @@ const getUserProfile = async (req, res) => {
           updatedAt: user.updatedAt,
         },
         profile: profile || null,
-        referralCode: referralCodeStr,
         roleDetails,
       },
     });
@@ -194,6 +240,8 @@ const updateStudentProfile = async (req, res) => {
 
     // â­ S3 path
     const existingProfile = await StudentProfile.findOne({ userId }).lean();
+    const wasProfileComplete = Boolean(user.isProfileComplete);
+    const previousPincode = String(existingProfile?.pincode || "").trim();
     let photoUrl = null;
     if (req.files?.photo) {
       photoUrl = req.files.photo[0].location; // <-- AWS S3 URL
@@ -290,6 +338,20 @@ const updateStudentProfile = async (req, res) => {
     if (user.isProfileComplete !== isComplete) {
       user.isProfileComplete = isComplete;
       await user.save();
+    }
+
+    const currentPincode = String(profile?.pincode || "").trim();
+    const shouldNotifyTutors =
+      isComplete &&
+      currentPincode &&
+      (!wasProfileComplete || !existingProfile || previousPincode !== currentPincode);
+
+    if (shouldNotifyTutors) {
+      try {
+        await notifyTutorsForStudentPincode(profile, userId);
+      } catch (e) {
+        console.warn("Student pincode tutor notification failed:", e.message);
+      }
     }
 
     // Notify Admin

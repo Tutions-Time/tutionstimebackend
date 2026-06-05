@@ -15,6 +15,14 @@ const MONTHLY_RATE_OPTIONS = buildRateOptions(3500, 10000, 100);
 
 const isAllowedRate = (value, options) => options.includes(Number(value));
 
+const parseBudget = (budget) => {
+  const text = String(budget || "");
+  return {
+    hourly: text.match(/Hourly:\s*Rs\.(\d+)/i)?.[1] || "",
+    monthly: text.match(/Monthly:\s*Rs\.(\d+)/i)?.[1] || "",
+  };
+};
+
 const normalizeArray = (val) => {
   if (!val) return [];
   if (Array.isArray(val)) return val.filter(Boolean);
@@ -112,6 +120,15 @@ const validateStudentProfileData = (data) => {
   const preferredTimes = normalizeArray(data.preferredTimes);
   if (!preferredTimes.length)
     errors.preferredTimes = "Preferred time slots are required";
+
+  const budget = parseBudget(data.budget);
+  if (budget.hourly && budget.monthly) {
+    errors.budget = "Select either hourly or monthly budget, not both";
+  } else if (budget.hourly && !isAllowedRate(budget.hourly, HOURLY_RATE_OPTIONS)) {
+    errors.budget = "Select an hourly budget from Rs.400 to Rs.2000";
+  } else if (budget.monthly && !isAllowedRate(budget.monthly, MONTHLY_RATE_OPTIONS)) {
+    errors.budget = "Select a monthly budget from Rs.3500 to Rs.10000";
+  }
 
   if (isEmpty(data.goals)) errors.goals = "Learning goals are required";
 

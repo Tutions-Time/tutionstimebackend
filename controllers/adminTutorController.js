@@ -530,7 +530,7 @@ exports.getTutorJourney = async (req, res) => {
       : [];
     const batchMap = new Map(batchDetails.map((b) => [String(b._id), b]));
     const batchStudentIds = batchDetails.flatMap((b) => b.enrolled || []);
-    const batchStudentMap = await buildStudentProfileMapById(batchStudentIds);
+    const batchStudentMap = await buildStudentProhfileMapById(batchStudentIds);
     const batchUserIds = Array.from(batchStudentMap.values())
       .map((p) => p.userId)
       .filter(Boolean);

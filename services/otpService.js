@@ -1,5 +1,6 @@
 const notificationService = require("./notificationService");
 const OtpRequest = require("../models/OtpRequest");
+const emailTemplates = require("../templates/emailTemplates");
 const { nanoid } = require("nanoid");
 
 const generateOTP = () => {
@@ -92,11 +93,12 @@ const sendOTP = async (email, otp) => {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) return false;
 
-  const subject = "Your Tuitionstime OTP";
+  const subject = "Your tuitionstime OTP";
   const text = `Your OTP code is ${otp}. Please enter it within 5 minutes to continue.`;
+  const html = emailTemplates.otpEmailHTML({ otp });
 
   try {
-    await notificationService.sendEmail(normalizedEmail, subject, text);
+    await notificationService.sendEmail(normalizedEmail, subject, text, html);
     console.log("Email OTP sent:", { email: normalizedEmail, time: new Date().toISOString() });
     return true;
   } catch (error) {
