@@ -2,13 +2,9 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const errorHandler = require("./middleware/errorHandler");
-const connectDB = require("./config/database");
 const path = require("path");
 // const adminNotificationRoutes=require('./routes/adminNotificationRoutes')
 const paymentController = require("./controllers/paymentController");
-
-// Connect to MongoDB
-connectDB();
 
 const app = express();
 
@@ -36,7 +32,14 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-app.options("*", cors(corsOptions));
+app.use((req, res, next) => {
+  if (req.method !== "OPTIONS") return next();
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", corsOptions.methods.join(","));
+  res.header("Access-Control-Allow-Headers", corsOptions.allowedHeaders.join(","));
+  res.header("Access-Control-Max-Age", "86400");
+  return res.sendStatus(corsOptions.optionsSuccessStatus);
+});
 // Razorpay webhooks must receive the raw body for signature verification.
 app.post(
   "/api/payments/razorpay/webhook",
@@ -103,17 +106,20 @@ app.use("/api/reschedules", require("./routes/rescheduleRoutes"));
 const payoutScheduler = require("./services/cron/payoutScheduler");
 const weeklyReportScheduler = require("./services/cron/weeklyReportScheduler");
 const sessionReminderScheduler = require("./services/cron/sessionReminderScheduler");
-const batchScheduler = require("./services/cron/batchScheduler");
+require("./services/cron/batchScheduler");
 const demoExpiryScheduler = require("./services/cron/demoExpiryScheduler");
 
 app.use("/api/sessions", require("./routes/sessionRoutes"));
-payoutScheduler.start();
-weeklyReportScheduler.start();
-sessionReminderScheduler.start();
-demoExpiryScheduler.start();
 
-demoExpiryScheduler.runOnce();
-payoutScheduler.runOnce();
+app.startBackgroundJobs = () => {
+  payoutScheduler.start();
+  weeklyReportScheduler.start();
+  sessionReminderScheduler.start();
+  demoExpiryScheduler.start();
+
+  demoExpiryScheduler.runOnce();
+  payoutScheduler.runOnce();
+};
 
 app.get("/", (req, res) =>
   res.status(200).json({ status: "CORS enabled and working!" }),
