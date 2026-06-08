@@ -1,4 +1,13 @@
 const Blog = require("../models/Blog");
+const mongoose = require("mongoose");
+
+const isDbConnected = () => mongoose.connection.readyState === 1;
+
+const sendDbUnavailable = (res) =>
+  res.status(503).json({
+    success: false,
+    message: "Database is not connected. Please try again shortly.",
+  });
 
 const normalizeSlug = (value = "") =>
   String(value)
@@ -50,6 +59,8 @@ const publicFields =
 
 exports.listPublishedBlogs = async (req, res) => {
   try {
+    if (!isDbConnected()) return sendDbUnavailable(res);
+
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 12));
     const q = String(req.query.q || "").trim();
@@ -63,8 +74,9 @@ exports.listPublishedBlogs = async (req, res) => {
         .sort({ publishedAt: -1, createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
+        .maxTimeMS(10000)
         .lean(),
-      Blog.countDocuments(filter),
+      Blog.countDocuments(filter).maxTimeMS(10000),
     ]);
 
     res.json({
@@ -81,11 +93,14 @@ exports.listPublishedBlogs = async (req, res) => {
 
 exports.getPublishedBlogBySlug = async (req, res) => {
   try {
+    if (!isDbConnected()) return sendDbUnavailable(res);
+
     const blog = await Blog.findOne({
       slug: req.params.slug,
       status: "published",
     })
       .select(publicFields)
+      .maxTimeMS(10000)
       .lean();
 
     if (!blog) return res.status(404).json({ success: false, message: "Blog not found" });
@@ -98,6 +113,8 @@ exports.getPublishedBlogBySlug = async (req, res) => {
 
 exports.listAdminBlogs = async (req, res) => {
   try {
+    if (!isDbConnected()) return sendDbUnavailable(res);
+
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
     const status = String(req.query.status || "all");
@@ -112,8 +129,9 @@ exports.listAdminBlogs = async (req, res) => {
         .sort({ updatedAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
+        .maxTimeMS(10000)
         .lean(),
-      Blog.countDocuments(filter),
+      Blog.countDocuments(filter).maxTimeMS(10000),
     ]);
 
     res.json({
@@ -130,7 +148,9 @@ exports.listAdminBlogs = async (req, res) => {
 
 exports.getAdminBlogById = async (req, res) => {
   try {
-    const blog = await Blog.findById(req.params.id).lean();
+    if (!isDbConnected()) return sendDbUnavailable(res);
+
+    const blog = await Blog.findById(req.params.id).maxTimeMS(10000).lean();
     if (!blog) return res.status(404).json({ success: false, message: "Blog not found" });
 
     res.json({ success: true, data: blog });
@@ -141,6 +161,8 @@ exports.getAdminBlogById = async (req, res) => {
 
 exports.createBlog = async (req, res) => {
   try {
+    if (!isDbConnected()) return sendDbUnavailable(res);
+
     const payload = buildBlogPayload(req.body, req.file);
 
     if (!payload.title || !payload.excerpt || !payload.content) {
@@ -150,7 +172,7 @@ exports.createBlog = async (req, res) => {
       });
     }
 
-    const existing = await Blog.findOne({ slug: payload.slug }).select("_id").lean();
+    const existing = await Blog.findOne({ slug: payload.slug }).select("_id").maxTimeMS(10000).lean();
     if (existing) return res.status(409).json({ success: false, message: "Blog slug already exists" });
 
     const blog = await Blog.create({ ...payload, createdBy: req.user?.id || null });
@@ -163,7 +185,9 @@ exports.createBlog = async (req, res) => {
 
 exports.updateBlog = async (req, res) => {
   try {
-    const blog = await Blog.findById(req.params.id);
+    if (!isDbConnected()) return sendDbUnavailable(res);
+
+    const blog = await Blog.findById(req.params.id).maxTimeMS(10000);
     if (!blog) return res.status(404).json({ success: false, message: "Blog not found" });
 
     const payload = buildBlogPayload(req.body, req.file, blog);
@@ -177,6 +201,7 @@ exports.updateBlog = async (req, res) => {
 
     const duplicate = await Blog.findOne({ slug: payload.slug, _id: { $ne: blog._id } })
       .select("_id")
+      .maxTimeMS(10000)
       .lean();
     if (duplicate) return res.status(409).json({ success: false, message: "Blog slug already exists" });
 
@@ -191,7 +216,9 @@ exports.updateBlog = async (req, res) => {
 
 exports.deleteBlog = async (req, res) => {
   try {
-    const blog = await Blog.findByIdAndDelete(req.params.id);
+    if (!isDbConnected()) return sendDbUnavailable(res);
+
+    const blog = await Blog.findByIdAndDelete(req.params.id).maxTimeMS(10000);
     if (!blog) return res.status(404).json({ success: false, message: "Blog not found" });
     res.json({ success: true, message: "Blog deleted" });
   } catch (error) {

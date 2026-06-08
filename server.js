@@ -35,6 +35,12 @@ async function fixIndexes() {
   }
 }
 
+const server = http.createServer(app);
+wsHub.init(server);
+server.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
+
 mongoose
   .connect(process.env.MONGO_URI, {
     serverSelectionTimeoutMS: 15000,
@@ -42,12 +48,9 @@ mongoose
   .then(async (conn) => {
     console.log(`MongoDB Connected: ${conn.connection.host}`);
     await fixIndexes();
-
-    const server = http.createServer(app);
-    wsHub.init(server);
-    server.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-    });
+    if (typeof app.startBackgroundJobs === "function") {
+      app.startBackgroundJobs();
+    }
   })
   .catch((err) => {
     console.error("MongoDB connection error:", err.message);
