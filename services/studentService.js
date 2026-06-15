@@ -1,6 +1,10 @@
 // services/studentService.js
+const escapeRegex = (value = "") => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 exports.buildStudentFilter = (query) => {
   const {
+    name,
+    q,
     city,
     pincode,
     board,
@@ -11,9 +15,12 @@ exports.buildStudentFilter = (query) => {
   } = query;
 
   const filter = {};
+  const searchName = String(name || q || "").trim();
+  const searchPincode = String(pincode || "").trim();
 
+  if (searchName) filter.name = { $regex: escapeRegex(searchName), $options: "i" };
   if (city) filter.city = { $regex: city, $options: "i" };
-  if (pincode) filter.pincode = { $regex: pincode, $options: "i" };
+  if (searchPincode) filter.pincode = { $regex: escapeRegex(searchPincode), $options: "i" };
   if (board) filter.board = { $regex: board, $options: "i" };
   if (classLevel) filter.classLevel = { $regex: classLevel, $options: "i" };
   if (subject) filter.subjects = { $regex: subject, $options: "i" };

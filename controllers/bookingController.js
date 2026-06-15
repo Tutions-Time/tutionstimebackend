@@ -386,34 +386,20 @@ exports.createDemoBooking = async (req, res) => {
       type: "demo",
       status: "pending",
       meetingLink: "",
+      requestedBy: "student",
     });
 
-    const notificationContext = {
+    await notifyTutorAboutStudentDemoRequest({
       booking,
       tutorProfile,
       studentProfile,
       tutorId,
+      studentId: req.user.id,
       subject: subjectForDisplay,
       date,
       time,
       selectedSubjects,
-      studentId: req.user.id,
-    };
-    void notifyStudentDemoBooking(notificationContext);
-
-    // Notify Admin
-    void createAdminNotification(
-      "New Demo Booking Requested",
-      `Student ${studentProfile?.name || req.user.id} requested a demo with tutor ${tutorProfile?.name || tutorId} for ${subjectForDisplay} on ${date}`,
-      {
-        bookingId: booking._id,
-        studentId: req.user.id,
-        tutorId,
-        subject: subjectForDisplay,
-        date,
-        time,
-      }
-    );
+    });
 
     return res.status(201).json({ success: true, data: booking });
   } catch (err) {
@@ -646,7 +632,7 @@ exports.createDemoBookingByTutor = async (req, res) => {
   }
 };
 
-async function notifyStudentDemoBooking({
+async function notifyTutorAboutStudentDemoRequest({
   booking,
   tutorProfile,
   studentProfile,
@@ -659,60 +645,55 @@ async function notifyStudentDemoBooking({
 }) {
   try {
     const student = studentProfile;
-    const tutorUser = await User.findById(tutorId).lean();
+    const tutorUser = await User.findById(tutorId).select("email phone").lean();
 
-    const tutorEmail = tutorProfile.email || tutorUser?.email;
-
-    if (tutorEmail && notificationService?.sendEmail) {
-      const html = emailTpl.tutorDemoRequestHTML({
-        studentName: student?.name || "A student",
-        subject,
-        date,
-        time,
-      });
-
-      await notificationService.sendEmail(
-        tutorEmail,
-        "New Demo Request",
-        "",
-        html
-      );
-    }
+    const tutorEmail = tutorProfile?.email || tutorUser?.email;
+    const studentName = student?.name || "A student";
+    const tutorName = tutorProfile?.name || "Tutor";
+    const title = "New Demo Request";
+    const body = `${studentName} requested a demo for ${subject} on ${date} at ${time}`;
+    const meta = {
+      type: "demo_request",
+      requestedBy: "student",
+      bookingId: booking._id,
+      tutorId,
+      studentId,
+      subject,
+      subjects: selectedSubjects,
+      date,
+      time,
+      status: booking.status,
+    };
 
     if (notificationService?.createInApp) {
-      await notificationService.createInApp(
-        tutorId,
-        "New Demo Request",
-        `${student?.name || "A student"} requested a demo for ${subject} on ${date} at ${time}`,
-        {
-          tutorId,
+      await notificationService.createInApp(tutorId, title, body, meta);
+    }
+
+    if (tutorEmail && notificationService?.sendEmail) {
+      const html =
+        emailTpl.tutorDemoRequestHTML?.({
+          studentName,
           subject,
           date,
           time,
-          bookingId: booking._id,
-        }
+        }) ||
+        `<p>${studentName} requested a demo for ${subject} on ${date} at ${time}.</p><p>Please log in to your tuitionstime dashboard to confirm or cancel this request.</p>`;
+
+      await notificationService.sendEmail(
+        tutorEmail,
+        "New Demo Request - tuitionstime",
+        body,
+        html
       );
     }
 
     await createAdminNotification(
       "New Demo Booking Created",
-      `${
-        student?.name || "A student"
-      } requested a demo with ${tutorProfile?.name || "Tutor"} for ${subject} on ${date} at ${time}`,
-      {
-        bookingId: booking._id,
-        tutorId,
-        studentId,
-        subject,
-        subjects: selectedSubjects,
-        date,
-        time,
-        type: booking.type,
-        status: booking.status,
-      }
+      `${studentName} requested a demo with ${tutorName} for ${subject} on ${date} at ${time}`,
+      meta
     );
   } catch (e) {
-    console.warn("Notification (tutor/admin) failed:", e.message);
+    console.warn("Student demo request tutor notification failed:", e.message);
   }
 }
 
@@ -1227,7 +1208,7 @@ exports.markStudentJoined = async (req, res) => {
     if (["cancelled", "expired"].includes(booking.status)) {
       return res.status(400).json({ success: false, message: "Booking is not active" });
     }
-    if (!["confirmed", "completed"].includes(booking.status)) {
+    if (booking.status !== "confirmed") {
       return res.status(400).json({ success: false, message: "Demo not confirmed yet" });
     }
 
@@ -1242,7 +1223,7 @@ exports.markStudentJoined = async (req, res) => {
 
     return res.json({
       success: true,
-      meetingLink: booking.startUrl || booking.meetingLink || "",
+      meetingLink: booking.joinUrl || booking.meetingLink || "",
     });
   } catch (err) {
     console.error("markStudentJoined error:", err);
@@ -1271,7 +1252,7 @@ exports.markTutorJoined = async (req, res) => {
     if (["cancelled", "expired"].includes(booking.status)) {
       return res.status(400).json({ success: false, message: "Booking is not active" });
     }
-    if (!["confirmed", "completed"].includes(booking.status)) {
+    if (booking.status !== "confirmed") {
       return res.status(400).json({ success: false, message: "Demo not confirmed yet" });
     }
 
@@ -1286,7 +1267,7 @@ exports.markTutorJoined = async (req, res) => {
 
     return res.json({
       success: true,
-      meetingLink: booking.joinUrl || booking.meetingLink || "",
+      meetingLink: booking.startUrl || booking.meetingLink || "",
     });
   } catch (err) {
     console.error("markTutorJoined error:", err);

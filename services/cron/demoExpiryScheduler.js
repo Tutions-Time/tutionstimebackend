@@ -6,6 +6,7 @@ const emailTpl = require("../../templates/emailTemplates");
 const User = require("../../models/User");
 const StudentProfile = require("../../models/StudentProfile");
 const TutorProfile = require("../../models/TutorProfile");
+const { determineDemoCompletion } = require("../demoCompletionService");
 
 const DEMO_DURATION_MINUTES = Number(
   process.env.DEMO_DURATION_MINUTES || 15
@@ -208,6 +209,30 @@ async function runOnce() {
     now.getTime() -
       DEMO_EXPIRE_GRACE_MINUTES * 60 * 1000
   );
+
+  const joinedCandidates = await Booking.find({
+    type: "demo",
+    status: "confirmed",
+    $or: [
+      { studentJoinedAt: { $ne: null } },
+      { tutorJoinedAt: { $ne: null } },
+    ],
+  });
+
+  for (const booking of joinedCandidates) {
+    const endDate = getBookingEndDatetime(booking);
+    if (!endDate) continue;
+    if (endDate > threshold) continue;
+
+    const { updated, status } = determineDemoCompletion(booking, now);
+    if (!updated) continue;
+
+    await booking.save();
+
+    if (["completed", "student-missed", "tutor-missed"].includes(status)) {
+      realtimeEvents.notifyBookingCompletion(booking);
+    }
+  }
 
   const candidates = await Booking.find({
     type: "demo",

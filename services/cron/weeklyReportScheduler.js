@@ -8,10 +8,10 @@ const AdminNotification = require("../../models/AdminNotification");
 function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function addDays(d, n) { return new Date(d.getTime() + n * 86400000); }
 
-async function studentWeeklySummary(userId) {
+async function studentMonthlySummary(userId) {
   const now = new Date();
   const to = addDays(startOfDay(now), 1);
-  const from = addDays(startOfDay(now), -7);
+  const from = addDays(startOfDay(now), -30);
   const classes = await RegularClass.find({ studentId: userId, paymentStatus: "paid", status: "active" })
     .select("_id subject")
     .lean();
@@ -25,10 +25,10 @@ async function studentWeeklySummary(userId) {
   return { sessions: sessions.length, completed, attendanceRate: sessions.length ? Math.round((present/sessions.length)*100) : 0, assignments };
 }
 
-async function tutorWeeklySummary(userId) {
+async function tutorMonthlySummary(userId) {
   const now = new Date();
   const to = addDays(startOfDay(now), 1);
-  const from = addDays(startOfDay(now), -7);
+  const from = addDays(startOfDay(now), -30);
   const classes = await RegularClass.find({ tutorId: userId, paymentStatus: "paid", status: "active" })
     .select("_id")
     .lean();
@@ -63,33 +63,33 @@ async function tutorWeeklySummary(userId) {
   return { sessions: sessions.length, completed, attendanceConsistency: sessions.length ? Math.round((present/sessions.length)*100) : 0, averageRating: tp?.rating || 0, ratingCount: tp?.ratingCount || 0, rubricAverages, materials, topComments };
 }
 
-async function sendWeeklyReports() {
+async function sendMonthlyReports() {
   try {
     const now = new Date();
-    const day = now.getDay(); // 1 = Monday
+    const date = now.getDate();
     const hour = now.getHours();
-    if (!(day === 1 && hour === 8)) return; // run at Monday 08:00 local
+    if (!(date === 1 && hour === 8)) return; // run on the 1st of each month at 08:00 local
 
     const students = await StudentProfile.find({}).select("userId name email").lean();
     for (const s of students) {
-      const sum = await studentWeeklySummary(s.userId);
+      const sum = await studentMonthlySummary(s.userId);
       if (s.email && notificationService?.sendEmail) {
-        const html = `<h3>Your Weekly Learning Summary</h3><p>Sessions: ${sum.sessions}</p><p>Completed: ${sum.completed}</p><p>Attendance: ${sum.attendanceRate}%</p><p>Assignments received: ${sum.assignments}</p>`;
-        await notificationService.sendEmail(s.email, "Weekly Summary - tuitionstime", "", html);
+        const html = `<h3>Your Monthly Learning Summary</h3><p>Sessions: ${sum.sessions}</p><p>Completed: ${sum.completed}</p><p>Attendance: ${sum.attendanceRate}%</p><p>Assignments received: ${sum.assignments}</p>`;
+        await notificationService.sendEmail(s.email, "Monthly Summary - tuitionstime", "", html);
       }
       try {
-        await AdminNotification.create({ title: "Weekly summary sent (student)", message: `Sent to ${s.name}`, meta: { userId: s.userId, ...sum } });
+        await AdminNotification.create({ title: "Monthly summary sent (student)", message: `Sent to ${s.name}`, meta: { userId: s.userId, ...sum } });
         if (notificationService?.createInApp) {
-          await notificationService.createInApp(s.userId, "Weekly Summary", `Sessions ${sum.sessions}, Completed ${sum.completed}`, { type: "weekly", period: "7d" });
+          await notificationService.createInApp(s.userId, "Monthly Summary", `Sessions ${sum.sessions}, Completed ${sum.completed}`, { type: "monthly", period: "30d" });
         }
       } catch {}
     }
 
     const tutors = await TutorProfile.find({}).select("userId name email").lean();
     for (const t of tutors) {
-      const sum = await tutorWeeklySummary(t.userId);
+      const sum = await tutorMonthlySummary(t.userId);
       if (t.email && notificationService?.sendEmail) {
-        const html = `<h3>Your Weekly Teaching Summary</h3>
+        const html = `<h3>Your Monthly Teaching Summary</h3>
           <p>Sessions: ${sum.sessions}</p>
           <p>Completed: ${sum.completed}</p>
           <p>Attendance consistency: ${sum.attendanceConsistency}%</p>
@@ -98,22 +98,22 @@ async function sendWeeklyReports() {
           <p>Materials uploaded: Notes ${sum.materials.notes}, Assignments ${sum.materials.assignments}, Recordings ${sum.materials.recordings}</p>
           ${sum.topComments.length ? `<p>Top comments:</p><ul>${sum.topComments.map(c=>`<li>${c}</li>`).join("")}</ul>` : ""}
         `;
-        await notificationService.sendEmail(t.email, "Weekly Summary - tuitionstime", "", html);
+        await notificationService.sendEmail(t.email, "Monthly Summary - tuitionstime", "", html);
       }
       if (notificationService?.createInApp) {
-        await notificationService.createInApp(t.userId, "Weekly Summary", `Sessions ${sum.sessions}, Completed ${sum.completed}, Rating ${sum.averageRating.toFixed(1)}`, { type: "weekly", period: "7d" });
+        await notificationService.createInApp(t.userId, "Monthly Summary", `Sessions ${sum.sessions}, Completed ${sum.completed}, Rating ${sum.averageRating.toFixed(1)}`, { type: "monthly", period: "30d" });
       }
       try {
-        await AdminNotification.create({ title: "Weekly summary sent (tutor)", message: `Sent to ${t.name}`, meta: { userId: t.userId, ...sum } });
+        await AdminNotification.create({ title: "Monthly summary sent (tutor)", message: `Sent to ${t.name}`, meta: { userId: t.userId, ...sum } });
       } catch {}
     }
   } catch (err) {
-    console.error("weeklyReportScheduler error:", err);
+    console.error("monthlyReportScheduler error:", err);
   }
 }
 
 exports.start = function start() {
   // check hourly to reduce chances of missing exact time
-  setInterval(sendWeeklyReports, 60 * 60 * 1000);
+  setInterval(sendMonthlyReports, 60 * 60 * 1000);
 };
 

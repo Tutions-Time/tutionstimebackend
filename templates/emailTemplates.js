@@ -162,12 +162,12 @@ exports.otpEmailHTML = ({ otp, purpose = "continue" }) =>
 // 📨 TUTOR-SIDE EMAILS
 // ==============================
 
-exports.tutorDemoRequestHTML = ({ studentName, subject, date }) =>
+exports.tutorDemoRequestHTML = ({ studentName, subject, date, time }) =>
   emailWrapper(
     "New Demo Request",
     `
       <p style="font-size:16px;color:#333;">
-        <strong>${studentName}</strong> requested a demo for <strong>${subject}</strong> on <b>${date}</b>.
+        <strong>${studentName}</strong> requested a demo for <strong>${subject}</strong> on <b>${date}</b>${time ? ` at <b>${time}</b>` : ""}.
       </p>
       <p style="margin-top:10px;color:#555;">
         Please log in to your tuitionstime dashboard to confirm or cancel this request.

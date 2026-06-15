@@ -1,5 +1,6 @@
 // controllers/studentSearchController.js
 const StudentProfile = require('../models/StudentProfile');
+const TutorProfile = require('../models/TutorProfile');
 const User = require('../models/User');
 const { buildStudentFilter } = require('../services/studentService.js');
 
@@ -27,6 +28,23 @@ exports.searchStudents = async (req, res) => {
 
     // Build student filters
     const studentFilters = hasFilters ? buildStudentFilter(req.query) : {};
+
+    const tutorProfile = await TutorProfile
+      .findOne({ userId: req.user.id })
+      .select("teachingMode pincode")
+      .lean();
+    const isOfflineOnlyTutor =
+      String(tutorProfile?.teachingMode || "").trim().toLowerCase() === "offline";
+    const tutorPincode = String(tutorProfile?.pincode || "").trim();
+
+    if (isOfflineOnlyTutor) {
+      studentFilters.learningMode = "Offline";
+      if (tutorPincode) {
+        studentFilters.pincode = tutorPincode;
+      } else {
+        studentFilters._id = { $exists: false };
+      }
+    }
 
     // get user IDs of valid students
     const validUsers = await User.find(baseUserFilter).select("_id").lean();
