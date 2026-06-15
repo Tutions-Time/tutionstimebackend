@@ -45,11 +45,33 @@ function sendNotificationToTargets(payload, booking) {
 
 function notifyBookingCompletion(booking) {
   if (!booking) return;
-  notifyBookingStatusUpdate(booking, {
-    title: "Demo class completed",
-    message: "This demo booking has been marked as completed.",
-    body: "The class has ended and attendance has been finalized.",
-  });
+  const status = booking.status || "";
+  const content =
+    status === "completed"
+      ? {
+          title: "Demo class completed",
+          message: "This demo booking has been marked as completed.",
+          body: "The class has ended and attendance has been finalized.",
+        }
+      : status === "tutor-missed"
+      ? {
+          title: "Tutor did not join demo",
+          message: "This demo was not completed because the tutor did not join.",
+          body: "Attendance has been finalized as tutor no-show.",
+        }
+      : status === "student-missed"
+      ? {
+          title: "Student did not join demo",
+          message: "This demo was not completed because the student did not join.",
+          body: "Attendance has been finalized as student no-show.",
+        }
+      : {
+          title: "Demo status updated",
+          message: "This demo booking status has been updated.",
+          body: "Attendance has been finalized.",
+        };
+
+  notifyBookingStatusUpdate(booking, content);
 }
 
 function notifyBookingStatusUpdate(booking, { title, message, body }) {

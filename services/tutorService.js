@@ -24,6 +24,7 @@ const mergeMaxRate = (existing, max) => {
 
 const normalizeMode = (value = '') => String(value || '').trim().toLowerCase();
 const normalizePincode = (value = '') => String(value || '').trim();
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const studentSupportsOffline = (student) => {
   const mode = normalizeMode(student?.learningMode);
@@ -32,9 +33,16 @@ const studentSupportsOffline = (student) => {
 
 const impossibleTutorFilter = () => ({ _id: { $exists: false } });
 
-const addOfflineOnlyTutorVisibility = (filter, student, requestedTeachingMode) => {
+const addOfflineOnlyTutorVisibility = (
+  filter,
+  student,
+  requestedTeachingMode,
+  requestedPincode = ''
+) => {
   const studentPincode = normalizePincode(student?.pincode);
-  const canSeeOffline = studentSupportsOffline(student) && Boolean(studentPincode);
+  const searchPincode = normalizePincode(requestedPincode);
+  const allowedOfflinePincode = searchPincode || studentPincode;
+  const canSeeOffline = studentSupportsOffline(student) && Boolean(allowedOfflinePincode);
   const requestedMode = normalizeMode(requestedTeachingMode);
 
   if (requestedMode === 'offline' || requestedMode === 'offline only') {
@@ -42,7 +50,7 @@ const addOfflineOnlyTutorVisibility = (filter, student, requestedTeachingMode) =
     return {
       ...filter,
       teachingMode: 'Offline',
-      pincode: studentPincode,
+      pincode: allowedOfflinePincode,
     };
   }
 
@@ -51,7 +59,7 @@ const addOfflineOnlyTutorVisibility = (filter, student, requestedTeachingMode) =
       ? {
           $or: [
             { teachingMode: { $ne: 'Offline' } },
-            { teachingMode: 'Offline', pincode: studentPincode },
+            { teachingMode: 'Offline', pincode: allowedOfflinePincode },
           ],
         }
       : { teachingMode: { $ne: 'Offline' } };
@@ -70,6 +78,8 @@ const addOfflineOnlyTutorVisibility = (filter, student, requestedTeachingMode) =
  */
 exports.buildTutorFilter = async (query, options = {}) => {
   const {
+    name,
+    q,
     city,
     pincode,  
     subject,
@@ -86,14 +96,17 @@ exports.buildTutorFilter = async (query, options = {}) => {
   const { studentId = null } = options;
 
   const filter = { isVerified: true };
+  const searchName = String(name || q || '').trim();
+  const searchPincode = normalizePincode(pincode);
 
+  if (searchName) filter['name'] = { $regex: escapeRegex(searchName), $options: 'i' };
   if (city) filter['city'] = { $regex: city, $options: 'i' };
   if (subject) filter['subjects'] = { $regex: subject, $options: 'i' };
   if (classLevel) filter['classLevels'] = { $regex: classLevel, $options: 'i' };
   if (board) filter['boards'] = { $regex: board, $options: 'i' };
   if (gender) filter['gender'] = gender;
   if (teachingMode) filter['teachingMode'] = teachingMode;
-  if (pincode) filter['pincode'] = { $regex: pincode, $options: 'i' };
+  if (searchPincode) filter['pincode'] = { $regex: escapeRegex(searchPincode), $options: 'i' };
 
   // 🔹 Experience range (assuming experience stored as number of years)
   if (minExp || maxExp) {
@@ -134,7 +147,7 @@ exports.buildTutorFilter = async (query, options = {}) => {
       filter["monthlyRate"] = mergeMaxRate(filter["monthlyRate"], budget.monthly);
     }
 
-    return addOfflineOnlyTutorVisibility(filter, student, teachingMode);
+    return addOfflineOnlyTutorVisibility(filter, student, teachingMode, searchPincode);
   }
 
   return filter;
