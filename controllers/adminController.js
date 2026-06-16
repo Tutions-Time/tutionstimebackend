@@ -15,7 +15,52 @@ const { logActivity } = require("../services/loggerService");
 const {
   DEFAULT_SESSION_DURATION_MINUTES,
   computeDurationMinutes,
+  buildGroupSessionTopic,
 } = require("../utils/sessionZoomUtils");
+const zoomService = require("../services/zoomService");
+
+function parseAdminSessionDateTime(date, time, mode = "regular") {
+  const [year, month, day] = String(date || "").split("-").map(Number);
+  const [hour, minute] = String(time || "").split(":").map(Number);
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minute)
+  ) {
+    return null;
+  }
+
+  if (mode === "group") {
+    const yyyy = String(year).padStart(4, "0");
+    const mm = String(month).padStart(2, "0");
+    const dd = String(day).padStart(2, "0");
+    const hh = String(Math.max(0, Math.min(23, hour))).padStart(2, "0");
+    const min = String(Math.max(0, Math.min(59, minute))).padStart(2, "0");
+    const parsed = new Date(`${yyyy}-${mm}-${dd}T${hh}:${min}:00+05:30`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const parsed = new Date(Date.UTC(year, month - 1, day, hour, minute, 0, 0));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function buildRegularSessionTopicForAdmin(regularClass, dateTime) {
+  const subject = regularClass?.subject || "Regular Class";
+  const dateLabel = dateTime.toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const timeLabel = dateTime.toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  });
+  return `${subject} - ${timeLabel} on ${dateLabel}`;
+}
 
 const migrateUploadsToS3 = async (req, res) => {
   try {
@@ -1100,6 +1145,98 @@ const listAdminBookings = async (req, res) => {
   }
 };
 
+const updateAdminSessionSchedule = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date, time } = req.body || {};
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid session id" });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) {
+      return res.status(400).json({ success: false, message: "Valid date is required" });
+    }
+    if (!/^\d{2}:\d{2}$/.test(String(time || ""))) {
+      return res.status(400).json({ success: false, message: "Valid time is required" });
+    }
+
+    const session = await Session.findById(id);
+    if (!session) {
+      return res.status(404).json({ success: false, message: "Session not found" });
+    }
+    if (session.status !== "scheduled") {
+      return res.status(400).json({
+        success: false,
+        message: "Only scheduled classes can be edited",
+      });
+    }
+
+    const isGroup = Boolean(session.groupBatchId);
+    const nextStart = parseAdminSessionDateTime(date, time, isGroup ? "group" : "regular");
+    if (!nextStart) {
+      return res.status(400).json({ success: false, message: "Invalid date or time" });
+    }
+
+    const previousStart = session.startDateTime;
+    let duration = DEFAULT_SESSION_DURATION_MINUTES;
+    let topic = "Class";
+    if (isGroup) {
+      const batch = await GroupBatch.findById(session.groupBatchId).lean();
+      duration = computeDurationMinutes(batch?.recurring?.time, batch?.recurring?.endTime);
+      topic = buildGroupSessionTopic(batch || {}, nextStart);
+    } else {
+      const regularClass = session.regularClassId
+        ? await RegularClass.findById(session.regularClassId).lean()
+        : null;
+      topic = buildRegularSessionTopicForAdmin(regularClass || {}, nextStart);
+    }
+
+    try {
+      const meeting = await zoomService.createZoomMeeting({
+        topic,
+        startTime: nextStart.toISOString(),
+        duration,
+      });
+      session.meetingId = meeting.id ? String(meeting.id) : session.meetingId || "";
+      session.meetingPassword =
+        meeting.password || meeting.encrypted_password || session.meetingPassword || "";
+      session.startUrl = meeting.start_url || session.startUrl || "";
+      session.joinUrl = meeting.join_url || session.joinUrl || "";
+      session.meetingLink = meeting.join_url || session.meetingLink || "";
+    } catch (err) {
+      console.warn("Admin session Zoom refresh failed:", err.message);
+    }
+
+    session.startDateTime = nextStart;
+    session.actualEndTime = undefined;
+    await session.save();
+
+    await logActivity(req, "ADMIN_UPDATE_SESSION_SCHEDULE", {
+      sessionId: id,
+      previousStart,
+      nextStart,
+      kind: isGroup ? "group" : "regular",
+    });
+
+    return res.json({
+      success: true,
+      message: "Class schedule updated",
+      data: {
+        _id: session._id,
+        startDateTime: session.startDateTime,
+        meetingLink: session.meetingLink || session.joinUrl || "",
+      },
+    });
+  } catch (error) {
+    console.error("updateAdminSessionSchedule error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
+};
+
 const deleteUser = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -1189,5 +1326,6 @@ module.exports = {
   listAdminSessions,
   listAdminClassesMonitor,
   listAdminBookings,
+  updateAdminSessionSchedule,
   migrateUploadsToS3,
 };

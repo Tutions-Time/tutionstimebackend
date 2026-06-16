@@ -9,6 +9,7 @@ const RegularClass = require('../models/RegularClass');
 const Note = require('../models/Note');
 const Transaction = require('../models/Transaction');
 const StudentProfile = require('../models/StudentProfile');
+const notificationService = require('../services/notificationService');
 
 const KYC_STATUSES = ['pending', 'submitted', 'approved', 'rejected'];
 
@@ -220,6 +221,29 @@ exports.updateKycStatus = async (req, res) => {
     tutorProfile.kycRejectionReason = kyc === 'rejected' ? String(reason || '').trim() : '';
     await tutorProfile.save();
 
+    try {
+      if (notificationService?.notifyUser) {
+        const statusLabel = kyc === 'approved' ? 'approved' : kyc === 'rejected' ? 'rejected' : kyc;
+        const reasonText =
+          kyc === 'rejected' && tutorProfile.kycRejectionReason
+            ? ` Reason: ${tutorProfile.kycRejectionReason}`
+            : '';
+        await notificationService.notifyUser(
+          id,
+          'KYC status updated',
+          `Your KYC has been ${statusLabel}.${reasonText}`,
+          {
+            type: 'kyc_status',
+            kycStatus: kyc,
+            tutorId: id,
+            route: '/dashboard/tutor/kyc',
+          }
+        );
+      }
+    } catch (notifyErr) {
+      console.warn('Tutor KYC notification failed:', notifyErr.message);
+    }
+
     res.status(200).json({
       success: true,
       message: `KYC ${kyc} successfully`,
@@ -239,6 +263,24 @@ exports.updateTutorStatus = async (req, res) => {
 
     const user = await User.findByIdAndUpdate(id, { status }, { new: true });
     if (!user) return res.status(404).json({ success: false, message: 'Tutor not found' });
+
+    try {
+      if (notificationService?.notifyUser) {
+        await notificationService.notifyUser(
+          id,
+          'Account status updated',
+          `Your tutor account has been ${status}.`,
+          {
+            type: 'tutor_status',
+            status,
+            tutorId: id,
+            route: '/dashboard/tutor/profile',
+          }
+        );
+      }
+    } catch (notifyErr) {
+      console.warn('Tutor status notification failed:', notifyErr.message);
+    }
 
     res.status(200).json({
       success: true,
