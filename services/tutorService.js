@@ -49,7 +49,7 @@ const addOfflineOnlyTutorVisibility = (
     if (!canSeeOffline) return impossibleTutorFilter();
     return {
       ...filter,
-      teachingMode: 'Offline',
+      teachingMode: { $in: ['Offline', 'Both'] },
       pincode: allowedOfflinePincode,
     };
   }
@@ -58,8 +58,8 @@ const addOfflineOnlyTutorVisibility = (
     const visibilityRule = canSeeOffline
       ? {
           $or: [
-            { teachingMode: { $ne: 'Offline' } },
-            { teachingMode: 'Offline', pincode: allowedOfflinePincode },
+            { teachingMode: { $nin: ['Offline', 'Both'] } },
+            { teachingMode: { $in: ['Offline', 'Both'] }, pincode: allowedOfflinePincode },
           ],
         }
       : { teachingMode: { $ne: 'Offline' } };
