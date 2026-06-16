@@ -47,6 +47,7 @@ router.get('/bookings', adminController.listAdminBookings);
 router.get('/dashboard/stats', adminController.getDashboardStats);
 router.get('/dashboard/activity', adminController.getDashboardActivity);
 router.get('/sessions', adminController.listAdminSessions);
+router.patch('/sessions/:id/schedule', adminController.updateAdminSessionSchedule);
 router.get('/classes-monitor', adminController.listAdminClassesMonitor);
 router.post('/uploads/migrate-to-s3', adminController.migrateUploadsToS3);
 

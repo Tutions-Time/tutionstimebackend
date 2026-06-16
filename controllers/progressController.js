@@ -317,10 +317,17 @@ exports.giveSessionFeedback = async (req, res) => {
           `<p>You received new class feedback. Overall: ${overall}/5</p>`
         );
       }
-      if (notificationService?.createInApp) {
-        if (tutorProfileId) {
-          await notificationService.createInApp(tutorProfileId, "New Feedback", `Overall ${overall}/5`, { sessionId: session._id });
-        }
+      if (notificationService?.createInApp && tutorProfile?.userId) {
+        await notificationService.createInApp(
+          tutorProfile.userId,
+          "New Feedback",
+          `Overall ${overall}/5`,
+          {
+            sessionId: session._id,
+            regularClassId: session.regularClassId?._id,
+            groupBatchId: session.groupBatchId,
+          }
+        );
       }
     } catch {}
 

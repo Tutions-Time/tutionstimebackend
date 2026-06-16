@@ -620,10 +620,14 @@ exports.cancelBatch = async (req, res) => {
   gb.published = false;
   await gb.save();
   await createAdminNotification("Group batch cancelled", `Batch ${gb._id} cancelled`, { batchId: gb._id });
-  const User = require("../models/User");
-  const studentUsers = await User.find({ _id: { $in: gb.enrolled } }).select("_id");
-  for (const u of studentUsers) {
-    await notificationService.createInApp(u._id, "Batch cancelled", "Your group batch was cancelled", { batchId: gb._id });
+  const StudentProfile = require("../models/StudentProfile");
+  const studentProfiles = await StudentProfile.find({ _id: { $in: gb.enrolled } }).select("userId");
+  for (const sp of studentProfiles) {
+    await notificationService.createInApp(sp.userId, "Batch cancelled", "Your group batch was cancelled", {
+      batchId: gb._id,
+      groupBatchId: gb._id,
+      route: `/dashboard/student/group-batches/${gb._id}`,
+    });
   }
   const policy = computeRefundPolicy(gb);
   await createAdminNotification("Refund policy evaluated", `Batch ${gb._id} refund: ${policy.percent}%`, { batchId: gb._id, policy });
@@ -936,13 +940,17 @@ exports.broadcastAnnouncement = async (req, res) => {
     const { title, body } = req.body;
     const gb = await GroupBatch.findById(batchId).select('enrolled');
     if (!gb) return res.status(404).json({ success: false, message: "Batch not found" });
-    const User = require("../models/User");
-    const users = await User.find({ _id: { $in: gb.enrolled } }).select('_id');
-    for (const u of users) {
-      await notificationService.createInApp(u._id, title, body, { batchId });
+    const StudentProfile = require("../models/StudentProfile");
+    const profiles = await StudentProfile.find({ _id: { $in: gb.enrolled } }).select('userId');
+    for (const p of profiles) {
+      await notificationService.createInApp(p.userId, title, body, {
+        batchId,
+        groupBatchId: batchId,
+        route: `/dashboard/student/group-batches/${batchId}`,
+      });
     }
-    await createAdminNotification("Batch announcement", `Broadcast to ${users.length} students`, { batchId });
-    res.json({ success: true, count: users.length });
+    await createAdminNotification("Batch announcement", `Broadcast to ${profiles.length} students`, { batchId });
+    res.json({ success: true, count: profiles.length });
   } catch (err) {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }

@@ -19,7 +19,13 @@ async function runOnce() {
     const student = s.studentId ? await StudentProfile.findById(s.studentId).select('userId name').lean() : null;
     const existsTutor = await Notification.findOne({ userId: tutor?.userId, 'meta.sessionId': s._id, 'meta.tag': 'session_reminder' }).lean();
     if (!existsTutor && tutor?.userId) {
-      await notificationService.notifyUser(tutor.userId, 'Upcoming Session', 'Your session starts soon', { sessionId: s._id, tag: 'session_reminder', startDateTime: s.startDateTime });
+      await notificationService.notifyUser(tutor.userId, 'Upcoming Session', 'Your session starts soon', {
+        sessionId: s._id,
+        regularClassId: s.regularClassId,
+        groupBatchId: s.groupBatchId,
+        tag: 'session_reminder',
+        startDateTime: s.startDateTime,
+      });
     }
 
     // Handle Group Batches
@@ -32,14 +38,24 @@ async function runOnce() {
          for (const stu of students) {
             const existsStu = await Notification.findOne({ userId: stu.userId, 'meta.sessionId': s._id, 'meta.tag': 'session_reminder' }).lean();
             if (!existsStu) {
-                await notificationService.notifyUser(stu.userId, `Upcoming Class: ${gb.subject}`, 'Your group class starts soon', { sessionId: s._id, tag: 'session_reminder', startDateTime: s.startDateTime });
+                await notificationService.notifyUser(stu.userId, `Upcoming Class: ${gb.subject}`, 'Your group class starts soon', {
+                  sessionId: s._id,
+                  groupBatchId: s.groupBatchId,
+                  tag: 'session_reminder',
+                  startDateTime: s.startDateTime,
+                });
             }
          }
       }
     } else if (student?.userId) {
       const existsStu = await Notification.findOne({ userId: student.userId, 'meta.sessionId': s._id, 'meta.tag': 'session_reminder' }).lean();
       if (!existsStu) {
-        await notificationService.notifyUser(student.userId, 'Upcoming Session', 'Your session starts soon', { sessionId: s._id, tag: 'session_reminder', startDateTime: s.startDateTime });
+        await notificationService.notifyUser(student.userId, 'Upcoming Session', 'Your session starts soon', {
+          sessionId: s._id,
+          regularClassId: s.regularClassId,
+          tag: 'session_reminder',
+          startDateTime: s.startDateTime,
+        });
       }
     }
   }
