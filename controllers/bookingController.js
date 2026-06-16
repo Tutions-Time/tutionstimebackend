@@ -255,7 +255,6 @@ exports.createDemoBooking = async (req, res) => {
       time,
       note,
       studentBoard,
-      studentLearningMode,
     } = req.body;
     console.log("createDemoBooking req.body:", req.body);
 
@@ -369,16 +368,13 @@ exports.createDemoBooking = async (req, res) => {
       userId: req.user.id,
     }).lean();
     const resolvedStudentBoard = studentProfile?.board || studentBoard || "";
-    const resolvedStudentLearningMode =
-      studentProfile?.learningMode || studentLearningMode || "";
-
     const booking = await Booking.create({
       studentId: req.user.id,
       tutorId,
       subject: subjectForDisplay,
       subjects: selectedSubjects,
       studentBoard: resolvedStudentBoard,
-      studentLearningMode: resolvedStudentLearningMode,
+      studentLearningMode: "Online",
       preferredDate,
       preferredTime: time,
       preferredEndTime, // 15 min demo end time
@@ -421,8 +417,7 @@ exports.createDemoBooking = async (req, res) => {
 exports.createDemoBookingByTutor = async (req, res) => {
   try {
     const tutorId = req.user.id; // logged-in tutor
-    const { studentId: rawStudentId, subject, date, time, note, studentLearningMode } =
-      req.body;
+    const { studentId: rawStudentId, subject, date, time, note } = req.body;
     console.log("createDemoBookingByTutor req.body:", req.body);
 
     const studentId = resolveObjectIdString(rawStudentId);
@@ -504,6 +499,13 @@ exports.createDemoBookingByTutor = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Tutor profile not found" });
     }
+    if (!tutorProfile.isVerified) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Your tutor profile is not verified yet. You can send demo requests after admin verification.",
+      });
+    }
 
     // Student profile (who receives request)
     const studentProfile = await StudentProfile.findOne({
@@ -515,7 +517,16 @@ exports.createDemoBookingByTutor = async (req, res) => {
         .json({ success: false, message: "Student profile not found" });
     }
 
-    const studentPreferredTimes = normalizeArray(studentProfile.preferredTimes);
+    const subjectSlot = Array.isArray(studentProfile.subjectTimeSlots)
+      ? studentProfile.subjectTimeSlots.find(
+          (item) =>
+            String(item?.subject || "").trim().toLowerCase() ===
+            String(subject || "").trim().toLowerCase()
+        )
+      : null;
+    const studentPreferredTimes = subjectSlot
+      ? normalizeArray(subjectSlot.slots)
+      : normalizeArray(studentProfile.preferredTimes);
     if (
       studentPreferredTimes.length > 0 &&
       !isTimeWithinPreferredSlots(time, studentPreferredTimes)
@@ -566,14 +577,11 @@ exports.createDemoBookingByTutor = async (req, res) => {
     const preferredEndTime = addMinutesToTime(time, DEMO_DURATION_MINUTES);
 
     // ✅ Create booking – IMPORTANT mapping
-    const resolvedStudentLearningMode =
-      studentProfile?.learningMode || studentLearningMode || "";
-
     const booking = await Booking.create({
       studentId, // receiver
       tutorId, // sender
       subject,
-      studentLearningMode: resolvedStudentLearningMode,
+      studentLearningMode: "Online",
       preferredDate,
       preferredTime: time,
       preferredEndTime, // 15 min demo end time

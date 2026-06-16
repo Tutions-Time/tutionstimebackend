@@ -25,6 +25,10 @@ const mergeMaxRate = (existing, max) => {
 const normalizeMode = (value = '') => String(value || '').trim().toLowerCase();
 const normalizePincode = (value = '') => String(value || '').trim();
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const buildPincodeFilter = (value = '') => ({
+  $regex: `^\\s*${escapeRegex(value)}\\s*$`,
+  $options: 'i',
+});
 
 const studentSupportsOffline = (student) => {
   const mode = normalizeMode(student?.learningMode);
@@ -50,7 +54,7 @@ const addOfflineOnlyTutorVisibility = (
     return {
       ...filter,
       teachingMode: { $in: ['Offline', 'Both'] },
-      pincode: allowedOfflinePincode,
+      pincode: buildPincodeFilter(allowedOfflinePincode),
     };
   }
 
@@ -59,7 +63,10 @@ const addOfflineOnlyTutorVisibility = (
       ? {
           $or: [
             { teachingMode: { $nin: ['Offline', 'Both'] } },
-            { teachingMode: { $in: ['Offline', 'Both'] }, pincode: allowedOfflinePincode },
+            {
+              teachingMode: { $in: ['Offline', 'Both'] },
+              pincode: buildPincodeFilter(allowedOfflinePincode),
+            },
           ],
         }
       : { teachingMode: { $ne: 'Offline' } };
@@ -106,7 +113,7 @@ exports.buildTutorFilter = async (query, options = {}) => {
   if (board) filter['boards'] = { $regex: board, $options: 'i' };
   if (gender) filter['gender'] = gender;
   if (teachingMode) filter['teachingMode'] = teachingMode;
-  if (searchPincode) filter['pincode'] = { $regex: escapeRegex(searchPincode), $options: 'i' };
+  if (searchPincode) filter['pincode'] = buildPincodeFilter(searchPincode);
 
   // 🔹 Experience range (assuming experience stored as number of years)
   if (minExp || maxExp) {
@@ -136,7 +143,7 @@ exports.buildTutorFilter = async (query, options = {}) => {
     if (isOfflineOnly) {
       filter["teachingMode"] = { $in: ["Offline", "Both"] };
       if (studentPincode) {
-        filter["pincode"] = studentPincode;
+        filter["pincode"] = buildPincodeFilter(studentPincode);
       }
     }
 
@@ -202,7 +209,7 @@ exports.getRecommendedTutors = async (studentId) => {
   if (isOfflineOnly) {
     query.teachingMode = { $in: ["Offline", "Both"] };
     if (studentPincode) {
-      query.pincode = studentPincode;
+      query.pincode = buildPincodeFilter(studentPincode);
     }
   }
 

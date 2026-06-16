@@ -3,6 +3,7 @@ const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
 const {
   normalizeArray,
+  normalizeSubjectTimeSlots,
   validateStudentProfileData,
   validateTutorProfileData,
   isStudentProfileComplete,
@@ -268,6 +269,17 @@ const updateStudentProfile = async (req, res) => {
         b.tutorGenderPref || "",
         b.tutorGenderOther
       );
+      const subjectsForProfile = normalizeArray(b.subjects);
+      const subjectTimeSlots = normalizeSubjectTimeSlots(b.subjectTimeSlots)
+        .filter((item) => subjectsForProfile.includes(item.subject))
+        .map((item) => ({
+          subject: item.subject,
+          slots: Array.from(new Set(normalizeArray(item.slots))),
+        }))
+        .filter((item) => item.slots.length);
+      const derivedPreferredTimes = subjectTimeSlots.length
+        ? Array.from(new Set(subjectTimeSlots.flatMap((item) => item.slots)))
+        : normalizeArray(b.preferredTimes);
 
       const profileData = {
         userId,
@@ -305,11 +317,12 @@ const updateStudentProfile = async (req, res) => {
         targetYear: resolvedTargetYear || "",
         targetYearOther:
           resolvedTargetYear === "Other" ? b.targetYearOther || "" : "",
-        subjects: normalizeArray(b.subjects),
+        subjects: subjectsForProfile,
         tutorGenderPref: resolvedTutorGenderPref || "No Preference",
         tutorGenderOther:
           resolvedTutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
-      preferredTimes: normalizeArray(b.preferredTimes),
+      preferredTimes: derivedPreferredTimes,
+      subjectTimeSlots,
       availability: normalizeArray(b.availability),
       budget:
         typeof b.budget === "undefined"

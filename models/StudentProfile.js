@@ -63,6 +63,12 @@ const studentProfileSchema = new mongoose.Schema(
     },
     tutorGenderOther: { type: String, trim: true },
     preferredTimes: [String],
+    subjectTimeSlots: [
+      {
+        subject: { type: String, trim: true },
+        slots: [{ type: String, trim: true }],
+      },
+    ],
 
     // Budget preference
     budget: { type: String, trim: true },
