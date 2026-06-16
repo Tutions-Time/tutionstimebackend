@@ -60,27 +60,74 @@ exports.searchStudents = async (req, res) => {
       .sort(sort)
       .lean();
 
+    const requestedSubject = String(req.query.subject || "").trim().toLowerCase();
+    const subjectMatches = (subject) =>
+      !requestedSubject ||
+      String(subject || "").trim().toLowerCase().includes(requestedSubject);
+
     const leads = students.flatMap((student) => {
+      const subjectTimeSlots = Array.isArray(student.subjectTimeSlots)
+        ? student.subjectTimeSlots
+            .filter((item) => item?.subject && subjectMatches(item.subject))
+            .flatMap((item) => {
+              const slots = Array.isArray(item.slots)
+                ? item.slots.filter(Boolean)
+                : [];
+              if (!slots.length) {
+                return [{
+                  ...student,
+                  profileId: student._id,
+                  leadId: `${student._id}:${item.subject}`,
+                  leadSubject: item.subject,
+                  subjects: [item.subject],
+                  preferredTimeSlot: "",
+                  preferredTimes: [],
+                }];
+              }
+              return slots.map((slot, index) => ({
+                ...student,
+                profileId: student._id,
+                leadId: `${student._id}:${item.subject}:${index}`,
+                leadSubject: item.subject,
+                subjects: [item.subject],
+                preferredTimeSlot: slot,
+                preferredTimes: [slot],
+              }));
+            })
+        : [];
+
+      if (subjectTimeSlots.length) return subjectTimeSlots;
+
       const preferredTimes = Array.isArray(student.preferredTimes)
         ? student.preferredTimes.filter(Boolean)
         : [];
+      const subjects = Array.isArray(student.subjects)
+        ? student.subjects.filter((subject) => subjectMatches(subject))
+        : [];
+      const fallbackSubjects = subjects.length ? subjects : [""];
 
       if (!preferredTimes.length) {
-        return [{
+        return fallbackSubjects.map((subject, index) => ({
           ...student,
           profileId: student._id,
-          leadId: String(student._id),
+          leadId: `${student._id}:${subject || "lead"}:${index}`,
+          leadSubject: subject,
+          subjects: subject ? [subject] : student.subjects,
           preferredTimeSlot: "",
-        }];
+        }));
       }
 
-      return preferredTimes.map((slot, index) => ({
-        ...student,
-        profileId: student._id,
-        leadId: `${student._id}:${index}`,
-        preferredTimeSlot: slot,
-        preferredTimes: [slot],
-      }));
+      return fallbackSubjects.flatMap((subject) =>
+        preferredTimes.map((slot, index) => ({
+          ...student,
+          profileId: student._id,
+          leadId: `${student._id}:${subject || "lead"}:${index}`,
+          leadSubject: subject,
+          subjects: subject ? [subject] : student.subjects,
+          preferredTimeSlot: slot,
+          preferredTimes: [slot],
+        }))
+      );
     });
 
     const paginatedLeads = leads.slice(skip, skip + limit);

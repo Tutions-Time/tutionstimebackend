@@ -39,6 +39,19 @@ const normalizeArray = (val) => {
   return [];
 };
 
+const normalizeSubjectTimeSlots = (val) => {
+  const items = normalizeArray(val);
+  return items
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const subject = String(item.subject || "").trim();
+      const slots = normalizeArray(item.slots);
+      if (!subject) return null;
+      return { subject, slots };
+    })
+    .filter(Boolean);
+};
+
 const validateStudentProfileData = (data) => {
   const errors = {};
 
@@ -117,9 +130,19 @@ const validateStudentProfileData = (data) => {
   if (data.tutorGenderPref === "Other" && isEmpty(data.tutorGenderOther))
     errors.tutorGenderOther = "Please specify tutor gender";
 
+  const subjectTimeSlots = normalizeSubjectTimeSlots(data.subjectTimeSlots);
+  const subjectSlotMap = new Map(
+    subjectTimeSlots.map((item) => [item.subject, item.slots])
+  );
   const preferredTimes = normalizeArray(data.preferredTimes);
-  if (!preferredTimes.length)
+  const subjectsWithoutSlots = subjects.filter(
+    (subject) => !(subjectSlotMap.get(subject) || []).length
+  );
+  if (subjectTimeSlots.length && subjectsWithoutSlots.length) {
+    errors.preferredTimes = `Preferred time slot is required for ${subjectsWithoutSlots.join(", ")}`;
+  } else if (!subjectTimeSlots.length && !preferredTimes.length) {
     errors.preferredTimes = "Preferred time slots are required";
+  }
 
   const budget = parseBudget(data.budget);
   if (budget.hourly && budget.monthly) {
@@ -220,6 +243,7 @@ const isTutorProfileComplete = (profile) =>
 
 module.exports = {
   normalizeArray,
+  normalizeSubjectTimeSlots,
   validateStudentProfileData,
   validateTutorProfileData,
   isStudentProfileComplete,
