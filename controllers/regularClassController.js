@@ -464,7 +464,7 @@ exports.getStudentRegularClasses = async (req, res) => {
 
     // Join window config
     const CLASS_DURATION_MIN = 60; // assume 1-hour class
-    const JOIN_BEFORE_MIN = 5;     // student can join 5 min before start
+    const JOIN_BEFORE_MIN = 10;     // student can join 10 min before start
     const EXPIRE_AFTER_MIN = 5;    // link valid 5 min after end
 
     // 4) Build response for frontend
@@ -601,7 +601,7 @@ exports.getTutorRegularClasses = async (req, res) => {
     }
 
     const CLASS_DURATION_MIN = 60;
-    const JOIN_BEFORE_MIN = 5;
+    const JOIN_BEFORE_MIN = 10;
     const EXPIRE_AFTER_MIN = 5;
 
     const enriched = regularClasses.map((rc) => {

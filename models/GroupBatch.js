@@ -36,7 +36,7 @@ const groupBatchSchema = new mongoose.Schema(
     pricePerStudent: { type: Number, required: true },
   meetingLink: { type: String },
   accessWindow: {
-    joinBeforeMin: { type: Number, default: 5 },
+    joinBeforeMin: { type: Number, default: 10 },
     expireAfterMin: { type: Number, default: 5 }
   },
   description: { type: String },
@@ -68,3 +68,4 @@ groupBatchSchema.pre("validate", function (next) {
 });
 
 module.exports = mongoose.model("GroupBatch", groupBatchSchema);
+

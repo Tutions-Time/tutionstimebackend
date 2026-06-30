@@ -422,10 +422,10 @@ exports.joinSession = async (req, res) => {
       return res.status(403).json({ success: false, message: "Not authorized" });
     }
 
-    // Join window gating (open 5 min before, close 5 min after class end)
+    // Join window gating (open 10 min before, close 5 min after class end)
     const start = new Date(session.startDateTime).getTime();
     const classDurationMin = 60;
-    let joinBeforeMin = 5;
+    let joinBeforeMin = 10;
     let expireAfterMin = 5;
     if (session.groupBatchId) {
       const gb = await GroupBatch.findById(session.groupBatchId).select("accessWindow");
@@ -465,3 +465,4 @@ exports.joinSession = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
