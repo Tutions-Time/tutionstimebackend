@@ -25,11 +25,32 @@ async function studentMonthlySummary(userId) {
   return { sessions: sessions.length, completed, attendanceRate: sessions.length ? Math.round((present/sessions.length)*100) : 0, assignments };
 }
 
+async function getTutorClassIds(userId) {
+  const tp = await TutorProfile.findOne({ userId }).select("_id").lean();
+  const tutorIds = [userId];
+  if (tp?._id) tutorIds.push(tp._id);
+
+  const classes = await RegularClass.find({ tutorId: { $in: tutorIds } })
+    .select("_id")
+    .lean();
+
+  return { tutorIds, classIds: classes.map(c => c._id) };
+}
+
+async function tutorHasAnyClass(userId) {
+  const { tutorIds, classIds } = await getTutorClassIds(userId);
+  if (classIds.length) return true;
+
+  const session = await Session.exists({ tutorId: { $in: tutorIds } });
+  return Boolean(session);
+}
+
 async function tutorMonthlySummary(userId) {
   const now = new Date();
   const to = addDays(startOfDay(now), 1);
   const from = addDays(startOfDay(now), -30);
-  const classes = await RegularClass.find({ tutorId: userId, paymentStatus: "paid", status: "active" })
+  const { tutorIds } = await getTutorClassIds(userId);
+  const classes = await RegularClass.find({ tutorId: { $in: tutorIds }, paymentStatus: "paid", status: "active" })
     .select("_id")
     .lean();
   const classIds = classes.map(c => c._id);
@@ -87,6 +108,8 @@ async function sendMonthlyReports() {
 
     const tutors = await TutorProfile.find({}).select("userId name email").lean();
     for (const t of tutors) {
+      if (!(await tutorHasAnyClass(t.userId))) continue;
+
       const sum = await tutorMonthlySummary(t.userId);
       if (t.email && notificationService?.sendEmail) {
         const html = `<h3>Your Monthly Teaching Summary</h3>

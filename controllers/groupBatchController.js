@@ -250,7 +250,7 @@ function validateBatchInput(tp, body) {
   payload.description = description;
 
   const accessWindow = body.accessWindow || {};
-  const joinBeforeMin = Number(accessWindow.joinBeforeMin ?? 5);
+  const joinBeforeMin = Number(accessWindow.joinBeforeMin ?? 10);
   const expireAfterMin = Number(accessWindow.expireAfterMin ?? 5);
   if (joinBeforeMin < 0 || joinBeforeMin > 120) errors.push("Invalid joinBeforeMin");
   if (expireAfterMin < 0 || expireAfterMin > 240) errors.push("Invalid expireAfterMin");
@@ -1050,3 +1050,4 @@ exports.ensureUpcomingSessionLinks = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
