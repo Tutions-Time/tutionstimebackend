@@ -30,7 +30,7 @@ const studentProfileSchema = new mongoose.Schema(
     pincode: { type: String, trim: true },
     learningMode: {
       type: String,
-      enum: ["Online", "Offline", "Both", ""],
+      enum: ["Online", "Offline", ""],
       default: "",
     },
 
@@ -102,3 +102,4 @@ const studentProfileSchema = new mongoose.Schema(
 module.exports =
   mongoose.models.StudentProfile ||
   mongoose.model("StudentProfile", studentProfileSchema);
+
