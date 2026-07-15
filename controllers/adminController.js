@@ -12,6 +12,7 @@ const Notification = require("../models/Notification");
 const Wallet = require("../models/Wallet");
 const mongoose = require("mongoose");
 const { logActivity } = require("../services/loggerService");
+const { createAdminNotification } = require("../services/adminNotification");
 const {
   DEFAULT_SESSION_DURATION_MINUTES,
   computeDurationMinutes,
@@ -1066,13 +1067,22 @@ const listAdminClassesMonitor = async (req, res) => {
 
 const listAdminBookings = async (req, res) => {
   try {
-    const { status, startDate, endDate, page = 1, limit = 50 } = req.query;
+    const {
+      status,
+      startDate,
+      endDate,
+      requestedBy,
+      q,
+      page = 1,
+      limit = 50,
+    } = req.query;
     const pageNum = Math.max(1, Number(page));
     const limitNum = Math.max(1, Number(limit));
     const skip = Math.max(0, (pageNum - 1) * limitNum);
 
     const andClauses = [{ type: "demo" }];
     if (status) andClauses.push({ status });
+    if (requestedBy) andClauses.push({ requestedBy });
     if (startDate || endDate) {
       const range = {};
       if (startDate) range.$gte = new Date(startDate);
@@ -1081,11 +1091,8 @@ const listAdminBookings = async (req, res) => {
     }
     const filter = andClauses.length ? { $and: andClauses } : {};
 
-    const total = await Booking.countDocuments(filter);
-    const bookings = await Booking.find(filter)
+    let bookings = await Booking.find(filter)
       .sort({ preferredDate: -1, createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum)
       .lean();
 
     if (!bookings.length) {
@@ -1098,13 +1105,17 @@ const listAdminBookings = async (req, res) => {
 
     const studentUserIds = bookings.map((b) => b.studentId).filter(Boolean);
     const tutorUserIds = bookings.map((b) => b.tutorId).filter(Boolean);
+    const allUserIds = [...studentUserIds, ...tutorUserIds];
 
-    const [studentProfiles, tutorProfiles] = await Promise.all([
+    const [studentProfiles, tutorProfiles, users] = await Promise.all([
       StudentProfile.find({ userId: { $in: studentUserIds } })
-        .select("userId name email")
+        .select("userId name email altPhone photoUrl classLevel board track subjects goals learningMode city state pincode")
         .lean(),
       TutorProfile.find({ userId: { $in: tutorUserIds } })
-        .select("userId name email")
+        .select("userId name email altPhone photoUrl qualification experience subjects classLevels teachingMode hourlyRate monthlyRate city state pincode isVerified status")
+        .lean(),
+      User.find({ _id: { $in: allUserIds } })
+        .select("_id email phone role status isProfileComplete")
         .lean(),
     ]);
 
@@ -1112,21 +1123,80 @@ const listAdminBookings = async (req, res) => {
       studentProfiles.map((p) => [String(p.userId), p]),
     );
     const tutorMap = new Map(tutorProfiles.map((p) => [String(p.userId), p]));
+    const userMap = new Map(users.map((u) => [String(u._id), u]));
 
-    const data = bookings.map((b) => ({
+    const makePerson = (userId, profile, fallbackRole) => {
+      const user = userMap.get(String(userId)) || {};
+      return {
+        userId,
+        _id: userId,
+        name: profile?.name || "Unknown",
+        email: profile?.email || user.email || "",
+        phone: profile?.altPhone || user.phone || "",
+        photoUrl: profile?.photoUrl || "",
+        role: user.role || fallbackRole,
+        status: user.status || "",
+        isProfileComplete: Boolean(user.isProfileComplete),
+        profile: profile || null,
+      };
+    };
+
+    let data = bookings.map((b) => ({
       _id: b._id,
       status: b.status,
       subject: b.subject,
+      subjects: b.subjects || [],
+      studentBoard: b.studentBoard || "",
+      studentLearningMode: b.studentLearningMode || "",
       preferredDate: b.preferredDate,
       preferredTime: b.preferredTime,
+      preferredEndTime: b.preferredEndTime || "",
+      note: b.note || "",
+      requestedBy: b.requestedBy || "student",
+      expiryReason: b.expiryReason || null,
+      expiredAt: b.expiredAt || null,
+      createdAt: b.createdAt,
+      updatedAt: b.updatedAt,
+      attendance: b.attendance || "not-marked",
+      studentJoinedAt: b.studentJoinedAt || null,
+      tutorJoinedAt: b.tutorJoinedAt || null,
+      demoFeedback: b.demoFeedback || null,
       meetingLink: b.joinUrl || b.meetingLink || "",
       joinUrl: b.joinUrl || "",
       startUrl: b.startUrl || "",
       meetingId: b.meetingId || "",
       meetingPassword: b.meetingPassword || "",
-      student: studentMap.get(String(b.studentId)) || null,
-      tutor: tutorMap.get(String(b.tutorId)) || null,
+      student: makePerson(
+        b.studentId,
+        studentMap.get(String(b.studentId)),
+        "student",
+      ),
+      tutor: makePerson(b.tutorId, tutorMap.get(String(b.tutorId)), "tutor"),
     }));
+
+    const query = String(q || "").trim().toLowerCase();
+    if (query) {
+      data = data.filter((b) => {
+        const haystack = [
+          b.subject,
+          b.status,
+          b.requestedBy,
+          b.student?.name,
+          b.student?.email,
+          b.student?.phone,
+          b.tutor?.name,
+          b.tutor?.email,
+          b.tutor?.phone,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(query);
+      });
+    }
+
+    const total = data.length;
+    data = data.slice(skip, skip + limitNum);
 
     return res.status(200).json({
       success: true,
@@ -1137,6 +1207,75 @@ const listAdminBookings = async (req, res) => {
         limit: limitNum,
         pages: Math.ceil(total / limitNum),
       },
+    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
+const cancelAdminDemoBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {};
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid booking id" });
+    }
+
+    const booking = await Booking.findById(id);
+    if (!booking || booking.type !== "demo") {
+      return res.status(404).json({ success: false, message: "Demo booking not found" });
+    }
+
+    if (["cancelled", "completed", "expired"].includes(booking.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot cancel a ${booking.status} demo booking`,
+      });
+    }
+
+    booking.status = "cancelled";
+    booking.expiryReason = null;
+    booking.note = [booking.note, reason ? `Admin cancelled: ${reason}` : "Admin cancelled"]
+      .filter(Boolean)
+      .join("\n");
+    await booking.save();
+
+    const [studentProfile, tutorProfile] = await Promise.all([
+      StudentProfile.findOne({ userId: booking.studentId }).select("name").lean(),
+      TutorProfile.findOne({ userId: booking.tutorId }).select("name").lean(),
+    ]);
+
+    await Promise.allSettled([
+      Notification.create({
+        userId: booking.studentId,
+        title: "Demo Cancelled",
+        body:
+          reason ||
+          `Your demo for ${booking.subject} was cancelled by admin.`,
+        meta: { type: "demo_cancelled", bookingId: booking._id },
+      }),
+      Notification.create({
+        userId: booking.tutorId,
+        title: "Demo Cancelled",
+        body:
+          reason ||
+          `Your demo for ${booking.subject} was cancelled by admin.`,
+        meta: { type: "demo_cancelled", bookingId: booking._id },
+      }),
+      createAdminNotification(
+        "Demo Cancelled by Admin",
+        `Admin cancelled ${booking.subject} demo between ${studentProfile?.name || "student"} and ${tutorProfile?.name || "tutor"}.`,
+        { type: "demo_cancelled", bookingId: booking._id },
+      ),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: "Demo booking cancelled successfully",
+      data: booking,
     });
   } catch (error) {
     return res
@@ -1326,6 +1465,10 @@ module.exports = {
   listAdminSessions,
   listAdminClassesMonitor,
   listAdminBookings,
+  cancelAdminDemoBooking,
   updateAdminSessionSchedule,
   migrateUploadsToS3,
 };
+
+
+

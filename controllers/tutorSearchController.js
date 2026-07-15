@@ -129,17 +129,22 @@ exports.searchTutors = async (req, res) => {
 
       // Fetch tutors
       const tutors = await TutorProfile.find(filter)
-        .populate('userId', 'phone role lastLogin status isProfileComplete')
+        .populate('userId', 'role lastLogin status isProfileComplete')
         .sort(sort)
         .skip(skip)
         .limit(limit)
         .select(
-          'name photoUrl city pincode qualification specialization experience hourlyRate monthlyRate gender subjects teachingMode addressLine1 lastLogin rating isFeatured availability kycStatus'
+          'name photoUrl city state qualification specialization experience hourlyRate monthlyRate gender subjects teachingMode lastLogin rating isFeatured availability kycStatus'
         )
         .lean();
 
       const activeTutors = tutors.map((t) => ({
         ...t,
+        pincode: undefined,
+        addressLine1: undefined,
+        addressLine2: undefined,
+        email: undefined,
+        altPhone: undefined,
         isVerifiedTutor:
           Boolean(t?.userId?.isProfileComplete) &&
           String(t?.kycStatus || '').toLowerCase() === 'approved',
@@ -171,6 +176,11 @@ exports.searchTutors = async (req, res) => {
       const u = userMap.get(String(t?.userId || ''));
       return {
         ...t,
+        pincode: undefined,
+        addressLine1: undefined,
+        addressLine2: undefined,
+        email: undefined,
+        altPhone: undefined,
         isVerifiedTutor:
           Boolean(u?.isProfileComplete) &&
           String(t?.kycStatus || '').toLowerCase() === 'approved',
@@ -201,7 +211,7 @@ exports.getTutorById = async (req, res) => {
   try {
     const { id } = req.params;
   const tutor = await TutorProfile.findById(id)
-    .populate('userId', 'phone role email status isProfileComplete')
+    .populate('userId', 'role status isProfileComplete')
     .lean();
 
   if (!tutor) {
@@ -240,3 +250,5 @@ exports.getTutorById = async (req, res) => {
     });
   }
 };
+
+

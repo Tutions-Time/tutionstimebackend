@@ -193,22 +193,55 @@ const getStudentProfileForTutor = async (req, res) => {
       });
     }
 
-    // 3) Return combined data (similar shape to getUserProfile)
+    const safeProfile = {
+      _id: profile._id,
+      userId: profile.userId,
+      name: profile.name,
+      gender: profile.gender,
+      city: profile.city,
+      state: profile.state,
+      learningMode: profile.learningMode,
+      track: profile.track,
+      board: profile.board,
+      boardOther: profile.boardOther,
+      classLevel: profile.classLevel,
+      classLevelOther: profile.classLevelOther,
+      stream: profile.stream,
+      streamOther: profile.streamOther,
+      program: profile.program,
+      programOther: profile.programOther,
+      discipline: profile.discipline,
+      disciplineOther: profile.disciplineOther,
+      yearSem: profile.yearSem,
+      yearSemOther: profile.yearSemOther,
+      exam: profile.exam,
+      examOther: profile.examOther,
+      targetYear: profile.targetYear,
+      targetYearOther: profile.targetYearOther,
+      subjects: profile.subjects || [],
+      subjectTimeSlots: profile.subjectTimeSlots || [],
+      tutorGenderPref: profile.tutorGenderPref,
+      preferredTimes: profile.preferredTimes || [],
+      budget: profile.budget,
+      goals: profile.goals,
+      availability: profile.availability || [],
+      photoUrl: profile.photoUrl,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+    };
+
+    // Return only class-decision details. Do not expose contact, exact address, or payout data.
     return res.status(200).json({
       success: true,
       data: {
         user: {
           id: studentUser._id,
-          phone: studentUser.phone,
           role: studentUser.role,
-          email: studentUser.email,
           isProfileComplete: studentUser.isProfileComplete,
           status: studentUser.status,
-          lastLogin: studentUser.lastLogin,
           createdAt: studentUser.createdAt,
-          updatedAt: studentUser.updatedAt,
         },
-        profile,       // full StudentProfile (name, city, board, classLevel, subjects, etc.)
+        profile: safeProfile,
       },
     });
   } catch (error) {
@@ -888,3 +921,5 @@ module.exports = {
   uploadTutorKyc,
   getStudentProfileForTutor
 };
+
+
