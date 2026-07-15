@@ -43,6 +43,7 @@ router.put('/tutors/:id/kyc',  adminTutorController.updateKycStatus);
 router.put('/tutors/:id/status',  adminTutorController.updateTutorStatus);
 router.get('/bookings/:id', getBookingByIdForAdmin);
 router.get('/bookings', adminController.listAdminBookings);
+router.patch('/bookings/:id/cancel', adminController.cancelAdminDemoBooking);
 
 router.get('/dashboard/stats', adminController.getDashboardStats);
 router.get('/dashboard/activity', adminController.getDashboardActivity);
@@ -61,3 +62,4 @@ router.delete('/blogs/:id', blogController.deleteBlog);
 router.get('/tutors/:id/journey', adminTutorController.getTutorJourney);
 
 module.exports = router;
+

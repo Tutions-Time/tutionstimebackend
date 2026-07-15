@@ -994,11 +994,11 @@ exports.getStudentBookings = async (req, res) => {
       ),
     ];
 
-    // Fetch tutor name + rates
+    // Fetch safe tutor profile summary. Do not expose contact details here.
     const tutorProfiles = await TutorProfile.find({
       userId: { $in: tutorUserIds },
     })
-      .select("userId name hourlyRate monthlyRate")
+      .select("_id userId name photoUrl qualification experience subjects classLevels teachingMode hourlyRate monthlyRate city state isVerified status")
       .lean();
 
     // Map tutor data by userId
@@ -1006,7 +1006,19 @@ exports.getStudentBookings = async (req, res) => {
       tutorProfiles.map((tp) => [
         String(tp.userId),
         {
+          profileId: tp._id,
+          userId: tp.userId,
           name: tp.name,
+          photoUrl: tp.photoUrl || "",
+          qualification: tp.qualification || "",
+          experience: tp.experience ?? null,
+          subjects: tp.subjects || [],
+          classLevels: tp.classLevels || [],
+          teachingMode: tp.teachingMode || "",
+          city: tp.city || "",
+          state: tp.state || "",
+          isVerified: Boolean(tp.isVerified),
+          status: tp.status || "",
           hourlyRate: tp.hourlyRate ?? null,
           monthlyRate: tp.monthlyRate ?? null,
         },
@@ -1025,7 +1037,19 @@ exports.getStudentBookings = async (req, res) => {
 
       return {
         ...b,
+        tutorProfileId: tutorData.profileId,
+        tutorUserId: tutorData.userId || b.tutorId,
         tutorName: tutorData.name,
+        tutorPhotoUrl: tutorData.photoUrl,
+        tutorQualification: tutorData.qualification,
+        tutorExperience: tutorData.experience,
+        tutorSubjects: tutorData.subjects,
+        tutorClassLevels: tutorData.classLevels,
+        tutorTeachingMode: tutorData.teachingMode,
+        tutorCity: tutorData.city,
+        tutorState: tutorData.state,
+        tutorIsVerified: tutorData.isVerified,
+        tutorProfileStatus: tutorData.status,
         tutorHourlyRate: tutorData.hourlyRate,
         tutorMonthlyRate: tutorData.monthlyRate,
       };
@@ -1062,21 +1086,56 @@ exports.getTutorBookings = async (req, res) => {
     const studentProfiles = await StudentProfile.find({
       userId: { $in: studentUserIds },
     })
-      .select("userId name")
+      .select("userId name photoUrl track board classLevel program discipline exam subjects goals learningMode city state")
       .lean();
 
-    const studentNameByUserId = new Map(
-      studentProfiles.map((sp) => [String(sp.userId), sp.name])
+    const studentDataByUserId = new Map(
+      studentProfiles.map((sp) => [
+        String(sp.userId),
+        {
+          userId: sp.userId,
+          name: sp.name,
+          photoUrl: sp.photoUrl || "",
+          track: sp.track || "",
+          board: sp.board || "",
+          classLevel: sp.classLevel || "",
+          program: sp.program || "",
+          discipline: sp.discipline || "",
+          exam: sp.exam || "",
+          subjects: sp.subjects || [],
+          goals: sp.goals || "",
+          learningMode: sp.learningMode || "",
+          city: sp.city || "",
+          state: sp.state || "",
+        },
+      ])
     );
 
     const enriched = bookings.map((b) => {
       const studentIdStr = b.studentId ? String(b.studentId) : null;
-      const studentName =
-        (studentIdStr && studentNameByUserId.get(studentIdStr)) || "Student";
+      const studentData =
+        (studentIdStr && studentDataByUserId.get(studentIdStr)) || {
+          userId: b.studentId,
+          name: "Student",
+          subjects: [],
+        };
 
       return {
         ...b,
-        studentName,
+        studentUserId: studentData.userId || b.studentId,
+        studentName: studentData.name,
+        studentPhotoUrl: studentData.photoUrl,
+        studentTrack: studentData.track,
+        studentBoard: studentData.board || b.studentBoard,
+        studentClassLevel: studentData.classLevel,
+        studentProgram: studentData.program,
+        studentDiscipline: studentData.discipline,
+        studentExam: studentData.exam,
+        studentSubjects: studentData.subjects,
+        studentGoals: studentData.goals,
+        studentLearningMode: studentData.learningMode || b.studentLearningMode,
+        studentCity: studentData.city,
+        studentState: studentData.state,
       };
     });
 
@@ -2725,4 +2784,6 @@ exports.getTutorDemoInsights = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
+
 
