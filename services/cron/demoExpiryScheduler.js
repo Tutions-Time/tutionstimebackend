@@ -17,7 +17,7 @@ const DEMO_EXPIRE_GRACE_MINUTES = Number(
 const DEMO_PENDING_ACCEPT_EXPIRY_HOURS = Number(
   process.env.DEMO_PENDING_ACCEPT_EXPIRY_HOURS ||
     process.env.DEMO_PENDING_TUTOR_ACCEPT_EXPIRY_HOURS ||
-    5
+    24
 );
 
 function parseTime(timeStr) {
@@ -268,3 +268,4 @@ module.exports = {
   start,
   runOnce,
 };
+

@@ -70,14 +70,14 @@ const validateStudentProfileData = (data) => {
     errors.genderOther = "Please specify gender";
 
   if (isEmpty(data.addressLine1))
-    errors.addressLine1 = "Address line 1 is required";
+    errors.addressLine1 = "Address is required";
   if (isEmpty(data.city)) errors.city = "City is required";
   if (isEmpty(data.state)) errors.state = "State is required";
   if (isEmpty(data.pincode) || !PINCODE_REGEX.test(String(data.pincode)))
     errors.pincode = "Valid 6 digit pincode is required";
 
-  if (!["Online", "Offline", "Both"].includes(data.learningMode))
-    errors.learningMode = "Learning mode must be Online, Offline, or Both";
+  if (!["Online", "Offline"].includes(data.learningMode))
+    errors.learningMode = "Learning mode must be Online or Offline";
 
   if (!["school", "college", "competitive"].includes(data.track))
     errors.track = "Learning track is required";
@@ -138,7 +138,21 @@ const validateStudentProfileData = (data) => {
   const subjectsWithoutSlots = subjects.filter(
     (subject) => !(subjectSlotMap.get(subject) || []).length
   );
-  if (subjectTimeSlots.length && subjectsWithoutSlots.length) {
+  const slotOwner = new Map();
+  const duplicateSlots = [];
+  subjectTimeSlots.forEach((item) => {
+    (item.slots || []).forEach((slot) => {
+      if (slotOwner.has(slot) && slotOwner.get(slot) !== item.subject) {
+        duplicateSlots.push(`${slot} (${slotOwner.get(slot)} and ${item.subject})`);
+      } else {
+        slotOwner.set(slot, item.subject);
+      }
+    });
+  });
+
+  if (duplicateSlots.length) {
+    errors.preferredTimes = `A time slot can be selected for only one subject. Duplicate: ${duplicateSlots[0]}`;
+  } else if (subjectTimeSlots.length && subjectsWithoutSlots.length) {
     errors.preferredTimes = `Preferred time slot is required for ${subjectsWithoutSlots.join(", ")}`;
   } else if (!subjectTimeSlots.length && !preferredTimes.length) {
     errors.preferredTimes = "Preferred time slots are required";
@@ -183,7 +197,7 @@ const validateTutorProfileData = (data, options = {}) => {
     errors.teachingMode = "Teaching mode is required";
 
   if (isEmpty(data.addressLine1))
-    errors.addressLine1 = "Address line 1 is required";
+    errors.addressLine1 = "Address is required";
   if (isEmpty(data.city)) errors.city = "City is required";
   if (isEmpty(data.state)) errors.state = "State is required";
   if (isEmpty(data.pincode) || !PINCODE_REGEX.test(String(data.pincode)))
@@ -249,3 +263,6 @@ module.exports = {
   isStudentProfileComplete,
   isTutorProfileComplete,
 };
+
+
+
