@@ -13,12 +13,62 @@ const Wallet = require("../models/Wallet");
 const mongoose = require("mongoose");
 const { logActivity } = require("../services/loggerService");
 const { createAdminNotification } = require("../services/adminNotification");
+const notificationService = require("../services/notificationService");
 const {
   DEFAULT_SESSION_DURATION_MINUTES,
   computeDurationMinutes,
   buildGroupSessionTopic,
 } = require("../utils/sessionZoomUtils");
 const zoomService = require("../services/zoomService");
+
+const DEMO_DURATION_MINUTES = 15;
+const BOOKING_TZ_OFFSET_MIN = Number(process.env.BOOKING_TZ_OFFSET_MIN || 330);
+
+function getDemoStartDateTime(booking) {
+  if (!booking?.preferredDate || !booking?.preferredTime) return null;
+  const baseUtc = new Date(booking.preferredDate);
+  const [hourStr, minuteStr] = String(booking.preferredTime).split(":");
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+
+  const shifted = new Date(baseUtc.getTime() + BOOKING_TZ_OFFSET_MIN * 60000);
+  const year = shifted.getUTCFullYear();
+  const month = shifted.getUTCMonth();
+  const day = shifted.getUTCDate();
+  const utcMs =
+    Date.UTC(year, month, day, hour, minute, 0, 0) -
+    BOOKING_TZ_OFFSET_MIN * 60000;
+
+  return new Date(utcMs);
+}
+
+function buildDemoTopicForAdmin(booking) {
+  const subject = booking?.subject || "tuitionstime Demo";
+  if (!booking?.preferredDate) return subject;
+  const dateLabel = new Date(booking.preferredDate).toLocaleDateString("en-IN");
+  return `${subject} (${dateLabel})`;
+}
+
+async function ensureAdminDemoZoomMeeting(booking) {
+  const startDateTime = getDemoStartDateTime(booking);
+  if (!startDateTime) {
+    throw new Error("Unable to calculate demo start time for Zoom meeting.");
+  }
+
+  const meeting = await zoomService.createZoomMeeting({
+    topic: buildDemoTopicForAdmin(booking),
+    startTime: startDateTime.toISOString(),
+    duration: DEMO_DURATION_MINUTES,
+  });
+
+  booking.meetingId = meeting.id ? String(meeting.id) : booking.meetingId || "";
+  booking.meetingPassword =
+    meeting.password || meeting.encrypted_password || booking.meetingPassword || "";
+  booking.startUrl = meeting.start_url || booking.startUrl || "";
+  booking.joinUrl = meeting.join_url || booking.joinUrl || "";
+  booking.meetingLink = booking.joinUrl || booking.meetingLink || "";
+}
 
 function parseAdminSessionDateTime(date, time, mode = "regular") {
   const [year, month, day] = String(date || "").split("-").map(Number);
@@ -1284,6 +1334,102 @@ const cancelAdminDemoBooking = async (req, res) => {
   }
 };
 
+const acceptAdminDemoBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid booking id" });
+    }
+
+    const booking = await Booking.findById(id);
+    if (!booking || booking.type !== "demo") {
+      return res.status(404).json({ success: false, message: "Demo booking not found" });
+    }
+
+    if (booking.status !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot accept a ${booking.status} demo booking`,
+      });
+    }
+
+    booking.status = "confirmed";
+    booking.expiryReason = null;
+    booking.expiredAt = null;
+    if (!booking.joinUrl || !booking.startUrl) {
+      await ensureAdminDemoZoomMeeting(booking);
+    }
+    booking.meetingLink = booking.joinUrl || booking.meetingLink || "";
+    await booking.save();
+
+    const [studentProfile, tutorProfile] = await Promise.all([
+      StudentProfile.findOne({ userId: booking.studentId }).select("name email").lean(),
+      TutorProfile.findOne({ userId: booking.tutorId }).select("name email").lean(),
+    ]);
+
+    const studentName = studentProfile?.name || "student";
+    const tutorName = tutorProfile?.name || "tutor";
+    const displayDate = new Date(booking.preferredDate).toLocaleDateString("en-IN");
+    const displayTime = booking.preferredTime || "";
+    const studentLink = booking.joinUrl || booking.meetingLink || "";
+    const tutorLink = booking.startUrl || booking.meetingLink || "";
+    const body = `Your demo for ${booking.subject} is booked for ${displayDate}${
+      displayTime ? ` at ${displayTime}` : ""
+    }.`;
+
+    await Promise.allSettled([
+      notificationService.notifyUser(booking.studentId, "Demo Booked", body, {
+        type: "demo_confirmed",
+        bookingId: booking._id,
+        meetingLink: studentLink,
+        joinUrl: booking.joinUrl,
+        startUrl: booking.startUrl,
+        meetingId: booking.meetingId,
+      }),
+      notificationService.notifyUser(
+        booking.tutorId,
+        "Demo Booked",
+        `Your demo with ${studentName} is booked for ${displayDate}${
+          displayTime ? ` at ${displayTime}` : ""
+        }.`,
+        {
+          type: "demo_confirmed",
+          bookingId: booking._id,
+          meetingLink: tutorLink,
+          joinUrl: booking.joinUrl,
+          startUrl: booking.startUrl,
+          meetingId: booking.meetingId,
+        },
+      ),
+      createAdminNotification(
+        "Demo Booked by Admin",
+        `Admin booked ${booking.subject} demo between ${studentName} and ${tutorName}.`,
+        {
+          type: "demo_confirmed",
+          bookingId: booking._id,
+          studentId: booking.studentId,
+          tutorId: booking.tutorId,
+          meetingLink: booking.meetingLink,
+          joinUrl: booking.joinUrl,
+          startUrl: booking.startUrl,
+          meetingId: booking.meetingId,
+        },
+      ),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: "Demo booking booked successfully",
+      data: booking,
+    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
 const updateAdminSessionSchedule = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1465,6 +1611,7 @@ module.exports = {
   listAdminSessions,
   listAdminClassesMonitor,
   listAdminBookings,
+  acceptAdminDemoBooking,
   cancelAdminDemoBooking,
   updateAdminSessionSchedule,
   migrateUploadsToS3,

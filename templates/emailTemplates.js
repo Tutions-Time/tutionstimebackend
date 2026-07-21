@@ -84,7 +84,7 @@ const emailWrapper = (title, body, buttonLabel = null, buttonLink = null) => `
 
 exports.bookingConfirmedHTML = ({ tutorName, subject, date, link }) =>
   emailWrapper(
-    "Demo Confirmed!",
+    "Demo Booked!",
     `
       <p style="font-size:16px;color:#333;">
         Your demo with <strong>${tutorName}</strong> for <strong>${subject}</strong> is scheduled on <b>${date}</b>.
@@ -95,13 +95,18 @@ exports.bookingConfirmedHTML = ({ tutorName, subject, date, link }) =>
     link
   );
 
-exports.bookingCancelledHTML = ({ tutorName, subject }) =>
+exports.bookingCancelledHTML = ({ tutorName, subject, reason }) =>
   emailWrapper(
     "Demo Cancelled",
     `
       <p style="font-size:16px;color:#333;">
         Your demo with <strong>${tutorName}</strong> for <strong>${subject}</strong> has been cancelled.
       </p>
+      ${
+        reason
+          ? `<p style="font-size:15px;color:#555;"><strong>Reason:</strong> ${reason}</p>`
+          : ""
+      }
       <p style="color:#555;">You can request another demo anytime from your tuitionstime dashboard.</p>
     `,
     "Book Another Demo",

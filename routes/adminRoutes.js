@@ -43,6 +43,7 @@ router.put('/tutors/:id/kyc',  adminTutorController.updateKycStatus);
 router.put('/tutors/:id/status',  adminTutorController.updateTutorStatus);
 router.get('/bookings/:id', getBookingByIdForAdmin);
 router.get('/bookings', adminController.listAdminBookings);
+router.patch('/bookings/:id/accept', adminController.acceptAdminDemoBooking);
 router.patch('/bookings/:id/cancel', adminController.cancelAdminDemoBooking);
 
 router.get('/dashboard/stats', adminController.getDashboardStats);

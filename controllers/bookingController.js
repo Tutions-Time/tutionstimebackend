@@ -807,7 +807,7 @@ function notifyDemoConfirmed({
         });
         await notificationService.sendEmail(
           studentEmail,
-          "Demo Confirmed - tuitionstime",
+          "Demo Booked - tuitionstime",
           "",
           html
         );
@@ -823,7 +823,7 @@ function notifyDemoConfirmed({
         });
         await notificationService.sendEmail(
           tutorEmail,
-          "Demo Confirmed - tuitionstime",
+          "Demo Booked - tuitionstime",
           "",
           html
         );
@@ -832,8 +832,8 @@ function notifyDemoConfirmed({
       if (notificationService?.createInApp) {
         await notificationService.createInApp(
           studentId,
-          "Demo Confirmed",
-          `Your demo with ${tutorName} is confirmed for ${displayDate}${
+          "Demo Booked",
+          `Your demo with ${tutorName} is booked for ${displayDate}${
             displayTime ? ` at ${displayTime}` : ""
           }.`,
           {
@@ -849,8 +849,8 @@ function notifyDemoConfirmed({
       try {
         await notificationService.notifyUser(
           studentId,
-          "Demo Confirmed",
-          `Your demo with ${tutorName} is confirmed for ${displayDate}${
+          "Demo Booked",
+          `Your demo with ${tutorName} is booked for ${displayDate}${
             displayTime ? ` at ${displayTime}` : ""
           }.`,
           {
@@ -862,8 +862,8 @@ function notifyDemoConfirmed({
         );
         await notificationService.notifyUser(
           tutorId,
-          "Demo Confirmed",
-          `${tutorName} demo confirmed`,
+          "Demo Booked",
+          `${tutorName} demo booked`,
           {
             meetingLink: tutorLink,
             bookingId: booking._id,
@@ -874,8 +874,8 @@ function notifyDemoConfirmed({
       } catch (_) {}
 
       await createAdminNotification(
-        "Demo Confirmed",
-        `Demo confirmed for ${booking.subject} by ${tutorName} on ${displayDate}${
+        "Demo Booked",
+        `Demo booked for ${booking.subject} by ${tutorName} on ${displayDate}${
           displayTime ? ` at ${displayTime}` : ""
         }`,
         {
@@ -902,13 +902,19 @@ function notifyDemoCancelled({
   studentId,
   tutorId,
   studentEmail,
+  reason,
 }) {
   setImmediate(async () => {
     try {
+      const reasonText = String(reason || "").trim();
+      const studentMessage = `Your demo with ${tutorName} was cancelled.${
+        reasonText ? ` Reason: ${reasonText}` : ""
+      }`;
       if (studentEmail && notificationService?.sendEmail) {
         const html = emailTpl.bookingCancelledHTML({
           tutorName,
           subject: booking.subject,
+          reason: reasonText,
         });
         await notificationService.sendEmail(
           studentEmail,
@@ -922,7 +928,7 @@ function notifyDemoCancelled({
         await notificationService.createInApp(
           studentId,
           "Demo Cancelled",
-          `Your demo with ${tutorName} was cancelled.`,
+          studentMessage,
           { tutorId, bookingId: booking._id }
         );
       }
@@ -931,20 +937,23 @@ function notifyDemoCancelled({
         await notificationService.notifyUser(
           studentId,
           "Demo Cancelled",
-          `Your demo with ${tutorName} was cancelled.`,
-          { tutorId, bookingId: booking._id }
+          studentMessage,
+          { tutorId, bookingId: booking._id, reason: reasonText }
         );
       } catch (_) {}
 
       await createAdminNotification(
         "Demo Cancelled",
-        `Demo cancelled for ${booking.subject} by ${tutorName}`,
+        `Demo cancelled for ${booking.subject} by ${tutorName}${
+          reasonText ? `. Reason: ${reasonText}` : ""
+        }`,
         {
           bookingId: booking._id,
           tutorId,
           studentId,
           preferredTime: booking.preferredTime,
           status: booking.status,
+          reason: reasonText,
         }
       );
     } catch (e) {
@@ -1152,7 +1161,7 @@ exports.getTutorBookings = async (req, res) => {
 exports.updateDemoStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, reason } = req.body;
     console.log("updateDemoStatus called", {
       bookingId: id,
       status,
@@ -1225,14 +1234,25 @@ exports.updateDemoStatus = async (req, res) => {
       return res.json({
         success: true,
         message:
-          "Demo confirmed successfully and emails sent to both student & tutor.",
+          "Demo booked successfully and emails sent to both student & tutor.",
         data: booking,
       });
     }
 
     if (status === "cancelled") {
       console.log("updateDemoStatus cancel", { bookingId: id, userId: req.user?.id });
+      const reasonText = String(reason || "").trim();
+      if (!reasonText) {
+        return res.status(400).json({
+          success: false,
+          message: "Cancellation reason is required",
+        });
+      }
       booking.status = "cancelled";
+      booking.note = [
+        booking.note,
+        `Tutor cancelled: ${reasonText}`,
+      ].filter(Boolean).join("\n");
       await booking.save();
 
       const tutorProfile = await TutorProfile.findOne({
@@ -1246,6 +1266,7 @@ exports.updateDemoStatus = async (req, res) => {
         studentId: booking.studentId,
         tutorId: booking.tutorId,
         studentEmail: studentUser?.email,
+        reason: reasonText,
       };
       void notifyDemoCancelled(notifyCtx);
 
@@ -1370,7 +1391,7 @@ exports.markTutorJoined = async (req, res) => {
 exports.updateDemoStatusByStudent = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, reason } = req.body;
     console.log("updateDemoStatusByStudent called", {
       bookingId: id,
       status,
@@ -1441,11 +1462,11 @@ exports.updateDemoStatusByStudent = async (req, res) => {
             time: displayTime,
             link: studentLink,
           }) ||
-          `<p>Your demo with ${tutorName} is confirmed on ${displayDate} at ${displayTime}. Meeting: ${studentLink}</p>`;
+          `<p>Your demo with ${tutorName} is booked on ${displayDate} at ${displayTime}. Meeting: ${studentLink}</p>`;
 
         await notificationService.sendEmail(
           studentUser.email,
-          "Demo Confirmed - tuitionstime",
+          "Demo Booked - tuitionstime",
           "",
           html
         );
@@ -1461,11 +1482,11 @@ exports.updateDemoStatusByStudent = async (req, res) => {
             time: displayTime,
             link: tutorLink,
           }) ||
-          `<p>Your demo with ${studentName} is confirmed on ${displayDate} at ${displayTime}. Meeting: ${tutorLink}</p>`;
+          `<p>Your demo with ${studentName} is booked on ${displayDate} at ${displayTime}. Meeting: ${tutorLink}</p>`;
 
         await notificationService.sendEmail(
           tutorUser.email,
-          "Demo Confirmed - tuitionstime",
+          "Demo Booked - tuitionstime",
           "",
           html
         );
@@ -1474,8 +1495,8 @@ exports.updateDemoStatusByStudent = async (req, res) => {
       if (notificationService?.createInApp) {
         await notificationService.createInApp(
           booking.tutorId,
-          "Demo Confirmed",
-          `${studentName} confirmed your demo for ${displayDate}${
+          "Demo Booked",
+          `${studentName} booked your demo for ${displayDate}${
             displayTime ? ` at ${displayTime}` : ""
           }.`,
           {
@@ -1489,8 +1510,8 @@ exports.updateDemoStatusByStudent = async (req, res) => {
       }
 
       await createAdminNotification(
-        "Tutor-Initiated Demo Confirmed",
-        `Demo confirmed for ${booking.subject} between ${tutorName} and ${studentName} on ${displayDate}${
+        "Tutor-Initiated Demo Booked",
+        `Demo booked for ${booking.subject} between ${tutorName} and ${studentName} on ${displayDate}${
           displayTime ? ` at ${displayTime}` : ""
         }`,
         {
@@ -1509,7 +1530,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
 
       return res.json({
         success: true,
-        message: "Demo confirmed successfully.",
+        message: "Demo booked successfully.",
         data: booking,
       });
     }
@@ -1517,7 +1538,18 @@ exports.updateDemoStatusByStudent = async (req, res) => {
     // cancelled
     if (status === "cancelled") {
       console.log("updateDemoStatusByStudent cancel", { bookingId: id, userId: req.user?.id });
+      const reasonText = String(reason || "").trim();
+      if (!reasonText) {
+        return res.status(400).json({
+          success: false,
+          message: "Cancellation reason is required",
+        });
+      }
       booking.status = "cancelled";
+      booking.note = [
+        booking.note,
+        `Student cancelled: ${reasonText}`,
+      ].filter(Boolean).join("\n");
       await booking.save();
 
       const tutorProfile = await TutorProfile.findOne({
@@ -1536,8 +1568,9 @@ exports.updateDemoStatusByStudent = async (req, res) => {
           emailTpl.bookingCancelledHTML?.({
             tutorName,
             subject: booking.subject,
+            reason: reasonText,
           }) ||
-          `<p>${studentName} cancelled the demo for ${booking.subject}.</p>`;
+          `<p>${studentName} cancelled the demo for ${booking.subject}. Reason: ${reasonText}</p>`;
 
         await notificationService.sendEmail(
           tutorUser.email,
@@ -1547,18 +1580,16 @@ exports.updateDemoStatusByStudent = async (req, res) => {
         );
       }
 
-      if (notificationService?.createInApp) {
-        await notificationService.createInApp(
-          booking.tutorId,
-          "Demo Cancelled",
-          `${studentName} cancelled your demo request.`,
-          { tutorId: booking.tutorId, bookingId: booking._id }
-        );
-      }
+      await notificationService.notifyUser(
+        booking.tutorId,
+        "Demo Cancelled",
+        `${studentName} cancelled your demo request. Reason: ${reasonText}`,
+        { tutorId: booking.tutorId, bookingId: booking._id, reason: reasonText }
+      );
 
       await createAdminNotification(
         "Tutor-Initiated Demo Cancelled",
-        `Demo cancelled for ${booking.subject} by ${studentName}`,
+        `Demo cancelled for ${booking.subject} by ${studentName}. Reason: ${reasonText}`,
         {
           bookingId: booking._id,
           tutorId: booking.tutorId,
@@ -1566,6 +1597,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
           preferredTime: booking.preferredTime,
           status: booking.status,
           requestedBy: booking.requestedBy,
+          reason: reasonText,
         }
       );
 

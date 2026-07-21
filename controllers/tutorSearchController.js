@@ -230,11 +230,54 @@ exports.getTutorById = async (req, res) => {
   }
 
   const reviews = await gatherTutorReviews(tutor._id, tutor.userId);
+  const safeTutor = {
+    _id: tutor._id,
+    userId: tutor.userId
+      ? {
+          _id: tutor.userId._id,
+          role: tutor.userId.role,
+          status: tutor.userId.status,
+          isProfileComplete: tutor.userId.isProfileComplete,
+        }
+      : tutor.userId,
+    name: tutor.name,
+    gender: tutor.gender,
+    isAgeConfirmed: tutor.isAgeConfirmed,
+    rating: tutor.rating,
+    ratingCount: tutor.ratingCount,
+    isFeatured: tutor.isFeatured,
+    qualification: tutor.qualification,
+    specialization: tutor.specialization,
+    experience: tutor.experience,
+    teachingMode: tutor.teachingMode,
+    tuitionType: tutor.tuitionType,
+    city: tutor.city,
+    state: tutor.state,
+    subjects: tutor.subjects || [],
+    classLevels: tutor.classLevels || [],
+    boards: tutor.boards || [],
+    exams: tutor.exams || [],
+    studentTypes: tutor.studentTypes || [],
+    groupSize: tutor.groupSize,
+    groupSizes: tutor.groupSizes || [],
+    hourlyRate: tutor.hourlyRate,
+    monthlyRate: tutor.monthlyRate,
+    availability: tutor.availability || [],
+    bio: tutor.bio,
+    achievements: tutor.achievements,
+    photoUrl: tutor.photoUrl,
+    demoVideoUrl: tutor.demoVideoUrl,
+    isVerified: tutor.isVerified,
+    status: tutor.status,
+    kycStatus: tutor.kycStatus,
+    createdAt: tutor.createdAt,
+    updatedAt: tutor.updatedAt,
+  };
 
   res.status(200).json({
     success: true,
     data: {
-      ...tutor,
+      ...safeTutor,
       isVerifiedTutor:
         Boolean(tutor?.userId?.isProfileComplete) &&
         String(tutor?.kycStatus || '').toLowerCase() === 'approved',
