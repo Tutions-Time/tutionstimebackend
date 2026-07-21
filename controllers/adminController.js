@@ -1334,6 +1334,44 @@ const cancelAdminDemoBooking = async (req, res) => {
   }
 };
 
+const deleteAdminDemoBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid booking id" });
+    }
+
+    const booking = await Booking.findById(id);
+    if (!booking || booking.type !== "demo") {
+      return res.status(404).json({ success: false, message: "Demo booking not found" });
+    }
+
+    await Booking.deleteOne({ _id: id });
+
+    await createAdminNotification(
+      "Demo Deleted by Admin",
+      `Admin deleted ${booking.subject || "demo"} booking ${booking._id}.`,
+      {
+        type: "demo_deleted",
+        bookingId: booking._id,
+        studentId: booking.studentId,
+        tutorId: booking.tutorId,
+        status: booking.status,
+      },
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Demo booking deleted successfully",
+    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error", error: error.message });
+  }
+};
+
 const acceptAdminDemoBooking = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1613,6 +1651,7 @@ module.exports = {
   listAdminBookings,
   acceptAdminDemoBooking,
   cancelAdminDemoBooking,
+  deleteAdminDemoBooking,
   updateAdminSessionSchedule,
   migrateUploadsToS3,
 };

@@ -45,6 +45,7 @@ router.get('/bookings/:id', getBookingByIdForAdmin);
 router.get('/bookings', adminController.listAdminBookings);
 router.patch('/bookings/:id/accept', adminController.acceptAdminDemoBooking);
 router.patch('/bookings/:id/cancel', adminController.cancelAdminDemoBooking);
+router.delete('/bookings/:id', adminController.deleteAdminDemoBooking);
 
 router.get('/dashboard/stats', adminController.getDashboardStats);
 router.get('/dashboard/activity', adminController.getDashboardActivity);
