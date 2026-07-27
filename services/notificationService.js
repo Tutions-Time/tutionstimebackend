@@ -105,20 +105,21 @@ async function sendPushToUser(userId, title, body, meta = {}) {
 
 exports.notifyUser = async (userId, title, body, meta = {}) => {
   try {
+    const { emailHtml, emailText, emailSubject, ...notificationMeta } = meta || {};
     const user = await User.findById(userId).select("notificationPrefs role").lean();
     const prefs = user?.notificationPrefs || { email: true, push: true, inapp: true };
     if (prefs.inapp) {
-      const notif = await Notification.create({ userId, title, body, meta });
+      const notif = await Notification.create({ userId, title, body, meta: notificationMeta });
       wsHub.sendToUser(userId, { type: "notification", data: notif });
     }
     if (prefs.email) {
       const email = await resolveEmailForUser(userId);
       if (email) {
-        await exports.sendEmail(email, title, body);
+        await exports.sendEmail(email, emailSubject || title, emailText || body, emailHtml || null);
       }
     }
     if (prefs.push) {
-      await sendPushToUser(userId, title, body, meta);
+      await sendPushToUser(userId, title, body, notificationMeta);
     }
   } catch (e) {
     console.error("notifyUser error:", e.message);

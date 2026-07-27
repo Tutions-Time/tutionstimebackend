@@ -185,10 +185,21 @@ async function expirePendingRequests(now) {
       subject: booking.subject || "the demo class",
     });
 
+    const result = await Booking.updateOne(
+      { _id: booking._id, status: "pending" },
+      {
+        $set: {
+          status: "expired",
+          expiryReason: context.reason,
+          expiredAt: now,
+        },
+      }
+    );
+    if (result.modifiedCount === 0) continue;
+
     booking.status = "expired";
     booking.expiryReason = context.reason;
     booking.expiredAt = now;
-    await booking.save();
 
     await notifyPendingAcceptanceExpired(booking);
 
@@ -246,11 +257,23 @@ async function runOnce() {
     if (!endDate) continue;
     if (endDate > threshold) continue;
 
+    const result = await Booking.updateOne(
+      { _id: booking._id, status: "confirmed" },
+      {
+        $set: {
+          status: "expired",
+          expiryReason: "no-show",
+          expiredAt: now,
+          attendance: "absent",
+        },
+      }
+    );
+    if (result.modifiedCount === 0) continue;
+
     booking.status = "expired";
     booking.expiryReason = "no-show";
     booking.expiredAt = now;
     booking.attendance = "absent";
-    await booking.save();
 
     realtimeEvents.notifyBookingStatusUpdate(booking, {
       title: "Demo expired",

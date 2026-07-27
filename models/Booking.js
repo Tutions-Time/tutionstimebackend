@@ -50,6 +50,7 @@ const bookingSchema = new mongoose.Schema(
         'pending',
         'confirmed',
         'cancelled',
+        'rejected',
         'completed',
         'expired',
         'student-missed',

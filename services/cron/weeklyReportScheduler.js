@@ -4,6 +4,7 @@ const TutorProfile = require("../../models/TutorProfile");
 const StudentProfile = require("../../models/StudentProfile");
 const notificationService = require("../notificationService");
 const AdminNotification = require("../../models/AdminNotification");
+const emailTpl = require("../../templates/emailTemplates");
 
 function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function addDays(d, n) { return new Date(d.getTime() + n * 86400000); }
@@ -95,7 +96,16 @@ async function sendMonthlyReports() {
     for (const s of students) {
       const sum = await studentMonthlySummary(s.userId);
       if (s.email && notificationService?.sendEmail) {
-        const html = `<h3>Your Monthly Learning Summary</h3><p>Sessions: ${sum.sessions}</p><p>Completed: ${sum.completed}</p><p>Attendance: ${sum.attendanceRate}%</p><p>Assignments received: ${sum.assignments}</p>`;
+        const html = emailTpl.monthlySummaryHTML({
+          title: "Your Monthly Learning Summary",
+          message: "Here is your learning activity for the last 30 days.",
+          rows: [
+            { label: "Sessions", value: sum.sessions },
+            { label: "Completed", value: sum.completed },
+            { label: "Attendance", value: `${sum.attendanceRate}%` },
+            { label: "Assignments received", value: sum.assignments },
+          ],
+        });
         await notificationService.sendEmail(s.email, "Monthly Summary - tuitionstime", "", html);
       }
       try {
@@ -112,15 +122,19 @@ async function sendMonthlyReports() {
 
       const sum = await tutorMonthlySummary(t.userId);
       if (t.email && notificationService?.sendEmail) {
-        const html = `<h3>Your Monthly Teaching Summary</h3>
-          <p>Sessions: ${sum.sessions}</p>
-          <p>Completed: ${sum.completed}</p>
-          <p>Attendance consistency: ${sum.attendanceConsistency}%</p>
-          <p>Avg rating: ${sum.averageRating.toFixed(1)} (${sum.ratingCount})</p>
-          <p>Rubric Averages: T ${sum.rubricAverages.teaching.toFixed(1)}, C ${sum.rubricAverages.communication.toFixed(1)}, U ${sum.rubricAverages.understanding.toFixed(1)}</p>
-          <p>Materials uploaded: Notes ${sum.materials.notes}, Assignments ${sum.materials.assignments}, Recordings ${sum.materials.recordings}</p>
-          ${sum.topComments.length ? `<p>Top comments:</p><ul>${sum.topComments.map(c=>`<li>${c}</li>`).join("")}</ul>` : ""}
-        `;
+        const html = emailTpl.monthlySummaryHTML({
+          title: "Your Monthly Teaching Summary",
+          message: "Here is your teaching activity for the last 30 days.",
+          rows: [
+            { label: "Sessions", value: sum.sessions },
+            { label: "Completed", value: sum.completed },
+            { label: "Attendance consistency", value: `${sum.attendanceConsistency}%` },
+            { label: "Average rating", value: `${sum.averageRating.toFixed(1)} (${sum.ratingCount})` },
+            { label: "Rubric averages", value: `T ${sum.rubricAverages.teaching.toFixed(1)}, C ${sum.rubricAverages.communication.toFixed(1)}, U ${sum.rubricAverages.understanding.toFixed(1)}` },
+            { label: "Materials uploaded", value: `Notes ${sum.materials.notes}, Assignments ${sum.materials.assignments}, Recordings ${sum.materials.recordings}` },
+            { label: "Recent comments", value: sum.topComments.join(" | ") },
+          ],
+        });
         await notificationService.sendEmail(t.email, "Monthly Summary - tuitionstime", "", html);
       }
       if (notificationService?.createInApp) {

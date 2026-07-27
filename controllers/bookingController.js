@@ -65,6 +65,17 @@ function addMinutesToTime(timeStr, minutesToAdd) {
   )}`;
 }
 
+function formatTime12(timeStr) {
+  const match = String(timeStr || "").trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return String(timeStr || "");
+  let hour = Number(match[1]);
+  const minute = match[2];
+  if (!Number.isFinite(hour)) return String(timeStr || "");
+  const period = hour >= 12 ? "PM" : "AM";
+  hour = hour % 12 || 12;
+  return `${hour}:${minute} ${period}`;
+}
+
 function minutesAfter(date, minutes) {
   return new Date(date.getTime() + minutes * 60 * 1000);
 }
@@ -343,7 +354,7 @@ exports.createDemoBooking = async (req, res) => {
       type: "demo",
       preferredDate,
       preferredTime: time,
-      status: { $ne: "cancelled" },
+      status: { $nin: ["cancelled", "rejected"] },
     });
 
     if (existingForSameStudent) {
@@ -558,7 +569,7 @@ exports.createDemoBookingByTutor = async (req, res) => {
       type: "demo",
       preferredDate,
       preferredTime: time,
-      status: { $ne: "cancelled" },
+      status: { $nin: ["cancelled", "rejected"] },
     });
 
     if (existingForSamePair) {
@@ -790,6 +801,7 @@ function notifyDemoConfirmed({
   tutorId,
   studentEmail,
   tutorEmail,
+  studentName,
   displayDate,
   displayTime,
   studentLink,
@@ -804,6 +816,7 @@ function notifyDemoConfirmed({
           date: displayDate,
           time: displayTime,
           link: studentLink,
+          role: "student",
         });
         await notificationService.sendEmail(
           studentEmail,
@@ -820,6 +833,8 @@ function notifyDemoConfirmed({
           date: displayDate,
           time: displayTime,
           link: tutorLink,
+          role: "tutor",
+          studentName,
         });
         await notificationService.sendEmail(
           tutorEmail,
@@ -1210,10 +1225,14 @@ exports.updateDemoStatus = async (req, res) => {
       const tutorProfile = await TutorProfile.findOne({
         userId: booking.tutorId,
       }).lean();
+      const studentProfile = await StudentProfile.findOne({
+        userId: booking.studentId,
+      }).lean();
 
       const tutorName = tutorProfile?.name || "Your Tutor";
+      const studentName = studentProfile?.name || "Student";
       const displayDate = new Date(booking.preferredDate).toDateString();
-      const displayTime = booking.preferredTime || "";
+      const displayTime = formatTime12(booking.preferredTime);
       const studentLink = booking.joinUrl || booking.meetingLink || "";
       const tutorLink = booking.startUrl || booking.meetingLink || "";
 
@@ -1224,6 +1243,7 @@ exports.updateDemoStatus = async (req, res) => {
         tutorId: booking.tutorId,
         studentEmail: studentUser?.email,
         tutorEmail: tutorUser?.email,
+        studentName,
         displayDate,
         displayTime,
         studentLink,
@@ -1386,7 +1406,7 @@ exports.markTutorJoined = async (req, res) => {
 /**
  * ✅ Student confirms/cancels a demo that was requested BY TUTOR
  * PATCH /api/bookings/:id/student-status
- * Body: { status: 'confirmed' | 'cancelled' }
+ * Body: { status: 'confirmed' | 'rejected' }
  */
 exports.updateDemoStatusByStudent = async (req, res) => {
   try {
@@ -1399,7 +1419,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
       role: req.user?.role,
     });
 
-    if (!["confirmed", "cancelled"].includes(status)) {
+    if (!["confirmed", "cancelled", "rejected"].includes(status)) {
       return res
         .status(400)
         .json({ success: false, message: "Invalid status" });
@@ -1427,9 +1447,18 @@ exports.updateDemoStatusByStudent = async (req, res) => {
         .json({ success: false, message: "Not authorized" });
     }
 
+    if (booking.status !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: `Demo request is already ${booking.status}`,
+      });
+    }
+
     if (status === "confirmed") {
       console.log("updateDemoStatusByStudent confirm", { bookingId: id, userId: req.user?.id });
       booking.status = "confirmed";
+      booking.expiryReason = null;
+      booking.expiredAt = null;
       if (!booking.joinUrl || !booking.startUrl) {
         await ensureDemoZoomMeeting(booking);
       }
@@ -1448,7 +1477,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
       const tutorName = tutorProfile?.name || "Tutor";
       const studentName = studentProfile?.name || "Student";
       const displayDate = new Date(booking.preferredDate).toDateString();
-      const displayTime = booking.preferredTime || "";
+      const displayTime = formatTime12(booking.preferredTime);
       const studentLink = booking.joinUrl || booking.meetingLink || "";
       const tutorLink = booking.startUrl || booking.meetingLink || "";
 
@@ -1461,6 +1490,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
             date: displayDate,
             time: displayTime,
             link: studentLink,
+            role: "student",
           }) ||
           `<p>Your demo with ${tutorName} is booked on ${displayDate} at ${displayTime}. Meeting: ${studentLink}</p>`;
 
@@ -1481,6 +1511,8 @@ exports.updateDemoStatusByStudent = async (req, res) => {
             date: displayDate,
             time: displayTime,
             link: tutorLink,
+            role: "tutor",
+            studentName,
           }) ||
           `<p>Your demo with ${studentName} is booked on ${displayDate} at ${displayTime}. Meeting: ${tutorLink}</p>`;
 
@@ -1535,20 +1567,22 @@ exports.updateDemoStatusByStudent = async (req, res) => {
       });
     }
 
-    // cancelled
-    if (status === "cancelled") {
-      console.log("updateDemoStatusByStudent cancel", { bookingId: id, userId: req.user?.id });
+    // rejected
+    if (status === "cancelled" || status === "rejected") {
+      console.log("updateDemoStatusByStudent reject", { bookingId: id, userId: req.user?.id });
       const reasonText = String(reason || "").trim();
       if (!reasonText) {
         return res.status(400).json({
           success: false,
-          message: "Cancellation reason is required",
+          message: "Rejection reason is required",
         });
       }
-      booking.status = "cancelled";
+      booking.status = "rejected";
+      booking.expiryReason = null;
+      booking.expiredAt = null;
       booking.note = [
         booking.note,
-        `Student cancelled: ${reasonText}`,
+        `Student rejected: ${reasonText}`,
       ].filter(Boolean).join("\n");
       await booking.save();
 
@@ -1570,11 +1604,11 @@ exports.updateDemoStatusByStudent = async (req, res) => {
             subject: booking.subject,
             reason: reasonText,
           }) ||
-          `<p>${studentName} cancelled the demo for ${booking.subject}. Reason: ${reasonText}</p>`;
+          `<p>${studentName} rejected the demo for ${booking.subject}. Reason: ${reasonText}</p>`;
 
         await notificationService.sendEmail(
           tutorUser.email,
-          "Demo Cancelled - tuitionstime",
+          "Demo Rejected - tuitionstime",
           "",
           html
         );
@@ -1582,14 +1616,14 @@ exports.updateDemoStatusByStudent = async (req, res) => {
 
       await notificationService.notifyUser(
         booking.tutorId,
-        "Demo Cancelled",
-        `${studentName} cancelled your demo request. Reason: ${reasonText}`,
+        "Demo Rejected",
+        `${studentName} rejected your demo request. Reason: ${reasonText}`,
         { tutorId: booking.tutorId, bookingId: booking._id, reason: reasonText }
       );
 
       await createAdminNotification(
-        "Tutor-Initiated Demo Cancelled",
-        `Demo cancelled for ${booking.subject} by ${studentName}. Reason: ${reasonText}`,
+        "Tutor-Initiated Demo Rejected",
+        `Demo rejected for ${booking.subject} by ${studentName}. Reason: ${reasonText}`,
         {
           bookingId: booking._id,
           tutorId: booking.tutorId,
@@ -1603,7 +1637,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
 
       return res.json({
         success: true,
-        message: "Demo cancelled successfully.",
+        message: "Demo rejected successfully.",
         data: booking,
       });
     }

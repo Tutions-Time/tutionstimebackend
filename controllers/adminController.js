@@ -50,6 +50,17 @@ function buildDemoTopicForAdmin(booking) {
   return `${subject} (${dateLabel})`;
 }
 
+function formatTime12(timeStr) {
+  const match = String(timeStr || "").trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return String(timeStr || "");
+  let hour = Number(match[1]);
+  const minute = match[2];
+  if (!Number.isFinite(hour)) return String(timeStr || "");
+  const period = hour >= 12 ? "PM" : "AM";
+  hour = hour % 12 || 12;
+  return `${hour}:${minute} ${period}`;
+}
+
 async function ensureAdminDemoZoomMeeting(booking) {
   const startDateTime = getDemoStartDateTime(booking);
   if (!startDateTime) {
@@ -1279,7 +1290,7 @@ const cancelAdminDemoBooking = async (req, res) => {
       return res.status(404).json({ success: false, message: "Demo booking not found" });
     }
 
-    if (["cancelled", "completed", "expired"].includes(booking.status)) {
+    if (["cancelled", "rejected", "completed", "expired"].includes(booking.status)) {
       return res.status(400).json({
         success: false,
         message: `Cannot cancel a ${booking.status} demo booking`,
@@ -1409,7 +1420,7 @@ const acceptAdminDemoBooking = async (req, res) => {
     const studentName = studentProfile?.name || "student";
     const tutorName = tutorProfile?.name || "tutor";
     const displayDate = new Date(booking.preferredDate).toLocaleDateString("en-IN");
-    const displayTime = booking.preferredTime || "";
+    const displayTime = formatTime12(booking.preferredTime);
     const studentLink = booking.joinUrl || booking.meetingLink || "";
     const tutorLink = booking.startUrl || booking.meetingLink || "";
     const body = `Your demo for ${booking.subject} is booked for ${displayDate}${

@@ -78,20 +78,51 @@ const emailWrapper = (title, body, buttonLabel = null, buttonLink = null) => `
 </html>
 `;
 
+const detailRows = (items = []) => {
+  const rows = items
+    .filter((item) => item && item.value !== undefined && item.value !== null && String(item.value).trim() !== "")
+    .map(
+      ({ label, value }) => `
+        <tr>
+          <td style="padding:10px 0;color:#777;font-size:14px;border-bottom:1px solid #f0f0f0;">${escapeHtml(label)}</td>
+          <td style="padding:10px 0;color:#222;font-size:14px;font-weight:600;text-align:right;border-bottom:1px solid #f0f0f0;">${escapeHtml(value)}</td>
+        </tr>
+      `
+    )
+    .join("");
+
+  if (!rows) return "";
+  return `
+    <table cellpadding="0" cellspacing="0" width="100%" style="margin:22px 0;border-collapse:collapse;">
+      ${rows}
+    </table>
+  `;
+};
+
+const noteBox = (message) =>
+  message
+    ? `<div style="background:#fff8d8;border:1px solid #f1d15a;border-radius:10px;padding:14px 16px;color:#4a3a00;font-size:14px;line-height:1.6;margin:18px 0;">${escapeHtml(message)}</div>`
+    : "";
+
 // ==============================
 // 📨 STUDENT-SIDE EMAILS
 // ==============================
 
-exports.bookingConfirmedHTML = ({ tutorName, subject, date, link }) =>
+exports.bookingConfirmedHTML = ({ tutorName, studentName, subject, date, time, link, role = "student" }) =>
   emailWrapper(
-    "Demo Booked!",
+    "Demo Class Confirmed",
     `
-      <p style="font-size:16px;color:#333;">
-        Your demo with <strong>${tutorName}</strong> for <strong>${subject}</strong> is scheduled on <b>${date}</b>.
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        Your demo class is confirmed. ${role === "tutor" ? `You will meet <strong>${escapeHtml(studentName || "the student")}</strong>.` : `You will meet <strong>${escapeHtml(tutorName || "your tutor")}</strong>.`}
       </p>
-      <p style="color:#555;">Click below to join your demo at the scheduled time.</p>
+      ${detailRows([
+        { label: "Subject", value: subject },
+        { label: "Date", value: date },
+        { label: "Time", value: time },
+      ])}
+      ${noteBox("Please join from the button below during the allowed class window.")}
     `,
-    "Join Demo",
+    role === "tutor" ? "Start Demo" : "Join Demo",
     link
   );
 
@@ -99,14 +130,10 @@ exports.bookingCancelledHTML = ({ tutorName, subject, reason }) =>
   emailWrapper(
     "Demo Cancelled",
     `
-      <p style="font-size:16px;color:#333;">
-        Your demo with <strong>${tutorName}</strong> for <strong>${subject}</strong> has been cancelled.
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        Your demo with <strong>${escapeHtml(tutorName)}</strong> for <strong>${escapeHtml(subject)}</strong> has been cancelled.
       </p>
-      ${
-        reason
-          ? `<p style="font-size:15px;color:#555;"><strong>Reason:</strong> ${reason}</p>`
-          : ""
-      }
+      ${detailRows([{ label: "Reason", value: reason }])}
       <p style="color:#555;">You can request another demo anytime from your tuitionstime dashboard.</p>
     `,
     "Book Another Demo",
@@ -122,10 +149,10 @@ exports.bookingExpiredHTML = ({
   emailWrapper(
     headline,
     `
-      <p style="font-size:16px;color:#333;">
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
         ${message}
       </p>
-      <p style="color:#555;">You can review the latest status from your tuitionstime dashboard.</p>
+      ${noteBox("You can review the latest status from your tuitionstime dashboard.")}
     `,
     ctaLabel,
     ctaLink
@@ -171,14 +198,35 @@ exports.tutorDemoRequestHTML = ({ studentName, subject, date, time }) =>
   emailWrapper(
     "New Demo Request",
     `
-      <p style="font-size:16px;color:#333;">
-        <strong>${studentName}</strong> requested a demo for <strong>${subject}</strong> on <b>${date}</b>${time ? ` at <b>${time}</b>` : ""}.
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        <strong>${escapeHtml(studentName)}</strong> requested a demo class.
       </p>
-      <p style="margin-top:10px;color:#555;">
-        Please log in to your tuitionstime dashboard to confirm or cancel this request.
-      </p>
+      ${detailRows([
+        { label: "Subject", value: subject },
+        { label: "Date", value: date },
+        { label: "Time", value: time },
+      ])}
+      ${noteBox("Please accept or reject this request from your tutor dashboard.")}
     `,
     "View in Dashboard",
+    WEBSITE_URL
+  );
+
+exports.studentDemoRequestHTML = ({ tutorName, subject, date, time }) =>
+  emailWrapper(
+    "New Demo Request from Tutor",
+    `
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        <strong>${escapeHtml(tutorName)}</strong> invited you for a demo class.
+      </p>
+      ${detailRows([
+        { label: "Subject", value: subject },
+        { label: "Date", value: date },
+        { label: "Time", value: time },
+      ])}
+      ${noteBox("Please accept or reject this request from your student dashboard.")}
+    `,
+    "Review Request",
     WEBSITE_URL
   );
 
@@ -194,4 +242,44 @@ exports.tutorFeedbackReceivedHTML = ({ studentName, subject, rating, feedback })
       </p>
       <p style="margin-top:15px;color:#555;">Keep up the great work! 🎓</p>
     `
+  );
+
+exports.sessionReminderHTML = ({
+  recipientName,
+  role = "student",
+  subject = "your class",
+  date,
+  time,
+  link,
+  classType = "Session",
+}) =>
+  emailWrapper(
+    `${classType} Reminder`,
+    `
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        Hi ${escapeHtml(recipientName || "there")}, your ${escapeHtml(subject)} ${escapeHtml(classType.toLowerCase())} starts soon.
+      </p>
+      ${detailRows([
+        { label: "Class", value: classType },
+        { label: "Subject", value: subject },
+        { label: "Date", value: date },
+        { label: "Time", value: time },
+      ])}
+      ${noteBox("Use the meeting button below when it is time to join.")}
+    `,
+    role === "tutor" ? "Start Class" : "Join Class",
+    link
+  );
+
+exports.monthlySummaryHTML = ({ title = "Monthly Summary", rows = [], message = "" }) =>
+  emailWrapper(
+    title,
+    `
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        ${escapeHtml(message || "Here is your latest tuitionstime activity summary.")}
+      </p>
+      ${detailRows(rows)}
+    `,
+    "Open Dashboard",
+    WEBSITE_URL
   );
