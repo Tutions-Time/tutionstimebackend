@@ -430,6 +430,14 @@ const updateUserStatus = async (req, res) => {
       });
     }
 
+    
+    if (status === "suspended" && !String(reason || "").trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Suspension reason is required.",
+      });
+    }
+
     const user = await User.findByIdAndUpdate(
       userId,
       { status },
@@ -1689,6 +1697,9 @@ module.exports = {
   updateAdminSessionSchedule,
   migrateUploadsToS3,
 };
+
+
+
 
 
 

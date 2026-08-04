@@ -262,6 +262,10 @@ exports.updateTutorStatus = async (req, res) => {
     const { id } = req.params;
     const { status, reason, explanation } = req.body; // 'active' | 'suspended'
 
+    if (status === 'suspended' && !String(reason || '').trim()) {
+      return res.status(400).json({ success: false, message: 'Suspension reason is required.' });
+    }
+
     const user = await User.findByIdAndUpdate(id, { status }, { new: true });
     if (!user) return res.status(404).json({ success: false, message: 'Tutor not found' });
 
@@ -708,5 +712,6 @@ exports.getTutorJourney = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });
   }
 };
+
 
 
