@@ -454,7 +454,7 @@ exports.joinSession = async (req, res) => {
 
     await session.save();
 
-    const effectiveUrl = isStudent ? joinLink : startLink;
+    const effectiveUrl = joinLink || startLink;
     if (!effectiveUrl) {
       return res.status(400).json({ success: false, message: "Meeting link unavailable for your role" });
     }

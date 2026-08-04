@@ -29,7 +29,7 @@ function formatTime(value) {
 }
 
 function meetingLinkFor(session, role) {
-  if (role === 'tutor') return session.startUrl || session.meetingLink || session.joinUrl || '';
+  if (role === 'tutor') return session.joinUrl || session.meetingLink || session.startUrl || '';
   return session.joinUrl || session.meetingLink || '';
 }
 

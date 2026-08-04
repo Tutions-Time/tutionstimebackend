@@ -1234,7 +1234,7 @@ exports.updateDemoStatus = async (req, res) => {
       const displayDate = new Date(booking.preferredDate).toDateString();
       const displayTime = formatTime12(booking.preferredTime);
       const studentLink = booking.joinUrl || booking.meetingLink || "";
-      const tutorLink = booking.startUrl || booking.meetingLink || "";
+      const tutorLink = booking.joinUrl || booking.meetingLink || "";
 
       const notifyCtx = {
         booking,
@@ -1393,7 +1393,7 @@ exports.markTutorJoined = async (req, res) => {
 
     return res.json({
       success: true,
-      meetingLink: booking.startUrl || booking.meetingLink || "",
+      meetingLink: booking.joinUrl || booking.meetingLink || "",
     });
   } catch (err) {
     console.error("markTutorJoined error:", err);
@@ -1479,7 +1479,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
       const displayDate = new Date(booking.preferredDate).toDateString();
       const displayTime = formatTime12(booking.preferredTime);
       const studentLink = booking.joinUrl || booking.meetingLink || "";
-      const tutorLink = booking.startUrl || booking.meetingLink || "";
+      const tutorLink = booking.joinUrl || booking.meetingLink || "";
 
       // Email student
       if (studentUser?.email && notificationService?.sendEmail) {

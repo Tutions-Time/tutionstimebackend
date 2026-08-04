@@ -1422,7 +1422,7 @@ const acceptAdminDemoBooking = async (req, res) => {
     const displayDate = new Date(booking.preferredDate).toLocaleDateString("en-IN");
     const displayTime = formatTime12(booking.preferredTime);
     const studentLink = booking.joinUrl || booking.meetingLink || "";
-    const tutorLink = booking.startUrl || booking.meetingLink || "";
+    const tutorLink = booking.joinUrl || booking.meetingLink || "";
     const body = `Your demo for ${booking.subject} is booked for ${displayDate}${
       displayTime ? ` at ${displayTime}` : ""
     }.`;
