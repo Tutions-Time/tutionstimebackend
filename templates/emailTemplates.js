@@ -190,9 +190,74 @@ exports.otpEmailHTML = ({ otp, purpose = "continue" }) =>
     `
   );
 
+exports.suspensionNoticeHTML = ({ name, role, reason, explanation, replyLink }) =>
+  emailWrapper(
+    "Account Suspended",
+    `
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        Hi <strong>${escapeHtml(name || "there")}</strong>, your ${escapeHtml(role || "account")} account has been suspended by the tuitionstime admin team.
+      </p>
+      ${detailRows([
+        { label: "Reason", value: reason },
+        { label: "Admin message", value: explanation },
+      ])}
+      ${noteBox("If you believe this needs review, please reply with your explanation from the button below.")}
+      <p style="font-size:15px;line-height:1.6;color:#555;margin:18px 0 0;">
+        Your reply will be shared with the admin team for review.
+      </p>
+    `,
+    "Reply to Admin",
+    replyLink
+  );
+exports.studentWelcomeHTML = ({ name }) =>
+  emailWrapper(
+    "Welcome to tuitionstime",
+    `
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        Hi <strong>${escapeHtml(name || "there")}</strong>, welcome to tuitionstime.
+      </p>
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        Your student profile is complete, and you are ready to explore tutors, request demo classes, and find learning support that fits your goals.
+      </p>
+      ${detailRows([
+        { label: "Next step", value: "Search tutors and book a demo" },
+        { label: "Dashboard", value: "Student dashboard" },
+      ])}
+      ${noteBox("Keep your learning preferences updated so we can show you better tutor matches.")}
+      <p style="font-size:15px;line-height:1.6;color:#555;margin:18px 0 0;">
+        We are glad to have you here and look forward to helping you learn with confidence.
+      </p>
+    `,
+    "Open Dashboard",
+    WEBSITE_URL
+  );
+
 // ==============================
-// 📨 TUTOR-SIDE EMAILS
+// TUTOR-SIDE EMAILS
 // ==============================
+
+exports.tutorWelcomeHTML = ({ name }) =>
+  emailWrapper(
+    "Welcome to tuitionstime",
+    `
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        Hi <strong>${escapeHtml(name || "there")}</strong>, welcome to tuitionstime.
+      </p>
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        Your tutor profile is complete. Students can now discover your teaching profile, review your subjects, and connect with you for demo and regular classes.
+      </p>
+      ${detailRows([
+        { label: "Next step", value: "Review requests from your dashboard" },
+        { label: "Profile tip", value: "Keep availability and rates updated" },
+      ])}
+      ${noteBox("Our team may review tutor verification details before showing every feature as fully active.")}
+      <p style="font-size:15px;line-height:1.6;color:#555;margin:18px 0 0;">
+        Thank you for joining tuitionstime. We are excited to help you reach more students.
+      </p>
+    `,
+    "Open Dashboard",
+    WEBSITE_URL
+  );
 
 exports.tutorDemoRequestHTML = ({ studentName, subject, date, time }) =>
   emailWrapper(
@@ -283,3 +348,5 @@ exports.monthlySummaryHTML = ({ title = "Monthly Summary", rows = [], message = 
     "Open Dashboard",
     WEBSITE_URL
   );
+
+

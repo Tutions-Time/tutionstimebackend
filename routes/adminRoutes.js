@@ -5,6 +5,7 @@ const { authenticate, checkRole } = require('../middleware/auth');
 const { getBookingByIdForAdmin } = require('../controllers/bookingController');
 const uploadS3 = require('../middleware/uploadS3');
 const blogController = require('../controllers/blogController');
+const suspensionController = require('../controllers/suspensionController');
 
 
 const adminTutorController = require('../controllers/adminTutorController.js');
@@ -14,6 +15,7 @@ router.use(authenticate, checkRole('admin'));
 
 // Get all users
 router.get('/users', adminController.getAllUsers);
+router.get('/suspensions/:id', suspensionController.getAdminSuspensionAppeal);
 
 router.put('/users/:id/status',  adminController.updateUserStatus);
 
@@ -64,4 +66,5 @@ router.delete('/blogs/:id', blogController.deleteBlog);
 router.get('/tutors/:id/journey', adminTutorController.getTutorJourney);
 
 module.exports = router;
+
 

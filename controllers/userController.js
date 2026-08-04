@@ -11,11 +11,35 @@ const {
 } = require("../utils/profileValidation");
 const { createAdminNotification } = require("../services/adminNotification");
 const notificationService = require("../services/notificationService");
+const emailTemplates = require("../templates/emailTemplates");
 
 const UPI_REGEX = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const BANK_ACCOUNT_REGEX = /^[0-9]{9,18}$/;
 
+
+async function sendProfileWelcomeEmail({ role, profile, user }) {
+  const email = String(profile?.email || user?.email || "").trim().toLowerCase();
+  if (!email) return;
+
+  const name = String(profile?.name || "").trim();
+  const isTutor = role === "tutor";
+  const subject = isTutor
+    ? "Welcome to tuitionstime - your tutor profile is ready"
+    : "Welcome to tuitionstime - your student profile is ready";
+  const text = isTutor
+    ? `Hi ${name || "there"}, welcome to tuitionstime. Your tutor profile is complete and students can now discover your teaching profile.`
+    : `Hi ${name || "there"}, welcome to tuitionstime. Your student profile is complete and you can now explore tutors and request demo classes.`;
+  const html = isTutor
+    ? emailTemplates.tutorWelcomeHTML({ name })
+    : emailTemplates.studentWelcomeHTML({ name });
+
+  try {
+    await notificationService.sendEmail(email, subject, text, html);
+  } catch (error) {
+    console.warn(`${role} welcome email failed:`, error.message);
+  }
+}
 function hasTutorPayoutDetails(profile) {
   return Boolean(
     profile?.upiId &&
@@ -386,6 +410,10 @@ const updateStudentProfile = async (req, res) => {
       await user.save();
     }
 
+    if (!wasProfileComplete && isComplete) {
+      await sendProfileWelcomeEmail({ role: "student", profile, user });
+    }
+
     const currentPincode = String(profile?.pincode || "").trim();
     const shouldNotifyTutors =
       isComplete &&
@@ -541,6 +569,7 @@ const updateTutorProfile = async (req, res) => {
     } = req.body;
 
     const existingProfile = await TutorProfile.findOne({ userId }).lean();
+    const wasProfileComplete = Boolean(user.isProfileComplete);
 
     // â­ AWS S3 returns file.location
     let photoUrl = null,
@@ -654,6 +683,10 @@ const updateTutorProfile = async (req, res) => {
     if (user.isProfileComplete !== isComplete) {
       user.isProfileComplete = isComplete;
       await user.save();
+    }
+
+    if (!wasProfileComplete && isComplete) {
+      await sendProfileWelcomeEmail({ role: "tutor", profile: safeProfile, user });
     }
 
     // Notify Admin
@@ -921,5 +954,7 @@ module.exports = {
   uploadTutorKyc,
   getStudentProfileForTutor
 };
+
+
 
 

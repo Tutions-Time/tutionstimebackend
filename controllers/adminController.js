@@ -14,6 +14,7 @@ const mongoose = require("mongoose");
 const { logActivity } = require("../services/loggerService");
 const { createAdminNotification } = require("../services/adminNotification");
 const notificationService = require("../services/notificationService");
+const suspensionController = require("./suspensionController");
 const {
   DEFAULT_SESSION_DURATION_MINUTES,
   computeDurationMinutes,
@@ -328,6 +329,17 @@ const getUserById = async (req, res) => {
       });
     }
 
+    if (status === "suspended" && ["student", "tutor"].includes(user.role)) {
+      try {
+        await suspensionController.createSuspensionCaseAndNotify({ req, user, reason, explanation });
+      } catch (err) {
+        if (err.statusCode === 400) {
+          return res.status(400).json({ success: false, message: err.message });
+        }
+        throw err;
+      }
+    }
+
     let profile;
     let roleDetails = {};
     const userObj = user.toObject ? user.toObject() : user;
@@ -409,7 +421,7 @@ const verifyTutor = async (req, res) => {
 const updateUserStatus = async (req, res) => {
   try {
     const userId = req.params.id;
-    const { status } = req.body;
+    const { status, reason, explanation } = req.body;
 
     if (!["active", "inactive", "suspended"].includes(status)) {
       return res.status(400).json({
@@ -429,6 +441,17 @@ const updateUserStatus = async (req, res) => {
         success: false,
         message: "User not found",
       });
+    }
+
+    if (status === "suspended" && ["student", "tutor"].includes(user.role)) {
+      try {
+        await suspensionController.createSuspensionCaseAndNotify({ req, user, reason, explanation });
+      } catch (err) {
+        if (err.statusCode === 400) {
+          return res.status(400).json({ success: false, message: err.message });
+        }
+        throw err;
+      }
     }
 
     if (status === "suspended" && user.role === "student") {
@@ -1666,6 +1689,7 @@ module.exports = {
   updateAdminSessionSchedule,
   migrateUploadsToS3,
 };
+
 
 
 

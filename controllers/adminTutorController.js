@@ -10,6 +10,7 @@ const Note = require('../models/Note');
 const Transaction = require('../models/Transaction');
 const StudentProfile = require('../models/StudentProfile');
 const notificationService = require('../services/notificationService');
+const suspensionController = require('./suspensionController');
 
 const KYC_STATUSES = ['pending', 'submitted', 'approved', 'rejected'];
 
@@ -222,7 +223,7 @@ exports.updateKycStatus = async (req, res) => {
     await tutorProfile.save();
 
     try {
-      if (notificationService?.notifyUser) {
+      if (status === 'active' && notificationService?.notifyUser) {
         const statusLabel = kyc === 'approved' ? 'approved' : kyc === 'rejected' ? 'rejected' : kyc;
         const reasonText =
           kyc === 'rejected' && tutorProfile.kycRejectionReason
@@ -259,13 +260,24 @@ exports.updateKycStatus = async (req, res) => {
 exports.updateTutorStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body; // 'active' | 'suspended'
+    const { status, reason, explanation } = req.body; // 'active' | 'suspended'
 
     const user = await User.findByIdAndUpdate(id, { status }, { new: true });
     if (!user) return res.status(404).json({ success: false, message: 'Tutor not found' });
 
+    if (status === 'suspended') {
+      try {
+        await suspensionController.createSuspensionCaseAndNotify({ req, user, reason, explanation });
+      } catch (err) {
+        if (err.statusCode === 400) {
+          return res.status(400).json({ success: false, message: err.message });
+        }
+        throw err;
+      }
+    }
+
     try {
-      if (notificationService?.notifyUser) {
+      if (status === 'active' && notificationService?.notifyUser) {
         await notificationService.notifyUser(
           id,
           'Account status updated',
@@ -696,3 +708,5 @@ exports.getTutorJourney = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });
   }
 };
+
+
