@@ -266,7 +266,6 @@ exports.tutorDemoRequestHTML = ({ studentName, subject, date, time }) =>
       <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
         <strong>${escapeHtml(studentName)}</strong> requested a demo class.
       </p>
-  emailWrapper(
       ${detailRows([
         { label: "Subject", value: subject },
         { label: "Date", value: date },
@@ -279,6 +278,7 @@ exports.tutorDemoRequestHTML = ({ studentName, subject, date, time }) =>
   );
 
 exports.studentDemoRequestHTML = ({ tutorName, subject, date, time }) =>
+  emailWrapper(
     "New Demo Request from Tutor",
     `
       <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
@@ -294,7 +294,6 @@ exports.studentDemoRequestHTML = ({ tutorName, subject, date, time }) =>
     "Review Request",
     WEBSITE_URL
   );
-
 exports.tutorFeedbackReceivedHTML = ({ studentName, subject, rating, feedback }) =>
   emailWrapper(
     "New Feedback Received ⭐",
@@ -348,5 +347,6 @@ exports.monthlySummaryHTML = ({ title = "Monthly Summary", rows = [], message = 
     "Open Dashboard",
     WEBSITE_URL
   );
+
 
 

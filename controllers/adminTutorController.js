@@ -223,7 +223,7 @@ exports.updateKycStatus = async (req, res) => {
     await tutorProfile.save();
 
     try {
-      if (status === 'active' && notificationService?.notifyUser) {
+      if (notificationService?.notifyUser) {
         const statusLabel = kyc === 'approved' ? 'approved' : kyc === 'rejected' ? 'rejected' : kyc;
         const reasonText =
           kyc === 'rejected' && tutorProfile.kycRejectionReason
@@ -281,7 +281,7 @@ exports.updateTutorStatus = async (req, res) => {
     }
 
     try {
-      if (status === 'active' && notificationService?.notifyUser) {
+      if (notificationService?.notifyUser) {
         await notificationService.notifyUser(
           id,
           'Account status updated',
@@ -712,6 +712,7 @@ exports.getTutorJourney = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });
   }
 };
+
 
 
 
