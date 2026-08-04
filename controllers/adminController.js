@@ -329,17 +329,6 @@ const getUserById = async (req, res) => {
       });
     }
 
-    if (status === "suspended" && ["student", "tutor"].includes(user.role)) {
-      try {
-        await suspensionController.createSuspensionCaseAndNotify({ req, user, reason, explanation });
-      } catch (err) {
-        if (err.statusCode === 400) {
-          return res.status(400).json({ success: false, message: err.message });
-        }
-        throw err;
-      }
-    }
-
     let profile;
     let roleDetails = {};
     const userObj = user.toObject ? user.toObject() : user;
@@ -458,7 +447,7 @@ const updateUserStatus = async (req, res) => {
         if (err.statusCode === 400) {
           return res.status(400).json({ success: false, message: err.message });
         }
-        throw err;
+        console.warn("Suspension notification failed:", err.message);
       }
     }
 
@@ -949,10 +938,14 @@ const listAdminClassesMonitor = async (req, res) => {
       return tps.map((x) => x._id);
     };
 
-    const [studentIds, tutorIds] = await Promise.all([
+    const [studentIds, tutorIds, enrolledGroupBatches] = await Promise.all([
       resolveStudentIds(student),
       resolveTutorIds(tutor),
+      GroupBatch.find({ "enrolled.0": { $exists: true } })
+        .select("_id")
+        .lean(),
     ]);
+    const enrolledGroupBatchIds = enrolledGroupBatches.map((b) => b._id);
 
     const andClauses = [
       { startDateTime: { $gte: windowStart, $lte: windowEnd } },
@@ -979,12 +972,25 @@ const listAdminClassesMonitor = async (req, res) => {
     }
 
     if (kind === "group") {
-      andClauses.push({ groupBatchId: { $exists: true, $ne: null } });
+      andClauses.push({ groupBatchId: { $in: enrolledGroupBatchIds } });
     } else if (kind === "regular") {
       andClauses.push({
         $and: [
           { regularClassId: { $exists: true, $ne: null } },
+          {
+            $or: [
+              { groupBatchId: { $exists: false } },
+              { groupBatchId: { $in: [null, undefined] } },
+            ],
+          },
+        ],
+      });
+    } else {
+      andClauses.push({
+        $or: [
+          { groupBatchId: { $exists: false } },
           { groupBatchId: { $in: [null, undefined] } },
+          { groupBatchId: { $in: enrolledGroupBatchIds } },
         ],
       });
     }
@@ -1697,6 +1703,10 @@ module.exports = {
   updateAdminSessionSchedule,
   migrateUploadsToS3,
 };
+
+
+
+
 
 
 

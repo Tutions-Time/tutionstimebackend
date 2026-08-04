@@ -276,7 +276,7 @@ exports.updateTutorStatus = async (req, res) => {
         if (err.statusCode === 400) {
           return res.status(400).json({ success: false, message: err.message });
         }
-        throw err;
+        console.warn('Tutor suspension notification failed:', err.message);
       }
     }
 
@@ -712,6 +712,7 @@ exports.getTutorJourney = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });
   }
 };
+
 
 
 

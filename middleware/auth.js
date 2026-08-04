@@ -1,6 +1,12 @@
 const tokenService = require('../services/tokenService');
 const User = require('../models/User');
 
+const isSuspensionAppealRoute = (req) => {
+  const path = String(req.originalUrl || req.url || '');
+  return req.method === 'GET' && /^\/api\/notifications\/suspensions\/[^/]+\/?$/.test(path)
+    || req.method === 'POST' && /^\/api\/notifications\/suspensions\/[^/]+\/reply\/?$/.test(path);
+};
+
 const authenticate = async (req, res, next) => {
   try {
     // Get token from header
@@ -54,6 +60,10 @@ const authenticate = async (req, res, next) => {
     }
 
     if (user.status === 'inactive' || user.status === 'suspended') {
+      if (user.status === 'suspended' && isSuspensionAppealRoute(req)) {
+        req.user = { id: verification.decoded.userId, role: user.role };
+        return next();
+      }
       return res.status(403).json({
         success: false,
         message: 'Your account is blocked. Please contact support.',
@@ -102,3 +112,4 @@ const checkRole = (roles) => {
 
 
 module.exports = { authenticate, checkRole };
+
