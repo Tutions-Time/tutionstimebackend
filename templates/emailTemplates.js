@@ -4,10 +4,12 @@
 
 const BRAND_COLOR = "#FFD54F";
 const TEXT_COLOR = "#222";
-const LOGO_URL = "https://tuitionstime.com/logo.png"; // ⬅️ replace with your actual logo URL
+const LOGO_URL = process.env.EMAIL_LOGO_URL || "https://www.tuitionstime.com/images/logo.png";
 const INSTAGRAM_URL = "https://instagram.com/tuitionstime";
 const LINKEDIN_URL = "https://www.linkedin.com/company/tuitionstime/";
 const WEBSITE_URL = "https://tuitionstime.com/dashboard";
+const STUDENT_DASHBOARD_URL = "https://tuitionstime.com/dashboard/student";
+const TUTOR_DASHBOARD_URL = "https://tuitionstime.com/dashboard/tutor";
 
 const escapeHtml = (value) =>
   String(value ?? "")
@@ -39,7 +41,7 @@ const emailWrapper = (title, body, buttonLabel = null, buttonLink = null) => `
     <!-- Header -->
     <tr>
       <td align="center" bgcolor="${BRAND_COLOR}" style="padding:25px 20px;">
-        <img src="${LOGO_URL}" alt="tuitionstime" style="height:50px;margin-bottom:5px;" />
+        <img src="${LOGO_URL}" width="180" alt="tuitionstime" style="display:block;width:180px;max-width:180px;height:auto;margin:0 auto 10px;border:0;outline:none;text-decoration:none;" />
         <h2 style="margin:0;font-size:22px;color:${TEXT_COLOR};">${title}</h2>
       </td>
     </tr>
@@ -257,7 +259,7 @@ exports.studentWelcomeHTML = ({ name }) =>
       </p>
     `,
     "Open Dashboard",
-    WEBSITE_URL
+    STUDENT_DASHBOARD_URL
   );
 
 // ==============================
@@ -284,7 +286,7 @@ exports.tutorWelcomeHTML = ({ name }) =>
       </p>
     `,
     "Open Dashboard",
-    WEBSITE_URL
+    TUTOR_DASHBOARD_URL
   );
 
 exports.tutorDemoRequestHTML = ({ studentName, subject, date, time }) =>
@@ -375,6 +377,10 @@ exports.monthlySummaryHTML = ({ title = "Monthly Summary", rows = [], message = 
     "Open Dashboard",
     WEBSITE_URL
   );
+
+
+
+
 
 
 
