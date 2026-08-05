@@ -155,12 +155,25 @@ const getAllUsers = async (req, res) => {
     const limitNum = Math.max(1, Math.min(200, Number(limit)));
     const skip = Math.max(0, (pageNum - 1) * limitNum);
 
+    const requestedRole = role && ["student", "tutor", "admin"].includes(String(role)) ? String(role) : null;
+    const requestedStatus = status && ["active", "inactive", "suspended"].includes(String(status)) ? String(status) : null;
     const andClauses = [];
     andClauses.push({ isDeleted: { $ne: true } });
-    if (role && ["student", "tutor", "admin"].includes(String(role)))
-      andClauses.push({ role: role });
-    if (status && ["active", "inactive", "suspended"].includes(String(status)))
-      andClauses.push({ status: status });
+    if (requestedRole) andClauses.push({ role: requestedRole });
+    if (requestedStatus) {
+      if (requestedRole === "student") {
+        if (requestedStatus === "suspended") {
+          andClauses.push({ status: "suspended" });
+        } else {
+          andClauses.push({
+            status: { $ne: "suspended" },
+            isProfileComplete: requestedStatus === "active",
+          });
+        }
+      } else {
+        andClauses.push({ status: requestedStatus });
+      }
+    }
 
     if (q && String(q).trim()) {
       const regex = new RegExp(String(q).trim(), "i");
@@ -243,6 +256,12 @@ const getAllUsers = async (req, res) => {
           : profile?.phone) ||
         u.phone ||
         null;
+      const adminStatus =
+        u.role === "student" && u.status !== "suspended"
+          ? u.isProfileComplete
+            ? "active"
+            : "inactive"
+          : u.status;
       return {
         _id: u._id,
         name,
@@ -287,7 +306,7 @@ const getAllUsers = async (req, res) => {
         bankAccountNumber: profile?.bankAccountNumber || null,
         ifsc: profile?.ifsc || null,
         role: u.role,
-        status: u.status,
+        status: adminStatus,
         isProfileComplete: u.isProfileComplete,
         lastLogin: u.lastLogin,
         createdAt: u.createdAt,
@@ -834,7 +853,7 @@ const listAdminSessions = async (req, res) => {
         path: "regularClassId",
         select: "subject planType studentId tutorId scheduleStatus startDate",
       })
-      .populate({ path: "studentId", select: "name photoUrl" })
+      .populate({ path: "studentId", select: "name photoUrl learningMode" })
       .populate({ path: "tutorId", select: "name photoUrl" })
       .lean();
 
@@ -863,6 +882,7 @@ const listAdminClassesMonitor = async (req, res) => {
       kind,
       status,
       isLive,
+      regularMode,
       from,
       to,
       page = 1,
@@ -1002,7 +1022,7 @@ const listAdminClassesMonitor = async (req, res) => {
     const filter = andClauses.length ? { $and: andClauses } : {};
     const sessions = await Session.find(filter)
       .sort({ startDateTime: -1, _id: -1 })
-      .populate({ path: "studentId", select: "name photoUrl" })
+      .populate({ path: "studentId", select: "name photoUrl learningMode" })
       .populate({ path: "tutorId", select: "name photoUrl userId" })
       .populate({ path: "regularClassId", select: "subject" })
       .populate({
@@ -1081,6 +1101,7 @@ const listAdminClassesMonitor = async (req, res) => {
           }) || [];
 
         const kindValue = gb ? "group" : "regular";
+        const classMode = kindValue === "regular" ? String(s.studentId?.learningMode || "").trim() : "";
         const record = {
           _id: s._id,
           kind: kindValue,
@@ -1096,6 +1117,7 @@ const listAdminClassesMonitor = async (req, res) => {
           meetingLink: s.meetingLink || s.joinUrl || "",
           tutor: s.tutorId || null,
           student: s.studentId || null,
+          classMode: classMode || null,
           groupBatchId: gbId || null,
           batchInfo: gb
             ? {
@@ -1116,6 +1138,15 @@ const listAdminClassesMonitor = async (req, res) => {
           return null;
         }
         if (String(isLive || "").toLowerCase() === "false" && record.isLive) {
+          return null;
+        }
+
+        const requestedRegularMode = String(regularMode || "").trim().toLowerCase();
+        if (
+          kindValue === "regular" &&
+          ["online", "offline"].includes(requestedRegularMode) &&
+          classMode.toLowerCase() !== requestedRegularMode
+        ) {
           return null;
         }
 
@@ -1703,6 +1734,10 @@ module.exports = {
   updateAdminSessionSchedule,
   migrateUploadsToS3,
 };
+
+
+
+
 
 
 

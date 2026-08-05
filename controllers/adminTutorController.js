@@ -61,6 +61,20 @@ exports.getAllTutors = async (req, res) => {
         },
       },
       { $addFields: { profile: { $arrayElemAt: ['$profile', 0] } } },
+      {
+        $addFields: {
+          adminKycStatus: {
+            $switch: {
+              branches: [
+                { case: { $ne: ['$isProfileComplete', true] }, then: 'pending' },
+                { case: { $eq: ['$profile.kycStatus', 'approved'] }, then: 'approved' },
+                { case: { $eq: ['$profile.kycStatus', 'rejected'] }, then: 'rejected' },
+              ],
+              default: 'submitted',
+            },
+          },
+        },
+      },
     ];
 
     if (search) {
@@ -77,7 +91,7 @@ exports.getAllTutors = async (req, res) => {
     }
 
     if (kyc !== 'all') {
-      pipeline.push({ $match: { 'profile.kycStatus': kyc } });
+      pipeline.push({ $match: { adminKycStatus: kyc } });
     }
 
     if (ratingMin > 0) {
@@ -161,7 +175,7 @@ exports.getAllTutors = async (req, res) => {
       resumeUrl: t.profile?.resumeUrl || null,
       demoVideoUrl: t.profile?.demoVideoUrl || null,
       profileComplete: !!t.isProfileComplete,
-      kyc: t.profile?.kycStatus || 'pending',
+      kyc: t.adminKycStatus || 'pending',
       payoutDetailsStatus: t.profile?.payoutDetailsStatus || (hasPayoutDetails(t.profile) ? 'submitted' : 'pending'),
       kycDocumentsStatus: t.profile?.kycDocumentsStatus || (hasKycDocuments(t.profile) ? 'submitted' : 'pending'),
       kycRejectionReason: t.profile?.kycRejectionReason || '',
@@ -730,6 +744,7 @@ exports.getTutorJourney = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });
   }
 };
+
 
 
 
