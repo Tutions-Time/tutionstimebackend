@@ -1,6 +1,5 @@
 const TutorProfile = require('../models/TutorProfile');
 const StudentProfile = require('../models/StudentProfile');
-const Booking = require('../models/Booking');
 
 const parseStudentBudget = (budget = '') => {
   const text = String(budget || '');
@@ -25,6 +24,11 @@ const mergeMaxRate = (existing, max) => {
 const normalizeMode = (value = '') => String(value || '').trim().toLowerCase();
 const normalizePincode = (value = '') => String(value || '').trim();
 const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const valuesToExactRegex = (values = []) =>
+  values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .map((value) => new RegExp(`^\\s*${escapeRegex(value)}\\s*$`, 'i'));
 const buildPincodeFilter = (value = '') => ({
   $regex: `^\\s*${escapeRegex(value)}\\s*$`,
   $options: 'i',
@@ -133,12 +137,27 @@ exports.buildTutorFilter = async (query, options = {}) => {
 
   if (studentId) {
     const student = await StudentProfile.findOne({ userId: studentId })
-      .select("learningMode pincode budget")
+      .select("learningMode pincode budget classLevel subjects")
       .lean();
 
     const isOfflineOnly = String(student?.learningMode || "").toLowerCase() === "offline";
     const studentPincode = String(student?.pincode || "").trim();
     const budget = parseStudentBudget(student?.budget);
+    const studentClassLevels = valuesToExactRegex([student?.classLevel]);
+    const studentSubjects = valuesToExactRegex(student?.subjects || []);
+
+    if (studentClassLevels.length) {
+      filter.$and = [
+        ...(filter.$and || []),
+        { classLevels: { $in: studentClassLevels } },
+      ];
+    }
+    if (studentSubjects.length) {
+      filter.$and = [
+        ...(filter.$and || []),
+        { subjects: { $in: studentSubjects } },
+      ];
+    }
 
     if (isOfflineOnly) {
       filter["teachingMode"] = { $in: ["Offline", "Both"] };
@@ -186,25 +205,20 @@ exports.getRecommendedTutors = async (studentId) => {
     return tutors.filter((t) => active.has(String(t.userId)));
   }
 
-  const pastBookings = await Booking.find({ studentId }).lean();
-  const pastTutorIds = pastBookings.map((b) => b.tutorId.toString());
-  const subjects = student.subjects || [];
-  const city = student.city;
-  const learningGoals = student.goals || '';
   const isOfflineOnly =
     String(student.learningMode || "").toLowerCase() === "offline";
   const studentPincode = String(student.pincode || "").trim();
   const budget = parseStudentBudget(student.budget);
+  const studentClassLevels = valuesToExactRegex([student.classLevel]);
+  const studentSubjects = valuesToExactRegex(student.subjects || []);
 
-  const query = {
-    isVerified: true,
-    $or: [
-      { subjects: { $in: subjects } },
-      { city },
-      { _id: { $in: pastTutorIds } },
-      { bio: { $regex: learningGoals, $options: 'i' } },
-    ],
-  };
+  const query = { isVerified: true };
+  if (studentClassLevels.length) {
+    query.classLevels = { $in: studentClassLevels };
+  }
+  if (studentSubjects.length) {
+    query.subjects = { $in: studentSubjects };
+  }
 
   if (isOfflineOnly) {
     query.teachingMode = { $in: ["Offline", "Both"] };
@@ -238,3 +252,6 @@ exports.getRecommendedTutors = async (studentId) => {
   );
   return tutors.filter((t) => active.has(String(t.userId)));
 };
+
+
+

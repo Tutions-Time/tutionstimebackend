@@ -4,6 +4,13 @@ const TutorProfile = require('../models/TutorProfile');
 const User = require('../models/User');
 const { buildStudentFilter } = require('../services/studentService.js');
 
+const escapeRegex = (value = "") => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const valuesToExactRegex = (values = []) =>
+  values
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .map((value) => new RegExp(`^\\s*${escapeRegex(value)}\\s*$`, "i"));
+
 exports.searchStudents = async (req, res) => {
   try {
     const hasFilters = Object.keys(req.query).length > 0;
@@ -31,11 +38,32 @@ exports.searchStudents = async (req, res) => {
 
     const tutorProfile = await TutorProfile
       .findOne({ userId: req.user.id })
-      .select("teachingMode pincode")
+      .select("teachingMode pincode classLevels subjects")
       .lean();
     const isOfflineOnlyTutor =
       String(tutorProfile?.teachingMode || "").trim().toLowerCase() === "offline";
     const tutorPincode = String(tutorProfile?.pincode || "").trim();
+    const tutorClassLevels = valuesToExactRegex(tutorProfile?.classLevels || []);
+    const tutorSubjects = valuesToExactRegex(tutorProfile?.subjects || []);
+
+    if (tutorClassLevels.length) {
+      studentFilters.$and = [
+        ...(studentFilters.$and || []),
+        { classLevel: { $in: tutorClassLevels } },
+      ];
+    }
+
+    if (tutorSubjects.length) {
+      studentFilters.$and = [
+        ...(studentFilters.$and || []),
+        {
+          $or: [
+            { subjects: { $in: tutorSubjects } },
+            { "subjectTimeSlots.subject": { $in: tutorSubjects } },
+          ],
+        },
+      ];
+    }
 
     if (isOfflineOnlyTutor) {
       studentFilters.learningMode = "Offline";
@@ -61,9 +89,16 @@ exports.searchStudents = async (req, res) => {
       .lean();
 
     const requestedSubject = String(req.query.subject || "").trim().toLowerCase();
-    const subjectMatches = (subject) =>
-      !requestedSubject ||
-      String(subject || "").trim().toLowerCase().includes(requestedSubject);
+    const matchesTutorSubject = (subject) =>
+      !tutorSubjects.length ||
+      tutorSubjects.some((regex) => regex.test(String(subject || "")));
+    const subjectMatches = (subject) => {
+      const normalizedSubject = String(subject || "").trim().toLowerCase();
+      return (
+        matchesTutorSubject(subject) &&
+        (!requestedSubject || normalizedSubject.includes(requestedSubject))
+      );
+    };
 
     const leads = students.flatMap((student) => {
       const subjectTimeSlots = Array.isArray(student.subjectTimeSlots)
@@ -148,3 +183,4 @@ exports.searchStudents = async (req, res) => {
     });
   }
 };
+
