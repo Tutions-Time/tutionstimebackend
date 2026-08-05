@@ -11,6 +11,7 @@ const Transaction = require('../models/Transaction');
 const StudentProfile = require('../models/StudentProfile');
 const notificationService = require('../services/notificationService');
 const suspensionController = require('./suspensionController');
+const emailTemplates = require('../templates/emailTemplates');
 
 const KYC_STATUSES = ['pending', 'submitted', 'approved', 'rejected'];
 
@@ -210,6 +211,11 @@ exports.updateKycStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid KYC status' });
     }
 
+    const cleanReason = String(reason || '').trim();
+    if (kyc === 'rejected' && !cleanReason) {
+      return res.status(400).json({ success: false, message: 'Rejection reason is required.' });
+    }
+
     const tutorProfile = await TutorProfile.findOne({ userId: id });
     if (!tutorProfile) {
       return res.status(404).json({ success: false, message: 'Tutor profile not found' });
@@ -219,25 +225,38 @@ exports.updateKycStatus = async (req, res) => {
     tutorProfile.kycStatus = kyc;
     tutorProfile.payoutDetailsStatus = kyc;
     tutorProfile.kycDocumentsStatus = kyc;
-    tutorProfile.kycRejectionReason = kyc === 'rejected' ? String(reason || '').trim() : '';
+    tutorProfile.kycRejectionReason = kyc === 'rejected' ? cleanReason : '';
     await tutorProfile.save();
 
     try {
       if (notificationService?.notifyUser) {
-        const statusLabel = kyc === 'approved' ? 'approved' : kyc === 'rejected' ? 'rejected' : kyc;
-        const reasonText =
-          kyc === 'rejected' && tutorProfile.kycRejectionReason
-            ? ` Reason: ${tutorProfile.kycRejectionReason}`
-            : '';
+        const uploadRoute = '/dashboard/tutor/kyc';
+        const uploadLink = `${process.env.FRONTEND_URL || 'https://tuitionstime.com'}${uploadRoute}`;
+        const title = kyc === 'rejected' ? 'KYC documents rejected' : kyc === 'approved' ? 'KYC documents approved' : 'KYC status updated';
+        const body =
+          kyc === 'rejected'
+            ? `Your KYC documents were rejected. Reason: ${tutorProfile.kycRejectionReason}. You can reupload documents from Bank Verification.`
+            : kyc === 'approved'
+              ? 'Your KYC documents have been approved. Approved documents can no longer be changed.'
+              : `Your KYC status is now ${kyc}.`;
         await notificationService.notifyUser(
           id,
-          'KYC status updated',
-          `Your KYC has been ${statusLabel}.${reasonText}`,
+          title,
+          body,
           {
             type: 'kyc_status',
             kycStatus: kyc,
             tutorId: id,
-            route: '/dashboard/tutor/kyc',
+            route: uploadRoute,
+            reason: tutorProfile.kycRejectionReason || undefined,
+            emailSubject: title,
+            emailText: body,
+            emailHtml:
+              kyc === 'rejected'
+                ? emailTemplates.kycRejectedHTML({ name: tutorProfile.name, reason: tutorProfile.kycRejectionReason, uploadLink })
+                : kyc === 'approved'
+                  ? emailTemplates.kycApprovedHTML({ name: tutorProfile.name, uploadLink })
+                  : undefined,
           }
         );
       }
@@ -255,7 +274,6 @@ exports.updateKycStatus = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });
   }
 };
-
 // ✅ Activate / Suspend tutor
 exports.updateTutorStatus = async (req, res) => {
   try {
@@ -712,6 +730,7 @@ exports.getTutorJourney = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });
   }
 };
+
 
 
 

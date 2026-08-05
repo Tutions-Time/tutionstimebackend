@@ -209,6 +209,34 @@ exports.suspensionNoticeHTML = ({ name, role, reason, explanation, replyLink }) 
     "Reply to Admin",
     replyLink
   );
+
+exports.kycRejectedHTML = ({ name, reason, uploadLink }) =>
+  emailWrapper(
+    "KYC Documents Rejected",
+    `
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        Hi <strong>${escapeHtml(name || "there")}</strong>, your KYC documents were rejected by the tuitionstime admin team.
+      </p>
+      ${detailRows([{ label: "Reason", value: reason }])}
+      ${noteBox("You can reupload your documents and submit them for review again. Reuploads are allowed until your documents are approved.")}
+    `,
+    "Reupload Documents",
+    uploadLink
+  );
+
+exports.kycApprovedHTML = ({ name, uploadLink }) =>
+  emailWrapper(
+    "KYC Documents Approved",
+    `
+      <p style="font-size:16px;line-height:1.6;color:#333;margin:0 0 16px;">
+        Hi <strong>${escapeHtml(name || "there")}</strong>, your KYC documents have been approved.
+      </p>
+      ${noteBox("Your approved documents are now locked and cannot be changed from the tutor dashboard.")}
+    `,
+    "Open Verification",
+    uploadLink
+  );
+
 exports.studentWelcomeHTML = ({ name }) =>
   emailWrapper(
     "Welcome to tuitionstime",
@@ -347,6 +375,8 @@ exports.monthlySummaryHTML = ({ title = "Monthly Summary", rows = [], message = 
     "Open Dashboard",
     WEBSITE_URL
   );
+
+
 
 
 

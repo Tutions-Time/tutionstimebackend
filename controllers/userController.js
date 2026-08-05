@@ -471,6 +471,13 @@ const uploadTutorKyc = async (req, res) => {
         message: "Tutor profile not found",
       });
 
+    if (tutor.kycDocumentsStatus === "approved") {
+      return res.status(403).json({
+        success: false,
+        message: "KYC documents are approved and can no longer be changed.",
+      });
+    }
+
     const aadhaarUrls = [];
 
     if (req.files?.aadhaar) {
@@ -954,6 +961,7 @@ module.exports = {
   uploadTutorKyc,
   getStudentProfileForTutor
 };
+
 
 
 
