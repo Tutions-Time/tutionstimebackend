@@ -8,6 +8,7 @@ const LOGO_URL = process.env.EMAIL_LOGO_URL || "https://www.tuitionstime.com/ima
 const INSTAGRAM_URL = "https://instagram.com/tuitionstime";
 const LINKEDIN_URL = "https://www.linkedin.com/company/tuitionstime/";
 const WEBSITE_URL = "https://tuitionstime.com/dashboard";
+const ZOOM_SIGN_IN_EMAIL_NOTE = "Before joining, please sign in to the Zoom app with your Zoom account for a smoother class experience and to avoid interruptions.";
 const STUDENT_DASHBOARD_URL = "https://tuitionstime.com/dashboard/student";
 const TUTOR_DASHBOARD_URL = "https://tuitionstime.com/dashboard/tutor";
 
@@ -123,6 +124,7 @@ exports.bookingConfirmedHTML = ({ tutorName, studentName, subject, date, time, l
         { label: "Time", value: time },
       ])}
       ${noteBox("Please join from the button below during the allowed class window.")}
+      ${noteBox(ZOOM_SIGN_IN_EMAIL_NOTE)}
     `,
     role === "tutor" ? "Start Demo" : "Join Demo",
     link
@@ -360,6 +362,7 @@ exports.sessionReminderHTML = ({
         { label: "Time", value: time },
       ])}
       ${noteBox("Use the meeting button below when it is time to join.")}
+      ${noteBox(ZOOM_SIGN_IN_EMAIL_NOTE)}
     `,
     role === "tutor" ? "Start Class" : "Join Class",
     link

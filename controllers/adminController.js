@@ -1238,10 +1238,10 @@ const listAdminBookings = async (req, res) => {
 
     const [studentProfiles, tutorProfiles, users] = await Promise.all([
       StudentProfile.find({ userId: { $in: studentUserIds } })
-        .select("userId name email altPhone photoUrl classLevel board track subjects goals learningMode city state pincode")
+        .select("userId name email gender genderOther altPhone photoUrl addressLine1 addressLine2 city state pincode learningMode track board boardOther classLevel classLevelOther stream streamOther program programOther discipline disciplineOther yearSem yearSemOther exam examOther targetYear targetYearOther subjects subjectOther subjectTimeSlots tutorGenderPref tutorGenderOther preferredTimes budget goals availability upiId accountHolderName bankAccountNumber ifsc createdAt updatedAt")
         .lean(),
       TutorProfile.find({ userId: { $in: tutorUserIds } })
-        .select("userId name email altPhone photoUrl qualification experience subjects classLevels teachingMode hourlyRate monthlyRate city state pincode isVerified status")
+        .select("userId name email gender altPhone isAgeConfirmed photoUrl qualification specialization experience subjects classLevels boards exams studentTypes teachingMode tuitionType hourlyRate monthlyRate availability bio achievements demoVideoUrl resumeUrl city state pincode addressLine1 addressLine2 isVerified isFeatured status rating ratingCount kycStatus kycDocumentsStatus payoutDetailsStatus upiId accountHolderName bankAccountNumber ifsc createdAt updatedAt")
         .lean(),
       User.find({ _id: { $in: allUserIds } })
         .select("_id email phone role status isProfileComplete")
@@ -1734,6 +1734,7 @@ module.exports = {
   updateAdminSessionSchedule,
   migrateUploadsToS3,
 };
+
 
 
 
