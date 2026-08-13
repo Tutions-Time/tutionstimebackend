@@ -163,6 +163,42 @@ async function ensureDemoZoomMeeting(booking) {
   booking.meetingLink = booking.joinUrl || booking.meetingLink || "";
 }
 
+
+function parseBudgetPreference(budget = "") {
+  const text = String(budget || "");
+  const hourly = Number(text.match(/Hourly:\s*(?:Rs\.?)?\s*(\d+)/i)?.[1] || 0);
+  const monthly = Number(text.match(/Monthly:\s*(?:Rs\.?)?\s*(\d+)/i)?.[1] || 0);
+  if (monthly > 0) return { billingType: "monthly", amount: monthly };
+  if (hourly > 0) return { billingType: "hourly", amount: hourly };
+  return null;
+}
+
+function bookingSubjectsForLimit(booking) {
+  const values = [];
+  if (Array.isArray(booking?.subjects)) values.push(...booking.subjects);
+  if (booking?.subject) values.push(booking.subject);
+  return values
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function hasSubjectOverlap(booking, subjects) {
+  const existingSubjects = bookingSubjectsForLimit(booking);
+  const requestedSubjects = normalizeArray(subjects).map((item) =>
+    String(item || "").trim().toLowerCase()
+  );
+  return requestedSubjects.some((item) => existingSubjects.includes(item));
+}
+function getStudentSubjectBudget(profile, subject) {
+  const budgets = Array.isArray(profile?.subjectBudgets) ? profile.subjectBudgets : [];
+  const exact = budgets.find((item) =>
+    String(item?.subject || "").trim().toLowerCase() === String(subject || "").trim().toLowerCase()
+  );
+  if (exact?.amount && ["hourly", "monthly"].includes(String(exact.billingType))) {
+    return { billingType: String(exact.billingType), amount: Number(exact.amount) };
+  }
+  return parseBudgetPreference(profile?.budget);
+}
 function normalizeArray(val) {
   if (!val) return [];
   if (Array.isArray(val)) return val.filter(Boolean);
@@ -291,8 +327,7 @@ exports.createDemoBooking = async (req, res) => {
       });
     }
 
-    // Block if the student already has a pending/confirmed demo whose scheduled
-    // end time is still in the future (i.e. the time window hasn't passed yet).
+    // Allow one active/upcoming demo per subject.
     const now = new Date();
     const activeDemos = await Booking.find({
       studentId: req.user.id,
@@ -300,16 +335,16 @@ exports.createDemoBooking = async (req, res) => {
       status: { $in: ["pending", "confirmed"] },
     }).lean();
 
-    const hasActiveUpcomingDemo = activeDemos.some((demo) => {
+    const duplicateSubjectDemo = activeDemos.find((demo) => {
       const endDt = getBookingEndDateTime(demo);
-      return endDt && endDt > now;
+      return endDt && endDt > now && hasSubjectOverlap(demo, selectedSubjects);
     });
 
-    if (hasActiveUpcomingDemo) {
+    if (duplicateSubjectDemo) {
       return res.status(400).json({
         success: false,
         message:
-          "You already have a demo session scheduled. Please wait until it is completed before booking another.",
+          "You already have an active demo for this subject. Please choose another subject or wait until it is completed.",
       });
     }
 
@@ -487,31 +522,24 @@ exports.createDemoBookingByTutor = async (req, res) => {
       });
     }
 
-    const existingActiveDemo = await Booking.findOne({
+    // Allow one active/upcoming demo per subject.
+    const now = new Date();
+    const activeDemos = await Booking.find({
       studentId,
       type: "demo",
       status: { $in: ["pending", "confirmed"] },
+    }).lean();
+
+    const duplicateSubjectDemo = activeDemos.find((demo) => {
+      const endDt = getBookingEndDateTime(demo);
+      return endDt && endDt > now && hasSubjectOverlap(demo, [subject]);
     });
 
-    if (existingActiveDemo) {
+    if (duplicateSubjectDemo) {
       return res.status(400).json({
         success: false,
         message:
-          "Student already has an active demo. Complete it before booking another.",
-      });
-    }
-
-    const existingDemoForTutor = await Booking.findOne({
-      studentId,
-      tutorId,
-      type: "demo",
-      status: { $in: ["pending", "confirmed"] },
-    });
-
-    if (existingDemoForTutor) {
-      return res.status(400).json({
-        success: false,
-        message: "Only one demo per student-tutor pair is allowed.",
+          "Student already has an active demo for this subject. Choose another subject or wait until it is completed.",
       });
     }
 
@@ -1006,7 +1034,7 @@ exports.getStudentBookings = async (req, res) => {
     const bookings = await Booking.find(filter).sort({ createdAt: -1 }).lean();
 
     if (!bookings.length) {
-      return res.json({ success: true, data: [] });
+    return res.json({ success: true, data: [] });
     }
 
     // Collect tutor userIds
@@ -1049,6 +1077,9 @@ exports.getStudentBookings = async (req, res) => {
       ])
     );
 
+    const studentProfileForBudget = await StudentProfile.findOne({ userId: req.user.id })
+      .select("budget subjectBudgets")
+      .lean();
     // Attach tutor data to each booking
     const enriched = bookings.map((b) => {
       const tutorIdStr = b.tutorId ? String(b.tutorId) : null;
@@ -1076,6 +1107,8 @@ exports.getStudentBookings = async (req, res) => {
         tutorProfileStatus: tutorData.status,
         tutorHourlyRate: tutorData.hourlyRate,
         tutorMonthlyRate: tutorData.monthlyRate,
+        studentBudget: studentProfileForBudget?.budget || "",
+        studentSubjectBudgets: studentProfileForBudget?.subjectBudgets || [],
       };
     });
 
@@ -1096,7 +1129,7 @@ exports.getTutorBookings = async (req, res) => {
       .lean();
 
     if (!bookings.length) {
-      return res.json({ success: true, data: [] });
+    return res.json({ success: true, data: [] });
     }
 
     const studentUserIds = [
@@ -1107,38 +1140,48 @@ exports.getTutorBookings = async (req, res) => {
       ),
     ];
 
+    const validStudentIds = studentUserIds.filter((id) =>
+      mongoose.Types.ObjectId.isValid(id)
+    );
+
     const studentProfiles = await StudentProfile.find({
-      userId: { $in: studentUserIds },
+      $or: [
+        { userId: { $in: validStudentIds } },
+        { _id: { $in: validStudentIds } },
+      ],
     })
-      .select("userId name photoUrl track board classLevel program discipline exam subjects goals learningMode city state")
+      .select("userId name photoUrl track board classLevel program discipline exam subjects goals learningMode city state budget subjectBudgets")
       .lean();
 
-    const studentDataByUserId = new Map(
-      studentProfiles.map((sp) => [
-        String(sp.userId),
-        {
-          userId: sp.userId,
-          name: sp.name,
-          photoUrl: sp.photoUrl || "",
-          track: sp.track || "",
-          board: sp.board || "",
-          classLevel: sp.classLevel || "",
-          program: sp.program || "",
-          discipline: sp.discipline || "",
-          exam: sp.exam || "",
-          subjects: sp.subjects || [],
-          goals: sp.goals || "",
-          learningMode: sp.learningMode || "",
-          city: sp.city || "",
-          state: sp.state || "",
-        },
-      ])
-    );
+    const toStudentData = (sp) => ({
+      profileId: sp._id,
+      userId: sp.userId,
+      name: sp.name,
+      photoUrl: sp.photoUrl || "",
+      track: sp.track || "",
+      board: sp.board || "",
+      classLevel: sp.classLevel || "",
+      program: sp.program || "",
+      discipline: sp.discipline || "",
+      exam: sp.exam || "",
+      subjects: sp.subjects || [],
+      goals: sp.goals || "",
+      learningMode: sp.learningMode || "",
+      city: sp.city || "",
+      state: sp.state || "",
+    });
+
+    const studentDataById = new Map();
+    studentProfiles.forEach((sp) => {
+      const data = toStudentData(sp);
+      if (sp.userId) studentDataById.set(String(sp.userId), data);
+      if (sp._id) studentDataById.set(String(sp._id), data);
+    });
 
     const enriched = bookings.map((b) => {
       const studentIdStr = b.studentId ? String(b.studentId) : null;
       const studentData =
-        (studentIdStr && studentDataByUserId.get(studentIdStr)) || {
+        (studentIdStr && studentDataById.get(studentIdStr)) || {
           userId: b.studentId,
           name: "Student",
           subjects: [],
@@ -1147,6 +1190,7 @@ exports.getTutorBookings = async (req, res) => {
       return {
         ...b,
         studentUserId: studentData.userId || b.studentId,
+        studentProfileId: studentData.profileId || null,
         studentName: studentData.name,
         studentPhotoUrl: studentData.photoUrl,
         studentTrack: studentData.track,
@@ -1251,7 +1295,7 @@ exports.updateDemoStatus = async (req, res) => {
       };
       void notifyDemoConfirmed(notifyCtx);
 
-      return res.json({
+    return res.json({
         success: true,
         message:
           "Demo booked successfully and emails sent to both student & tutor.",
@@ -1290,7 +1334,7 @@ exports.updateDemoStatus = async (req, res) => {
       };
       void notifyDemoCancelled(notifyCtx);
 
-      return res.json({
+    return res.json({
         success: true,
         message:
           "Demo cancelled successfully and notification sent to student.",
@@ -1560,7 +1604,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
         }
       );
 
-      return res.json({
+    return res.json({
         success: true,
         message: "Demo booked successfully.",
         data: booking,
@@ -1635,7 +1679,7 @@ exports.updateDemoStatusByStudent = async (req, res) => {
         }
       );
 
-      return res.json({
+    return res.json({
         success: true,
         message: "Demo rejected successfully.",
         data: booking,
@@ -2021,9 +2065,12 @@ exports.giveDemoFeedback = async (req, res) => {
     const tutorProfileToReturn = await TutorProfile.findOne({
       userId: booking.tutorId,
     })
-      .select("name hourlyRate monthlyRate photoUrl")
+      .select("name hourlyRate monthlyRate photoUrl subjects")
       .lean();
 
+    const studentProfileToReturn = await StudentProfile.findOne({ userId: booking.studentId })
+      .select("subjectBudgets budget")
+      .lean();
     return res.json({
       success: true,
       message: "Feedback submitted",
@@ -2177,7 +2224,7 @@ exports.giveDemoFeedback = async (req, res) => {
 //     const rc = await RegularClass.create({
 //       studentId: booking.studentId,
 //       tutorId: booking.tutorId,
-//       subject: booking.subject,
+//       subject: selectedSubject,
 //       planType,
 //       sessionsPerWeek,
 //       timeSlots,
@@ -2205,7 +2252,7 @@ exports.giveDemoFeedback = async (req, res) => {
 //       currency: "INR",
 //       gateway: "razorpay",
 //       status: "created",
-//       notes: `BillingType=${billingType}, Classes=${numberOfClasses || ""}, StartDate=${startDateStr}`,
+//       notes: `BillingType=${billingType}, Classes=${numberOfClasses || ""}, StartDate=${startDateStr}, PriceSource=${priceSource}`,
 //     });
 //
 //     // ----------------------------
@@ -2287,7 +2334,7 @@ exports.giveDemoFeedback = async (req, res) => {
 exports.startRegularFromDemo = async (req, res) => {
   try {
     const bookingId = req.params.id;
-    const { billingType, numberOfClasses } = req.body;
+    const { billingType, numberOfClasses, subject } = req.body;
     const userId = req.user.id;
 
     // -------------------------------
@@ -2371,7 +2418,7 @@ exports.startRegularFromDemo = async (req, res) => {
         await Payment.updateOne({ _id: paymentId }, { gatewayOrderId: order.id });
       }
 
-      return res.json({
+    return res.json({
         success: true,
         message: "Regular class already exists. Proceed to payment.",
         data: {
@@ -2399,6 +2446,34 @@ exports.startRegularFromDemo = async (req, res) => {
       });
     }
 
+        const bookingSubjects = Array.isArray(booking.subjects)
+      ? booking.subjects
+      : booking.subject
+        ? [booking.subject]
+        : [];
+    const selectedSubject = String(subject || bookingSubjects[0] || "").trim();
+
+    if (!selectedSubject) {
+      return res.status(400).json({
+        success: false,
+        message: "subject is required",
+      });
+    }
+
+    if (
+      bookingSubjects.length > 0 &&
+      !bookingSubjects.some(
+        (item) =>
+          String(item || "").trim().toLowerCase() ===
+          selectedSubject.toLowerCase()
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Selected subject is not part of this demo booking",
+      });
+    }
+
     // -------------------------------
     // 2️⃣ Billing type validation
     // -------------------------------
@@ -2423,7 +2498,7 @@ exports.startRegularFromDemo = async (req, res) => {
     const studentProfileDoc = await StudentProfile.findOne({
       userId: booking.studentId,
     })
-      .select("_id")
+      .select("_id subjectBudgets budget")
       .lean();
     const studentProfileId = studentProfileDoc?._id || booking.studentId;
     console.log("Student Profile ID:", studentProfileId);
@@ -2450,15 +2525,40 @@ exports.startRegularFromDemo = async (req, res) => {
     // -------------------------------
     // 4️⃣ Compute Amount
     // -------------------------------
-    let baseRate =
-      billingType === "hourly"
+    const isTutorInitiatedDemo = String(booking.requestedBy || "student") === "tutor";
+    const studentSubjectBudget = getStudentSubjectBudget(studentProfileDoc, selectedSubject);
+    const effectiveBillingType = isTutorInitiatedDemo
+      ? studentSubjectBudget?.billingType
+      : billingType;
+
+    if (!effectiveBillingType || !["hourly", "monthly"].includes(effectiveBillingType)) {
+      return res.status(400).json({
+        success: false,
+        message: "Student budget is not set for this subject",
+      });
+    }
+
+    if (effectiveBillingType !== billingType) {
+      return res.status(400).json({
+        success: false,
+        message: `This demo was tutor-initiated. Continue with the student's ${effectiveBillingType} budget.`,
+        billingType: effectiveBillingType,
+      });
+    }
+
+    const priceSource = isTutorInitiatedDemo ? "student_budget" : "tutor_rate";
+    let baseRate = isTutorInitiatedDemo
+      ? Number(studentSubjectBudget?.amount || 0)
+      : billingType === "hourly"
         ? tutorProfile.hourlyRate
         : tutorProfile.monthlyRate;
 
     if (!baseRate) {
       return res.status(400).json({
         success: false,
-        message: `Tutor ${billingType} rate not set`,
+        message: isTutorInitiatedDemo
+          ? "Student budget is not set for this subject"
+          : `Tutor ${billingType} rate not set`,
       });
     }
 
@@ -2470,12 +2570,12 @@ exports.startRegularFromDemo = async (req, res) => {
     const amountPaise = Math.round(totalAmountINR * 100);
 
     // -------------------------------
-    // 5️⃣ Create Regular Class
+    // 5) Create Regular Class
     // -------------------------------
-    const rc = await RegularClass.create({
+const rc = await RegularClass.create({
       studentId: studentProfileId,
       tutorId: tutorProfileId,
-      subject: booking.subject,
+      subject: selectedSubject,
       planType,
       classCount: billingType === "hourly" ? Number(numberOfClasses) : null, // 🔥 store class count
       startDate: startDateObj,
@@ -2507,7 +2607,7 @@ exports.startRegularFromDemo = async (req, res) => {
       status: "created",
       notes: `BillingType=${billingType}, Classes=${
         numberOfClasses || ""
-      }, StartDate=${startDateStr}`,
+      }, StartDate=${startDateStr}, PriceSource=${priceSource}`,
     });
 
     // -------------------------------
@@ -2664,7 +2764,7 @@ exports.startRegularDirect = async (req, res) => {
             Number(existingActiveClass.classCount || 0)
           : Number(existingActiveClass.amount || 0);
 
-      return res.json({
+    return res.json({
         success: true,
         message: "Regular class already exists. Proceed to payment.",
         data: {
@@ -2697,7 +2797,7 @@ exports.startRegularDirect = async (req, res) => {
         ? baseRate * Number(numberOfClasses)
         : baseRate;
 
-    const rc = await RegularClass.create({
+const rc = await RegularClass.create({
       studentId: studentProfileDoc._id,
       tutorId: tutorProfile._id,
       subject,
@@ -2725,7 +2825,7 @@ exports.startRegularDirect = async (req, res) => {
       status: "created",
       notes: `DirectRegular=true, BillingType=${billingType}, Classes=${
         numberOfClasses || ""
-      }, StartDate=${startDateStr}`,
+      }, StartDate=${startDateStr}, PriceSource=tutor_rate`,
     });
 
     await createAdminNotification(
@@ -2850,6 +2950,26 @@ exports.getTutorDemoInsights = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

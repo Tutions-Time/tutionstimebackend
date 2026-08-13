@@ -93,6 +93,7 @@ const tutorProfileSchema = new mongoose.Schema(
       default: "pending",
     },
     kycRejectionReason: { type: String, trim: true },
+    kycSubmittedAt: { type: Date },
     kycStatus: {
       type: String,
       enum: ["pending", "submitted", "approved", "rejected"],
@@ -132,3 +133,4 @@ tutorProfileSchema.index({ isFeatured: -1 });
 module.exports =
   mongoose.models.TutorProfile ||
   mongoose.model("TutorProfile", tutorProfileSchema);
+

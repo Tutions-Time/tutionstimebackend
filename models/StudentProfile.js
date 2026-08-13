@@ -72,6 +72,13 @@ const studentProfileSchema = new mongoose.Schema(
 
     // Budget preference
     budget: { type: String, trim: true },
+    subjectBudgets: [
+      {
+        subject: { type: String, trim: true },
+        billingType: { type: String, enum: ["hourly", "monthly"], default: "hourly" },
+        amount: { type: Number, min: 0 },
+      },
+    ],
 
     // Learning Goals
     goals: { type: String, trim: true },
@@ -102,4 +109,6 @@ const studentProfileSchema = new mongoose.Schema(
 module.exports =
   mongoose.models.StudentProfile ||
   mongoose.model("StudentProfile", studentProfileSchema);
+
+
 

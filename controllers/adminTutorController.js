@@ -102,10 +102,17 @@ exports.getAllTutors = async (req, res) => {
       $addFields: {
         ratingSort: { $ifNull: ['$profile.rating', 0] },
         nameSort: { $ifNull: ['$profile.name', ''] },
+        kycActionSort: {
+          $cond: [
+            { $eq: ['$adminKycStatus', 'submitted'] },
+            { $ifNull: ['$profile.kycSubmittedAt', '$profile.updatedAt'] },
+            null,
+          ],
+        },
       },
     });
 
-    let sortStage = { createdAt: -1 };
+    let sortStage = { kycActionSort: -1, createdAt: -1 };
     if (sort === 'joined_asc') sortStage = { createdAt: 1 };
     if (sort === 'rating_desc') sortStage = { ratingSort: -1 };
     if (sort === 'rating_asc') sortStage = { ratingSort: 1 };
@@ -193,6 +200,7 @@ exports.getAllTutors = async (req, res) => {
       earnings30d: earningsMap.get(String(t._id)) || 0,
       status: t.status || 'active',
       joinedAt: t.createdAt,
+      kycSubmittedAt: t.profile?.kycSubmittedAt || null,
     }));
 
     res.status(200).json({
@@ -744,6 +752,7 @@ exports.getTutorJourney = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error', error: err.message });
   }
 };
+
 
 
 

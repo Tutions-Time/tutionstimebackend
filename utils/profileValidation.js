@@ -39,6 +39,20 @@ const normalizeArray = (val) => {
   return [];
 };
 
+
+const normalizeSubjectBudgets = (val) => {
+  const items = normalizeArray(val);
+  return items
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const subject = String(item.subject || "").trim();
+      const billingType = String(item.billingType || "").trim().toLowerCase();
+      const amount = Number(item.amount || 0);
+      if (!subject || !["hourly", "monthly"].includes(billingType)) return null;
+      return { subject, billingType, amount };
+    })
+    .filter(Boolean);
+};
 const normalizeSubjectTimeSlots = (val) => {
   const items = normalizeArray(val);
   return items
@@ -159,6 +173,22 @@ const validateStudentProfileData = (data) => {
   }
 
   const budget = parseBudget(data.budget);
+
+  const subjectBudgets = normalizeSubjectBudgets(data.subjectBudgets);
+  const budgetMap = new Map(subjectBudgets.map((item) => [item.subject, item]));
+  const missingBudgetSubjects = subjects.filter((subject) => !budgetMap.get(subject)?.amount);
+  if (missingBudgetSubjects.length) {
+    errors.subjectBudgets = `Budget is required for ${missingBudgetSubjects.join(", ")}`;
+  }
+  subjectBudgets.forEach((item) => {
+    if (!subjects.includes(item.subject)) return;
+    if (item.billingType === "hourly" && !isAllowedRate(item.amount, HOURLY_RATE_OPTIONS)) {
+      errors.subjectBudgets = `Select an hourly budget from Rs.400 to Rs.2000 for ${item.subject}`;
+    }
+    if (item.billingType === "monthly" && !isAllowedRate(item.amount, MONTHLY_RATE_OPTIONS)) {
+      errors.subjectBudgets = `Select a monthly budget from Rs.3500 to Rs.10000 for ${item.subject}`;
+    }
+  });
   if (budget.hourly && budget.monthly) {
     errors.budget = "Select either hourly or monthly budget, not both";
   } else if (budget.hourly && !isAllowedRate(budget.hourly, HOURLY_RATE_OPTIONS)) {
@@ -258,11 +288,14 @@ const isTutorProfileComplete = (profile) =>
 module.exports = {
   normalizeArray,
   normalizeSubjectTimeSlots,
+  normalizeSubjectBudgets,
   validateStudentProfileData,
   validateTutorProfileData,
   isStudentProfileComplete,
   isTutorProfileComplete,
 };
+
+
 
 
 

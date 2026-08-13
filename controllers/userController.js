@@ -1,9 +1,11 @@
 const User = require("../models/User");
 const StudentProfile = require("../models/StudentProfile");
 const TutorProfile = require("../models/TutorProfile");
+const mongoose = require("mongoose");
 const {
   normalizeArray,
   normalizeSubjectTimeSlots,
+  normalizeSubjectBudgets,
   validateStudentProfileData,
   validateTutorProfileData,
   isStudentProfileComplete,
@@ -195,8 +197,19 @@ const getStudentProfileForTutor = async (req, res) => {
       });
     }
 
-    // 1) Load the student user
-    const studentUser = await User.findById(studentUserId).select(
+    let profile = null;
+    let resolvedStudentUserId = studentUserId;
+
+    if (mongoose.Types.ObjectId.isValid(studentUserId)) {
+      profile = await StudentProfile.findById(studentUserId).lean();
+      if (profile?.userId) {
+        resolvedStudentUserId = profile.userId;
+      }
+    }
+
+    // 1) Load the student user. The route historically receives User._id, but
+    // some demo/class records carry StudentProfile._id, so resolve both.
+    const studentUser = await User.findById(resolvedStudentUserId).select(
       "-password -refreshToken"
     );
 
@@ -208,7 +221,9 @@ const getStudentProfileForTutor = async (req, res) => {
     }
 
     // 2) Load the student profile
-    const profile = await StudentProfile.findOne({ userId: studentUserId }).lean();
+    if (!profile || String(profile.userId) !== String(studentUser._id)) {
+      profile = await StudentProfile.findOne({ userId: studentUser._id }).lean();
+    }
 
     if (!profile) {
       return res.status(404).json({
@@ -334,6 +349,18 @@ const updateStudentProfile = async (req, res) => {
           slots: Array.from(new Set(normalizeArray(item.slots))),
         }))
         .filter((item) => item.slots.length);
+      const parsedBudget = String(b.budget || existingProfile?.budget || "");
+      const legacyHourly = parsedBudget.match(/Hourly:\s*Rs\.(\d+)/i)?.[1] || "";
+      const legacyMonthly = parsedBudget.match(/Monthly:\s*Rs\.(\d+)/i)?.[1] || "";
+      let subjectBudgets = normalizeSubjectBudgets(b.subjectBudgets)
+        .filter((item) => subjectsForProfile.includes(item.subject));
+      if (!subjectBudgets.length && (legacyHourly || legacyMonthly)) {
+        subjectBudgets = subjectsForProfile.map((subject) => ({
+          subject,
+          billingType: legacyMonthly ? "monthly" : "hourly",
+          amount: Number(legacyMonthly || legacyHourly),
+        }));
+      }
       const derivedPreferredTimes = subjectTimeSlots.length
         ? Array.from(new Set(subjectTimeSlots.flatMap((item) => item.slots)))
         : normalizeArray(b.preferredTimes);
@@ -380,6 +407,7 @@ const updateStudentProfile = async (req, res) => {
           resolvedTutorGenderPref === "Other" ? b.tutorGenderOther || "" : "",
       preferredTimes: derivedPreferredTimes,
       subjectTimeSlots,
+      subjectBudgets,
       availability: normalizeArray(b.availability),
       budget:
         typeof b.budget === "undefined"
@@ -492,6 +520,7 @@ const uploadTutorKyc = async (req, res) => {
     tutor.panUrl = panUrl;
     tutor.kycDocumentsStatus = "submitted";
     tutor.kycRejectionReason = "";
+    tutor.kycSubmittedAt = new Date();
     tutor.kycStatus = getCombinedTutorKycStatus(tutor);
 
     await tutor.save();
@@ -656,6 +685,7 @@ const updateTutorProfile = async (req, res) => {
       ...(hasUploadedGovProof && {
         kycDocumentsStatus: "submitted",
         kycRejectionReason: "",
+        kycSubmittedAt: new Date(),
       }),
     };
 
@@ -961,6 +991,7 @@ module.exports = {
   uploadTutorKyc,
   getStudentProfileForTutor
 };
+
 
 
 
