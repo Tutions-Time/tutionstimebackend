@@ -1050,7 +1050,7 @@ exports.getStudentBookings = async (req, res) => {
     const tutorProfiles = await TutorProfile.find({
       userId: { $in: tutorUserIds },
     })
-      .select("_id userId name photoUrl qualification experience subjects classLevels teachingMode hourlyRate monthlyRate city state isVerified status")
+      .select("_id userId name photoUrl qualification experience subjects classLevels boards teachingMode hourlyRate monthlyRate city state isVerified status")
       .lean();
 
     // Map tutor data by userId
@@ -1066,6 +1066,7 @@ exports.getStudentBookings = async (req, res) => {
           experience: tp.experience ?? null,
           subjects: tp.subjects || [],
           classLevels: tp.classLevels || [],
+          boards: tp.boards || [],
           teachingMode: tp.teachingMode || "",
           city: tp.city || "",
           state: tp.state || "",
@@ -1100,6 +1101,7 @@ exports.getStudentBookings = async (req, res) => {
         tutorExperience: tutorData.experience,
         tutorSubjects: tutorData.subjects,
         tutorClassLevels: tutorData.classLevels,
+        tutorBoards: tutorData.boards,
         tutorTeachingMode: tutorData.teachingMode,
         tutorCity: tutorData.city,
         tutorState: tutorData.state,
@@ -2950,6 +2952,8 @@ exports.getTutorDemoInsights = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
+
 
 
 

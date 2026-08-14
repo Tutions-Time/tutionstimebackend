@@ -7,10 +7,17 @@ const TEXT_COLOR = "#222";
 const LOGO_URL = process.env.EMAIL_LOGO_URL || "https://www.tuitionstime.com/images/logo.png";
 const INSTAGRAM_URL = "https://instagram.com/tuitionstime";
 const LINKEDIN_URL = "https://www.linkedin.com/company/tuitionstime/";
-const WEBSITE_URL = "https://tuitionstime.com/dashboard";
+const APP_URL = (
+  process.env.FRONTEND_URL ||
+  process.env.CLIENT_URL ||
+  process.env.WEBSITE_URL ||
+  "https://tuitionstime.com"
+).replace(/\/+$/, "");
+const LOGIN_URL = `${APP_URL}/login`;
+const WEBSITE_URL = `${APP_URL}/dashboard`;
 const ZOOM_SIGN_IN_EMAIL_NOTE = "Before joining, please sign in to the Zoom app with your Zoom account for a smoother class experience and to avoid interruptions.";
-const STUDENT_DASHBOARD_URL = "https://tuitionstime.com/dashboard/student";
-const TUTOR_DASHBOARD_URL = "https://tuitionstime.com/dashboard/tutor";
+const STUDENT_DASHBOARD_URL = `${APP_URL}/dashboard/student`;
+const TUTOR_DASHBOARD_URL = `${APP_URL}/dashboard/tutor`;
 
 const escapeHtml = (value) =>
   String(value ?? "")
@@ -62,6 +69,11 @@ const emailWrapper = (title, body, buttonLabel = null, buttonLink = null) => `
             `
             : ""
         }
+        <div style="text-align:center;margin-top:24px;">
+          <a href="${LOGIN_URL}" style="display:inline-block;color:${TEXT_COLOR};font-size:14px;font-weight:600;text-decoration:underline;">
+            Login to tuitionstime
+          </a>
+        </div>
       </td>
     </tr>
 
@@ -72,7 +84,8 @@ const emailWrapper = (title, body, buttonLabel = null, buttonLink = null) => `
         <p style="margin:6px 0;">
           <a href="${INSTAGRAM_URL}" style="color:#999;text-decoration:none;margin:0 6px;">Instagram</a> • 
           <a href="${LINKEDIN_URL}" style="color:#999;text-decoration:none;margin:0 6px;">LinkedIn</a> • 
-          <a href="${WEBSITE_URL}" style="color:#999;text-decoration:none;margin:0 6px;">Website</a>
+          <a href="${WEBSITE_URL}" style="color:#999;text-decoration:none;margin:0 6px;">Website</a> • 
+          <a href="${LOGIN_URL}" style="color:#999;text-decoration:none;margin:0 6px;">Login</a>
         </p>
       </td>
     </tr>
