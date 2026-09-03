@@ -13,7 +13,11 @@ router.get('/earnings', authenticate, checkRole(['tutor']), paymentController.ge
 // ✅ Tutor payout request
 router.post('/payout', authenticate, checkRole(['tutor']), paymentController.requestTutorPayout);
 
+// Public top tutors for homepage
+router.get('/top', tutorSearchController.getTopTutors);
+
 // ✅ Get single tutor profile
 router.get('/:id', tutorSearchController.getTutorById);
 
 module.exports = router;
+

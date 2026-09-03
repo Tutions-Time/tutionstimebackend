@@ -2372,7 +2372,8 @@ exports.startRegularFromDemo = async (req, res) => {
       });
     }
 
-    // Prevent duplicate regular class creation for same demo
+    // Prevent duplicate regular class creation for same demo.
+    // Paid classes are already active and must not create another payment option.
     if (booking.regularClassId) {
       const rc = await RegularClass.findById(booking.regularClassId);
       if (!rc) {
@@ -2380,65 +2381,42 @@ exports.startRegularFromDemo = async (req, res) => {
       }
 
       const existingPayment = await Payment.findOne({ regularClassId: rc._id, type: "subscription" }).sort({ createdAt: -1 });
+      const totalAmountINR = rc.planType === "hourly" ? Number(rc.amount || 0) * Number(rc.classCount || 0) : Number(rc.amount || 0);
 
-      const totalAmountINR = rc.planType === "hourly" ? (rc.amount || 0) * (rc.classCount || 0) : (rc.amount || 0);
-      const amountPaise = Math.round(totalAmountINR * 100);
-
-      let orderId = existingPayment?.gatewayOrderId || null;
-      let paymentId = existingPayment?._id || null;
-
-      if (!existingPayment) {
-        const payment = await Payment.create({
-          regularClassId: rc._id,
-          studentId: booking.studentId,
-          tutorId: booking.tutorId,
-          type: "subscription",
-          amount: totalAmountINR,
-          currency: "INR",
-          gateway: "razorpay",
-          status: "created",
-          notes: `Existing RC resume`,
-        });
-        paymentId = payment._id;
-      }
-
-      if (!orderId) {
-        const razorpay = require("../services/payments/razorpay");
-        const receipt = `rc_${rc._id.toString().slice(-8)}_${Date.now()}`;
-        const order = await razorpay.orders.create({
-          amount: amountPaise,
-          currency: "INR",
-          receipt,
-          notes: {
-            rc: rc._id.toString().slice(-8),
-            bk: booking._id.toString().slice(-8),
-            bt: rc.planType,
-            cls: rc.planType === "hourly" ? String(rc.classCount || 0) : "",
+      if (rc.paymentStatus === "paid" || existingPayment?.status === "paid") {
+        return res.json({
+          success: true,
+          alreadyActive: true,
+          message: "Regular class is already active. No payment is required.",
+          data: {
+            regularClassId: rc._id,
+            paymentId: existingPayment?._id || null,
+            startDate: rc.startDate,
+            billingType: rc.planType,
+            baseRate: rc.amount,
+            totalAmountINR,
+            paymentStatus: "paid",
+            scheduleStatus: rc.scheduleStatus,
           },
         });
-        orderId = order.id;
-        await Payment.updateOne({ _id: paymentId }, { gatewayOrderId: order.id });
       }
 
-    return res.json({
+      return res.json({
         success: true,
-        message: "Regular class already exists. Proceed to payment.",
+        alreadyActive: false,
+        message: "Regular class already exists. Complete the pending payment to activate it.",
         data: {
           regularClassId: rc._id,
-          paymentId,
-          orderId,
-          amount: amountPaise,
-          currency: "INR",
-          keyId: razorpay.getKeyId(),
-          provider: "razorpay",
+          paymentId: existingPayment?._id || null,
           startDate: rc.startDate,
           billingType: rc.planType,
           baseRate: rc.amount,
           totalAmountINR,
+          paymentStatus: rc.paymentStatus,
+          scheduleStatus: rc.scheduleStatus,
         },
       });
     }
-
     // Auth — Student only
     if (String(booking.studentId) !== String(userId)) {
       return res.status(403).json({
@@ -2766,9 +2744,28 @@ exports.startRegularDirect = async (req, res) => {
             Number(existingActiveClass.classCount || 0)
           : Number(existingActiveClass.amount || 0);
 
-    return res.json({
+      if (existingActiveClass.paymentStatus === "paid" || existingPayment?.status === "paid") {
+        return res.json({
+          success: true,
+          alreadyActive: true,
+          message: "Regular class is already active. No payment is required.",
+          data: {
+            regularClassId: existingActiveClass._id,
+            paymentId: existingPayment?._id || null,
+            startDate: existingActiveClass.startDate,
+            billingType: existingActiveClass.planType,
+            baseRate: existingActiveClass.amount,
+            totalAmountINR,
+            paymentStatus: "paid",
+            scheduleStatus: existingActiveClass.scheduleStatus,
+          },
+        });
+      }
+
+      return res.json({
         success: true,
-        message: "Regular class already exists. Proceed to payment.",
+        alreadyActive: false,
+        message: "Regular class already exists. Complete the pending payment to activate it.",
         data: {
           regularClassId: existingActiveClass._id,
           paymentId: existingPayment?._id || null,
@@ -2776,10 +2773,11 @@ exports.startRegularDirect = async (req, res) => {
           billingType: existingActiveClass.planType,
           baseRate: existingActiveClass.amount,
           totalAmountINR,
+          paymentStatus: existingActiveClass.paymentStatus,
+          scheduleStatus: existingActiveClass.scheduleStatus,
         },
       });
     }
-
     const startDateObj = toStartOfDay(new Date());
     const startDateStr = startDateObj.toISOString().slice(0, 10);
     const baseRate =
@@ -2952,6 +2950,8 @@ exports.getTutorDemoInsights = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
+
 
 
 

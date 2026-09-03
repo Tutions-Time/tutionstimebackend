@@ -321,7 +321,17 @@ exports.createSubscriptionOrder = async (req, res) => {
         .json({ success: false, message: "Regular class not found" });
     }
 
-    // 🔐 Optional: ensure the logged-in student matches this regular class
+    const latestPayment = await Payment.findOne({ regularClassId, type: "subscription" }).sort({ createdAt: -1 }).lean();
+    if (rc.paymentStatus === "paid" || latestPayment?.status === "paid") {
+      return res.json({
+        success: true,
+        alreadyActive: true,
+        message: "Regular class is already active. No payment is required.",
+        paymentId: latestPayment?._id || null,
+        regularClassId: rc._id,
+      });
+    }
+// 🔐 Optional: ensure the logged-in student matches this regular class
     // You can map User -> StudentProfile here if needed
 
     let totalAmountINR = billingType === "hourly" ? (Number(rc.amount) * classes) : Number(rc.amount);
@@ -3781,3 +3791,4 @@ exports.requestTutorPayout = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+

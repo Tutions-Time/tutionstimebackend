@@ -57,7 +57,7 @@ async function gatherTutorReviews(tutorProfileId, tutorUserId) {
     comment: session.sessionFeedback?.comment || '',
     studentName: session.studentId?.name || 'Student',
     createdAt: session.sessionFeedback?.createdAt || session.startDateTime,
-    source: 'ok-session',
+    source: 'session',
   });
 
   const formatDemoReview = (booking) => ({
@@ -85,6 +85,176 @@ async function gatherTutorReviews(tutorProfileId, tutorUserId) {
   return combined.slice(0, 6);
 }
 
+const weightedRating = (average, count) => {
+  const globalAverage = 4.2;
+  const minimumReviews = 5;
+  return (count / (count + minimumReviews)) * average +
+    (minimumReviews / (count + minimumReviews)) * globalAverage;
+};
+
+const sanitizeTutorCard = (tutor, metrics) => ({
+  _id: tutor._id,
+  userId: tutor.userId
+    ? {
+        _id: tutor.userId._id,
+        role: tutor.userId.role,
+        status: tutor.userId.status,
+        isProfileComplete: tutor.userId.isProfileComplete,
+      }
+    : tutor.userId,
+  name: tutor.name,
+  photoUrl: tutor.photoUrl,
+  city: tutor.city,
+  state: tutor.state,
+  qualification: tutor.qualification,
+  specialization: tutor.specialization,
+  experience: tutor.experience,
+  hourlyRate: tutor.hourlyRate,
+  monthlyRate: tutor.monthlyRate,
+  subjects: tutor.subjects || [],
+  classLevels: tutor.classLevels || [],
+  teachingMode: tutor.teachingMode,
+  availability: tutor.availability || [],
+  rating: Number(metrics.averageRating.toFixed(1)),
+  ratingCount: metrics.reviewCount,
+  completedClassesCount: metrics.completedClassesCount,
+  completedDemoCount: metrics.completedDemoCount,
+  topTutorScore: Number(metrics.score.toFixed(2)),
+  isFeatured: tutor.isFeatured,
+  isVerifiedTutor:
+    Boolean(tutor?.userId?.isProfileComplete) &&
+    String(tutor?.kycStatus || '').toLowerCase() === 'approved',
+});
+
+/**
+ * GET /api/tutors/top
+ * Public top tutor ranking based on ratings, reviews, completed classes,
+ * completed demos, profile completion, and KYC verification.
+ */
+exports.getTopTutors = async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 10, 10);
+
+    const tutors = await TutorProfile.find({ name: { $exists: true, $ne: '' } })
+      .populate('userId', 'role status isDeleted isProfileComplete')
+      .select(
+        'name photoUrl city state qualification specialization experience hourlyRate monthlyRate subjects classLevels teachingMode availability rating ratingCount isFeatured kycStatus userId createdAt'
+      )
+      .lean();
+
+    const activeTutors = tutors.filter((tutor) => {
+      const user = tutor.userId;
+      return (
+        user &&
+        user.role === 'tutor' &&
+        user.status !== 'suspended' &&
+        user.status !== 'inactive' &&
+        !user.isDeleted
+      );
+    });
+
+    const tutorProfileIds = activeTutors.map((tutor) => tutor._id);
+    const tutorUserIds = activeTutors
+      .map((tutor) => tutor.userId?._id)
+      .filter(Boolean);
+
+    const [sessionStats, demoStats] = await Promise.all([
+      Session.aggregate([
+        { $match: { tutorId: { $in: tutorProfileIds }, status: 'completed' } },
+        {
+          $group: {
+            _id: '$tutorId',
+            completedClassesCount: { $sum: 1 },
+            sessionReviewCount: {
+              $sum: { $cond: [{ $ifNull: ['$sessionFeedback.overall', false] }, 1, 0] },
+            },
+            sessionRatingSum: { $sum: { $ifNull: ['$sessionFeedback.overall', 0] } },
+          },
+        },
+      ]),
+      Booking.aggregate([
+        { $match: { tutorId: { $in: tutorUserIds }, status: 'completed' } },
+        {
+          $group: {
+            _id: '$tutorId',
+            completedDemoCount: { $sum: 1 },
+            demoReviewCount: {
+              $sum: { $cond: [{ $ifNull: ['$demoFeedback.overall', false] }, 1, 0] },
+            },
+            demoRatingSum: { $sum: { $ifNull: ['$demoFeedback.overall', 0] } },
+          },
+        },
+      ]),
+    ]);
+
+    const sessionStatsByTutorId = new Map(
+      sessionStats.map((item) => [String(item._id), item])
+    );
+    const demoStatsByTutorUserId = new Map(
+      demoStats.map((item) => [String(item._id), item])
+    );
+
+    const ranked = activeTutors
+      .map((tutor) => {
+        const session = sessionStatsByTutorId.get(String(tutor._id)) || {};
+        const demo = demoStatsByTutorUserId.get(String(tutor.userId?._id)) || {};
+        const profileRatingCount = Number(tutor.ratingCount || 0);
+        const profileRating = Number(tutor.rating || 0);
+        const calculatedReviewCount =
+          Number(session.sessionReviewCount || 0) + Number(demo.demoReviewCount || 0);
+        const calculatedRatingSum =
+          Number(session.sessionRatingSum || 0) + Number(demo.demoRatingSum || 0);
+        const reviewCount = Math.max(profileRatingCount, calculatedReviewCount);
+        const averageRating =
+          calculatedReviewCount > 0
+            ? calculatedRatingSum / calculatedReviewCount
+            : profileRating > 0
+              ? profileRating
+              : 0;
+        const completedClassesCount = Number(session.completedClassesCount || 0);
+        const completedDemoCount = Number(demo.completedDemoCount || 0);
+        const verificationBonus =
+          Boolean(tutor?.userId?.isProfileComplete) &&
+          String(tutor?.kycStatus || '').toLowerCase() === 'approved'
+            ? 8
+            : 0;
+        const featuredBonus = tutor.isFeatured ? 3 : 0;
+
+        const ratingScore = reviewCount > 0 ? weightedRating(averageRating || 0, reviewCount) * 18 : 0;
+        const score =
+          ratingScore +
+          Math.log1p(reviewCount) * 12 +
+          Math.log1p(completedClassesCount) * 10 +
+          Math.log1p(completedDemoCount) * 4 +
+          verificationBonus +
+          featuredBonus;
+
+        return sanitizeTutorCard(tutor, {
+          averageRating,
+          reviewCount,
+          completedClassesCount,
+          completedDemoCount,
+          score,
+        });
+      })
+      .sort((a, b) => b.topTutorScore - a.topTutorScore)
+      .slice(0, limit);
+
+    res.status(200).json({
+      success: true,
+      count: ranked.length,
+      data: ranked,
+    });
+  } catch (error) {
+    console.error('Top Tutors Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch top tutors',
+      error: error.message,
+    });
+  }
+};
+
 /**
  * GET /api/tutors/search
  * Supports filters: city, subject, classLevel, board, gender, teachingMode,
@@ -95,12 +265,10 @@ exports.searchTutors = async (req, res) => {
     const hasFilters = Object.keys(req.query).length > 0;
 
     if (hasFilters) {
-      // 🧩 Build query filter
       const filter = await buildTutorFilter(req.query, {
-        studentId: req.user?.role === "student" ? req.user.id : null,
+        studentId: req.user?.role === 'student' ? req.user.id : null,
       });
 
-      // Sorting
       const sortParam = req.query.sort || 'createdAt_desc';
       let sort = {};
       const [field, order] = sortParam.split('_');
@@ -108,7 +276,7 @@ exports.searchTutors = async (req, res) => {
       if (validSorts.includes(field)) {
         sort[field] = order === 'asc' ? 1 : -1;
       } else {
-        sort['createdAt'] = -1;
+        sort.createdAt = -1;
       }
 
       const activeTutorUsers = await User.find({
@@ -121,13 +289,11 @@ exports.searchTutors = async (req, res) => {
       const activeTutorUserIds = activeTutorUsers.map((u) => u._id);
       filter.userId = { $in: activeTutorUserIds };
 
-      // Pagination
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 20;
       const skip = (page - 1) * limit;
       const totalMatches = await TutorProfile.countDocuments(filter);
 
-      // Fetch tutors
       const tutors = await TutorProfile.find(filter)
         .populate('userId', 'role lastLogin status isProfileComplete')
         .sort(sort)
@@ -160,7 +326,6 @@ exports.searchTutors = async (req, res) => {
       });
     }
 
-    // 🧠 No filters → Use AI recommendation logic
     const studentId = req.user?.id || null;
     const recommended = await getRecommendedTutors(studentId);
     const userIds = recommended
@@ -210,80 +375,80 @@ exports.searchTutors = async (req, res) => {
 exports.getTutorById = async (req, res) => {
   try {
     const { id } = req.params;
-  const tutor = await TutorProfile.findById(id)
-    .populate('userId', 'role status isProfileComplete')
-    .lean();
+    const tutor = await TutorProfile.findById(id)
+      .populate('userId', 'role status isProfileComplete')
+      .lean();
 
-  if (!tutor) {
-    return res.status(404).json({
-      success: false,
-      message: 'Tutor not found',
+    if (!tutor) {
+      return res.status(404).json({
+        success: false,
+        message: 'Tutor not found',
+      });
+    }
+
+    const userStatus = String(tutor?.userId?.status || '').toLowerCase();
+    if (userStatus === 'suspended') {
+      return res.status(404).json({
+        success: false,
+        message: 'Tutor not found',
+      });
+    }
+
+    const reviews = await gatherTutorReviews(tutor._id, tutor.userId);
+    const safeTutor = {
+      _id: tutor._id,
+      userId: tutor.userId
+        ? {
+            _id: tutor.userId._id,
+            role: tutor.userId.role,
+            status: tutor.userId.status,
+            isProfileComplete: tutor.userId.isProfileComplete,
+          }
+        : tutor.userId,
+      name: tutor.name,
+      gender: tutor.gender,
+      isAgeConfirmed: tutor.isAgeConfirmed,
+      rating: tutor.rating,
+      ratingCount: tutor.ratingCount,
+      isFeatured: tutor.isFeatured,
+      qualification: tutor.qualification,
+      specialization: tutor.specialization,
+      experience: tutor.experience,
+      teachingMode: tutor.teachingMode,
+      tuitionType: tutor.tuitionType,
+      city: tutor.city,
+      state: tutor.state,
+      subjects: tutor.subjects || [],
+      classLevels: tutor.classLevels || [],
+      boards: tutor.boards || [],
+      exams: tutor.exams || [],
+      studentTypes: tutor.studentTypes || [],
+      groupSize: tutor.groupSize,
+      groupSizes: tutor.groupSizes || [],
+      hourlyRate: tutor.hourlyRate,
+      monthlyRate: tutor.monthlyRate,
+      availability: tutor.availability || [],
+      bio: tutor.bio,
+      achievements: tutor.achievements,
+      photoUrl: tutor.photoUrl,
+      demoVideoUrl: tutor.demoVideoUrl,
+      isVerified: tutor.isVerified,
+      status: tutor.status,
+      kycStatus: tutor.kycStatus,
+      createdAt: tutor.createdAt,
+      updatedAt: tutor.updatedAt,
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        ...safeTutor,
+        isVerifiedTutor:
+          Boolean(tutor?.userId?.isProfileComplete) &&
+          String(tutor?.kycStatus || '').toLowerCase() === 'approved',
+        reviews,
+      },
     });
-  }
-
-  const userStatus = String(tutor?.userId?.status || '').toLowerCase();
-  if (userStatus === 'suspended') {
-    return res.status(404).json({
-      success: false,
-      message: 'Tutor not found',
-    });
-  }
-
-  const reviews = await gatherTutorReviews(tutor._id, tutor.userId);
-  const safeTutor = {
-    _id: tutor._id,
-    userId: tutor.userId
-      ? {
-          _id: tutor.userId._id,
-          role: tutor.userId.role,
-          status: tutor.userId.status,
-          isProfileComplete: tutor.userId.isProfileComplete,
-        }
-      : tutor.userId,
-    name: tutor.name,
-    gender: tutor.gender,
-    isAgeConfirmed: tutor.isAgeConfirmed,
-    rating: tutor.rating,
-    ratingCount: tutor.ratingCount,
-    isFeatured: tutor.isFeatured,
-    qualification: tutor.qualification,
-    specialization: tutor.specialization,
-    experience: tutor.experience,
-    teachingMode: tutor.teachingMode,
-    tuitionType: tutor.tuitionType,
-    city: tutor.city,
-    state: tutor.state,
-    subjects: tutor.subjects || [],
-    classLevels: tutor.classLevels || [],
-    boards: tutor.boards || [],
-    exams: tutor.exams || [],
-    studentTypes: tutor.studentTypes || [],
-    groupSize: tutor.groupSize,
-    groupSizes: tutor.groupSizes || [],
-    hourlyRate: tutor.hourlyRate,
-    monthlyRate: tutor.monthlyRate,
-    availability: tutor.availability || [],
-    bio: tutor.bio,
-    achievements: tutor.achievements,
-    photoUrl: tutor.photoUrl,
-    demoVideoUrl: tutor.demoVideoUrl,
-    isVerified: tutor.isVerified,
-    status: tutor.status,
-    kycStatus: tutor.kycStatus,
-    createdAt: tutor.createdAt,
-    updatedAt: tutor.updatedAt,
-  };
-
-  res.status(200).json({
-    success: true,
-    data: {
-      ...safeTutor,
-      isVerifiedTutor:
-        Boolean(tutor?.userId?.isProfileComplete) &&
-        String(tutor?.kycStatus || '').toLowerCase() === 'approved',
-      reviews,
-    },
-  });
   } catch (error) {
     console.error('Error fetching tutor profile:', error);
     res.status(500).json({
@@ -293,5 +458,7 @@ exports.getTutorById = async (req, res) => {
     });
   }
 };
+
+
 
 
