@@ -162,11 +162,16 @@ async function schedulePaidRegularClassFromStoredTime(rc) {
   const sessionsToInsert = [];
   for (const dateStr of selectedDates) {
     const startDateTime = buildDateTime(dateStr, time);
-    const meeting = await zoomService.createZoomMeeting({
-      topic: buildRegularSessionTopic(rc, startDateTime),
-      startTime: startDateTime.toISOString(),
-      duration: REGULAR_SESSION_DURATION_MINUTES,
-    });
+    let meeting = {};
+    try {
+      meeting = await zoomService.createZoomMeeting({
+        topic: buildRegularSessionTopic(rc, startDateTime),
+        startTime: startDateTime.toISOString(),
+        duration: REGULAR_SESSION_DURATION_MINUTES,
+      });
+    } catch (err) {
+      console.error("Auto schedule Zoom meeting create failed:", err.message);
+    }
 
     sessionsToInsert.push({
       regularClassId: rc._id,
@@ -3930,5 +3935,6 @@ exports.requestTutorPayout = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
 
 

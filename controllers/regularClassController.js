@@ -137,6 +137,85 @@ function buildRegularSessionTopic(rc, dateTime) {
 }
 
 
+async function createScheduledSessionsForRegularClass(rc) {
+  if (!rc || rc.scheduleStatus === "scheduled") return { scheduled: false };
+  const time = rc.timeSlots?.[0]?.time;
+  if (!time) return { scheduled: false, reason: "missing-time" };
+
+  const scheduleStartDate =
+    startOfUtcDay(rc.startDate) > startOfUtcDay(new Date())
+      ? startOfUtcDay(rc.startDate)
+      : startOfUtcDay(new Date());
+
+  let selectedDates = [];
+  if (rc.planType === "hourly") {
+    const n = Number(rc.classCount || 0);
+    if (!n || n <= 0) return { scheduled: false, reason: "invalid-class-count" };
+    selectedDates = buildDailyDateRange(scheduleStartDate, n);
+  } else if (rc.planType === "monthly") {
+    selectedDates = buildMonthlyDateRange(scheduleStartDate);
+  } else {
+    return { scheduled: false, reason: "invalid-plan" };
+  }
+
+  const sessionsToInsert = [];
+  for (const dateStr of selectedDates) {
+    const startDateTime = buildDateTime(dateStr, time);
+    const topic = buildRegularSessionTopic(rc, startDateTime);
+    let meeting = {};
+    try {
+      meeting = await zoomService.createZoomMeeting({
+        topic,
+        startTime: startDateTime.toISOString(),
+        duration: REGULAR_SESSION_DURATION_MINUTES,
+      });
+    } catch (err) {
+      console.error("Regular class Zoom meeting create failed:", err.message);
+    }
+
+    sessionsToInsert.push({
+      regularClassId: rc._id,
+      studentId: rc.studentId,
+      tutorId: rc.tutorId,
+      startDateTime,
+      meetingId: meeting.id ? String(meeting.id) : "",
+      meetingPassword: meeting.password || meeting.encrypted_password || "",
+      startUrl: meeting.start_url || "",
+      joinUrl: meeting.join_url || "",
+      meetingLink: meeting.join_url || "",
+      status: "scheduled",
+    });
+  }
+
+  await Session.deleteMany({ regularClassId: rc._id });
+  const created = await Session.insertMany(sessionsToInsert);
+  await RegularClass.updateOne(
+    { _id: rc._id },
+    { $set: { scheduleStatus: "scheduled" } }
+  );
+  rc.scheduleStatus = "scheduled";
+  await recalculateSubscriptionReleaseForClass(rc._id);
+  return { scheduled: true, count: created.length };
+}
+
+async function repairPaidRegularClassSchedules(regularClasses) {
+  const candidates = (regularClasses || []).filter(
+    (rc) =>
+      rc.paymentStatus === "paid" &&
+      rc.status === "active" &&
+      rc.scheduleStatus !== "scheduled" &&
+      Array.isArray(rc.timeSlots) &&
+      rc.timeSlots.length > 0
+  );
+
+  for (const rc of candidates) {
+    try {
+      await createScheduledSessionsForRegularClass(rc);
+    } catch (err) {
+      console.error("repairPaidRegularClassSchedules error:", err.message);
+    }
+  }
+}
 exports.getTutorRegularStudents = async (req, res) => {
   try {
     const tutorUserId = req.user.id; // this is User._id
@@ -323,11 +402,16 @@ exports.scheduleRegularClassSessions = async (req, res) => {
     for (const dateStr of selectedDates) {
       const startDateTime = buildDateTime(dateStr, time);
       const topic = buildRegularSessionTopic(rc, startDateTime);
-      const meeting = await zoomService.createZoomMeeting({
-        topic,
-        startTime: startDateTime.toISOString(),
-        duration: REGULAR_SESSION_DURATION_MINUTES,
-      });
+      let meeting = {};
+      try {
+        meeting = await zoomService.createZoomMeeting({
+          topic,
+          startTime: startDateTime.toISOString(),
+          duration: REGULAR_SESSION_DURATION_MINUTES,
+        });
+      } catch (err) {
+        console.error("Schedule class Zoom meeting create failed:", err.message);
+      }
 
       sessionsToInsert.push({
         regularClassId: rc._id,
@@ -429,6 +513,8 @@ exports.getStudentRegularClasses = async (req, res) => {
       const tutorUserId = tp?.userId ? String(tp.userId) : String(rc.tutorId);
       return !suspendedTutorUsers.has(tutorUserId);
     });
+
+    await repairPaidRegularClassSchedules(regularClasses);
 
     // 3) Load sessions for each regular class
     const rcIds = regularClasses.map((rc) => rc._id);
@@ -566,6 +652,8 @@ exports.getTutorRegularClasses = async (req, res) => {
     if (!regularClasses.length) {
       return res.json({ success: true, data: [] });
     }
+
+    await repairPaidRegularClassSchedules(regularClasses);
 
     const studentUserIds = regularClasses.map((rc) => rc.studentId.toString());
     const students = await StudentProfile.find({
@@ -735,4 +823,7 @@ exports.getRegularClassSessions = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+
+
 
