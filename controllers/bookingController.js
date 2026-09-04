@@ -2329,6 +2329,45 @@ exports.giveDemoFeedback = async (req, res) => {
 //   }
 // };
 
+function formatTime24FromMinutes(totalMinutes) {
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function parseTimeTo24(timeValue) {
+  const raw = String(timeValue || "").trim();
+  if (!raw) return "";
+
+  const rangeStart = raw.split("-")[0].trim();
+  const time24 = rangeStart.match(/^(\d{1,2}):(\d{2})$/);
+  if (time24) {
+    const h = Number(time24[1]);
+    const m = Number(time24[2]);
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) return formatTime24FromMinutes(h * 60 + m);
+  }
+
+  const time12 = rangeStart.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!time12) return "";
+  let h = Number(time12[1]);
+  const m = Number(time12[2]);
+  const period = time12[3].toUpperCase();
+  if (h < 1 || h > 12 || m < 0 || m > 59) return "";
+  h = h % 12;
+  if (period === "PM") h += 12;
+  return formatTime24FromMinutes(h * 60 + m);
+}
+
+function getDayOfWeekShort(dateValue) {
+  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(dateValue).getDay()];
+}
+
+function buildRegularClassSchedule({ date, preferredTime }) {
+  const time = parseTimeTo24(preferredTime);
+  if (!time) return [];
+  return [{ dayOfWeek: getDayOfWeekShort(date || new Date()), time }];
+}
+
 // Tutor creates a REGULAR class instance for a student
 // POST /api/bookings/regular
 // Body: { regularClassId, date, time, note }
@@ -2501,6 +2540,10 @@ exports.startRegularFromDemo = async (req, res) => {
 
     const startDateObj = toStartOfDay(new Date());
     const startDateStr = startDateObj.toISOString().slice(0, 10);
+    const regularTimeSlots = buildRegularClassSchedule({
+      date: booking.preferredDate || startDateObj,
+      preferredTime: booking.preferredTime,
+    });
 
     // -------------------------------
     // 4️⃣ Compute Amount
@@ -2563,6 +2606,8 @@ const rc = await RegularClass.create({
       currency: "INR",
       paymentStatus: "pending",
       status: "active",
+      scheduleStatus: "not-scheduled",
+      timeSlots: regularTimeSlots,
       currentPeriodStart: startDateObj,
       currentPeriodEnd: new Date(
         new Date(startDateObj).setMonth(startDateObj.getMonth() + 1)
@@ -2665,7 +2710,7 @@ exports.startRegularDirect = async (req, res) => {
   try {
     const tutorUserId = req.params.tutorId;
     const studentUserId = req.user.id;
-    const { subject, billingType, numberOfClasses } = req.body;
+    const { subject, billingType, numberOfClasses, selectedPreferredTime } = req.body;
 
     if (!subject) {
       return res.status(400).json({
@@ -2780,6 +2825,11 @@ exports.startRegularDirect = async (req, res) => {
     }
     const startDateObj = toStartOfDay(new Date());
     const startDateStr = startDateObj.toISOString().slice(0, 10);
+    const selectedTimeSlot = selectedPreferredTime || studentProfileDoc.preferredTimes?.[0] || "";
+    const regularTimeSlots = buildRegularClassSchedule({
+      date: startDateObj,
+      preferredTime: selectedTimeSlot,
+    });
     const baseRate =
       billingType === "hourly"
         ? tutorProfile.hourlyRate
@@ -2808,6 +2858,8 @@ const rc = await RegularClass.create({
       currency: "INR",
       paymentStatus: "pending",
       status: "active",
+      scheduleStatus: "not-scheduled",
+      timeSlots: regularTimeSlots,
       currentPeriodStart: startDateObj,
       currentPeriodEnd: new Date(
         new Date(startDateObj).setMonth(startDateObj.getMonth() + 1)
@@ -2950,6 +3002,8 @@ exports.getTutorDemoInsights = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
+
 
 
 

@@ -69,6 +69,143 @@ async function resolveRazorpayPaymentMeta(orderId) {
   };
 }
 
+const REGULAR_SESSION_DURATION_MINUTES = Number(
+  process.env.REGULAR_SESSION_DURATION_MINUTES || 60
+);
+
+function startOfUtcDay(date) {
+  const d = new Date(date);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
+function addUtcDays(date, days) {
+  const base = startOfUtcDay(date);
+  base.setUTCDate(base.getUTCDate() + days);
+  return base;
+}
+
+function formatDateOnly(date) {
+  return new Date(date).toISOString().slice(0, 10);
+}
+
+function buildDailyDateRange(startDate, count) {
+  return Array.from({ length: count }, (_, index) =>
+    formatDateOnly(addUtcDays(startDate, index))
+  );
+}
+
+function buildMonthlyDateRange(startDate) {
+  const start = startOfUtcDay(startDate);
+  const monthStart = new Date(
+    Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1)
+  );
+  const nextMonthStart = new Date(
+    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1)
+  );
+  const dates = [];
+
+  for (
+    let cursor = new Date(monthStart);
+    cursor < nextMonthStart;
+    cursor = addUtcDays(cursor, 1)
+  ) {
+    dates.push(formatDateOnly(cursor));
+  }
+
+  return dates;
+}
+
+function buildDateTime(dateStr, timeStr) {
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const [H, M] = timeStr.split(":").map(Number);
+  return new Date(Date.UTC(year, month - 1, day, H, M, 0, 0));
+}
+
+function buildRegularSessionTopic(rc, dateTime) {
+  const subject = rc?.subject || "Regular Class";
+  const dateLabel = dateTime.toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const timeLabel = dateTime.toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  });
+  return `${subject} - ${timeLabel} on ${dateLabel}`;
+}
+
+async function schedulePaidRegularClassFromStoredTime(rc) {
+  if (!rc || rc.scheduleStatus === "scheduled") return { scheduled: false };
+  const time = rc.timeSlots?.[0]?.time;
+  if (!time) return { scheduled: false, reason: "missing-time" };
+
+  const scheduleStartDate =
+    startOfUtcDay(rc.startDate) > startOfUtcDay(new Date())
+      ? startOfUtcDay(rc.startDate)
+      : startOfUtcDay(new Date());
+
+  let selectedDates = [];
+  if (rc.planType === "hourly") {
+    const n = Number(rc.classCount || 0);
+    if (!n || n <= 0) return { scheduled: false, reason: "invalid-class-count" };
+    selectedDates = buildDailyDateRange(scheduleStartDate, n);
+  } else if (rc.planType === "monthly") {
+    selectedDates = buildMonthlyDateRange(scheduleStartDate);
+  } else {
+    return { scheduled: false, reason: "invalid-plan" };
+  }
+
+  const zoomService = require("../services/zoomService");
+  const sessionsToInsert = [];
+  for (const dateStr of selectedDates) {
+    const startDateTime = buildDateTime(dateStr, time);
+    const meeting = await zoomService.createZoomMeeting({
+      topic: buildRegularSessionTopic(rc, startDateTime),
+      startTime: startDateTime.toISOString(),
+      duration: REGULAR_SESSION_DURATION_MINUTES,
+    });
+
+    sessionsToInsert.push({
+      regularClassId: rc._id,
+      studentId: rc.studentId,
+      tutorId: rc.tutorId,
+      startDateTime,
+      meetingId: meeting.id ? String(meeting.id) : "",
+      meetingPassword: meeting.password || meeting.encrypted_password || "",
+      startUrl: meeting.start_url || "",
+      joinUrl: meeting.join_url || "",
+      meetingLink: meeting.join_url || "",
+      status: "scheduled",
+    });
+  }
+
+  await Session.deleteMany({ regularClassId: rc._id });
+  const created = await Session.insertMany(sessionsToInsert);
+  rc.scheduleStatus = "scheduled";
+  await rc.save();
+  return { scheduled: true, count: created.length };
+}
+
+async function autoSchedulePaidRegularClass(rc) {
+  try {
+    const result = await schedulePaidRegularClassFromStoredTime(rc);
+    if (result.scheduled) {
+      await createAdminNotification(
+        "Regular Class Sessions Scheduled",
+        `Auto-scheduled ${result.count} sessions for regular class ${rc._id}`,
+        { regularClassId: rc._id, sessionCount: result.count, subject: rc.subject }
+      );
+    }
+    return result;
+  } catch (err) {
+    console.error("autoSchedulePaidRegularClass error:", err.message);
+    return { scheduled: false, reason: err.message };
+  }
+}
+
 async function resolveProfileName(model, id, fallback) {
   if (!id) return fallback;
   const doc = await model.findById(id).select("name").lean();
@@ -391,6 +528,7 @@ exports.createSubscriptionOrder = async (req, res) => {
           rc.classCount = classes;
         }
         await rc.save();
+        await autoSchedulePaidRegularClass(rc);
 
         await walletService.debitWallet(
           sp?.userId || userId,
@@ -1451,6 +1589,7 @@ exports.verifyPayment = async (req, res) => {
           if (purchased > 0) rc.classCount = purchased;
         }
         await rc.save();
+        await autoSchedulePaidRegularClass(rc);
       }
 
       // Wallet + release schedule
@@ -3791,4 +3930,5 @@ exports.requestTutorPayout = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
 
