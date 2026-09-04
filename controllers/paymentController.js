@@ -2252,8 +2252,8 @@ exports.listAllPaymentsHistory = async (req, res) => {
     const subs = include("subscription")
       ? await Payment.find(baseRange({ type: "subscription" }))
           .sort({ createdAt: -1 })
-          .populate({ path: "studentId", select: "name" })
-          .populate({ path: "tutorId", select: "name" })
+          .populate({ path: "studentId", select: "name userId" })
+          .populate({ path: "tutorId", select: "name userId" })
           .populate({ path: "regularClassId", select: "subject planType classCount" })
           .lean()
       : [];
@@ -2261,8 +2261,8 @@ exports.listAllPaymentsHistory = async (req, res) => {
     const notes = include("note")
       ? await Payment.find(baseRange({ type: "note" }))
           .sort({ createdAt: -1 })
-          .populate({ path: "studentId", select: "name" })
-          .populate({ path: "tutorId", select: "name" })
+          .populate({ path: "studentId", select: "name userId" })
+          .populate({ path: "tutorId", select: "name userId" })
           .populate({ path: "noteId", select: "title" })
           .lean()
       : [];
@@ -2270,8 +2270,8 @@ exports.listAllPaymentsHistory = async (req, res) => {
     const groups = include("group")
       ? await Payment.find(baseRange({ type: "group" }))
           .sort({ createdAt: -1 })
-          .populate({ path: "studentId", select: "name" })
-          .populate({ path: "tutorId", select: "name" })
+          .populate({ path: "studentId", select: "name userId" })
+          .populate({ path: "tutorId", select: "name userId" })
           .populate({ path: "groupBatchId", select: "subject level" })
           .lean()
       : [];
@@ -2280,7 +2280,7 @@ exports.listAllPaymentsHistory = async (req, res) => {
       ? await Payment.find(baseRange({ type: "payout" }))
           .sort({ createdAt: -1 })
           .populate({ path: "studentId", select: "name" })
-          .populate({ path: "tutorId", select: "name upiId" })
+          .populate({ path: "tutorId", select: "name userId upiId" })
           .lean()
       : [];
 
@@ -2313,8 +2313,12 @@ exports.listAllPaymentsHistory = async (req, res) => {
         gatewayOrderId: p.gatewayOrderId,
         gatewayPaymentId: p.gatewayPaymentId,
         createdAt: p.createdAt,
-        studentName: p.studentId?.name || "Students",
+        studentName: p.studentId?.name || (p.type === "payout" ? "-" : "Student"),
         tutorName: p.tutorId?.name || "Tutor",
+        studentUserId: p.studentId?.userId || null,
+        studentProfileId: p.studentId?._id || p.studentId || null,
+        tutorUserId: p.tutorId?.userId || null,
+        tutorProfileId: p.tutorId?._id || p.tutorId || null,
         adminAmount,
         couponCode: (cuMap[String(p._id)]?.couponId?.code) || parseNotes(p.notes).couponCode || "",
         couponDiscount: (cuMap[String(p._id)]?.amountDiscounted) ?? parseNotes(p.notes).couponDiscount ?? 0,
@@ -3935,6 +3939,8 @@ exports.requestTutorPayout = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
+
 
 
 
