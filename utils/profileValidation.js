@@ -14,6 +14,10 @@ const HOURLY_RATE_OPTIONS = buildRateOptions(400, 2000, 100);
 const MONTHLY_RATE_OPTIONS = buildRateOptions(3500, 10000, 100);
 
 const isAllowedRate = (value, options) => options.includes(Number(value));
+const isPositiveAmount = (value) => {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount > 0;
+};
 
 const parseBudget = (budget) => {
   const text = String(budget || "");
@@ -259,14 +263,14 @@ const validateTutorProfileData = (data, options = {}) => {
 
   if (isEmpty(data.hourlyRate)) {
     errors.hourlyRate = "Hourly rate is required";
-  } else if (!isAllowedRate(data.hourlyRate, HOURLY_RATE_OPTIONS)) {
-    errors.hourlyRate = "Select an hourly rate from Rs.400 to Rs.2000";
+  } else if (!isPositiveAmount(data.hourlyRate)) {
+    errors.hourlyRate = "Enter a valid hourly rate";
   }
 
   if (isEmpty(data.monthlyRate)) {
     errors.monthlyRate = "Monthly rate is required";
-  } else if (!isAllowedRate(data.monthlyRate, MONTHLY_RATE_OPTIONS)) {
-    errors.monthlyRate = "Select a monthly rate from Rs.3500 to Rs.10000";
+  } else if (!isPositiveAmount(data.monthlyRate)) {
+    errors.monthlyRate = "Enter a valid monthly rate";
   }
 
   if (isEmpty(data.bio)) errors.bio = "Bio is required";
@@ -294,6 +298,7 @@ module.exports = {
   isStudentProfileComplete,
   isTutorProfileComplete,
 };
+
 
 
 
