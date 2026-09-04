@@ -2692,8 +2692,8 @@ exports.markTutorPayablePaid = async (req, res) => {
           },
           {
             $set: {
-              type: "credit",
-              description: "Credited to your bank account",
+              type: "debit",
+              description: "Paid to your bank account",
               status: "completed",
               paymentId: payout._id,
             },
@@ -2805,7 +2805,7 @@ exports.markTutorPayablePaid = async (req, res) => {
         tutorProfile.userId,
         "tutor",
         payableAmount,
-        "Payout received",
+        "Paid to your bank account",
         { type: "payout", id: payout._id },
         payout._id
       );

@@ -147,7 +147,7 @@ exports.clearPendingForManualPayout = async (userId, role, amount, description, 
 
   await Transaction.create({
     userId,
-    type: "credit",
+    type: "debit",
     amount: value,
     description,
     reference,
