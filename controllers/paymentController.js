@@ -2645,6 +2645,47 @@ exports.listTutorPayables = async (req, res) => {
  */
 
 /**
+ * Admin: delete pending tutor payable/payment rows.
+ * DELETE /api/payments/admin/tutor-payables/pending
+ */
+exports.deletePendingTutorPayables = async (req, res) => {
+  try {
+    const pendingSourceFilter = {
+      type: { $in: ["subscription", "note", "group"] },
+      status: "paid",
+      fundReleaseStatus: { $ne: "released" },
+    };
+    const pendingWithdrawalFilter = {
+      type: "payout",
+      status: "created",
+    };
+
+    const [sourceResult, withdrawalResult] = await Promise.all([
+      Payment.deleteMany(pendingSourceFilter),
+      Payment.deleteMany(pendingWithdrawalFilter),
+    ]);
+
+    const sourceDeleted = Number(sourceResult.deletedCount || 0);
+    const withdrawalDeleted = Number(withdrawalResult.deletedCount || 0);
+    const deletedCount = sourceDeleted + withdrawalDeleted;
+
+    await createAdminNotification(
+      "Pending tutor payments deleted",
+      "Deleted " + deletedCount + " pending tutor payment records",
+      { deletedCount, sourceDeleted, withdrawalDeleted }
+    );
+
+    return res.json({
+      success: true,
+      message: "Pending tutor payments deleted",
+      data: { deletedCount, sourceDeleted, withdrawalDeleted },
+    });
+  } catch (err) {
+    console.error("deletePendingTutorPayables error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+/**
  * Admin: delete one paid payout history record.
  * DELETE /api/payments/admin/tutor-payables/history/:payoutId
  */

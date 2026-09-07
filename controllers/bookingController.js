@@ -173,6 +173,14 @@ function parseBudgetPreference(budget = "") {
   return null;
 }
 
+function parseBudgetAmounts(budget = "") {
+  const text = String(budget || "");
+  return {
+    hourly: Number(text.match(/Hourly:\s*(?:Rs\.?)?\s*(\d+)/i)?.[1] || 0),
+    monthly: Number(text.match(/Monthly:\s*(?:Rs\.?)?\s*(\d+)/i)?.[1] || 0),
+  };
+}
+
 function bookingSubjectsForLimit(booking) {
   const values = [];
   if (Array.isArray(booking?.subjects)) values.push(...booking.subjects);
@@ -199,6 +207,15 @@ function getStudentSubjectBudget(profile, subject) {
   }
   return parseBudgetPreference(profile?.budget);
 }
+function getStudentBudgetAmountForType(profile, subject, billingType) {
+  const subjectBudget = getStudentSubjectBudget(profile, subject);
+  if (subjectBudget?.billingType === billingType && subjectBudget.amount > 0) {
+    return Number(subjectBudget.amount);
+  }
+  const fallbackAmounts = parseBudgetAmounts(profile?.budget);
+  return Number(fallbackAmounts[billingType] || 0);
+}
+
 function normalizeArray(val) {
   if (!val) return [];
   if (Array.isArray(val)) return val.filter(Boolean);
@@ -2549,39 +2566,19 @@ exports.startRegularFromDemo = async (req, res) => {
     // 4️⃣ Compute Amount
     // -------------------------------
     const isTutorInitiatedDemo = String(booking.requestedBy || "student") === "tutor";
-    const studentSubjectBudget = getStudentSubjectBudget(studentProfileDoc, selectedSubject);
-    const effectiveBillingType = isTutorInitiatedDemo
-      ? studentSubjectBudget?.billingType
-      : billingType;
-
-    if (!effectiveBillingType || !["hourly", "monthly"].includes(effectiveBillingType)) {
-      return res.status(400).json({
-        success: false,
-        message: "Student budget is not set for this subject",
-      });
-    }
-
-    if (effectiveBillingType !== billingType) {
-      return res.status(400).json({
-        success: false,
-        message: `This demo was tutor-initiated. Continue with the student's ${effectiveBillingType} budget.`,
-        billingType: effectiveBillingType,
-      });
-    }
-
-    const priceSource = isTutorInitiatedDemo ? "student_budget" : "tutor_rate";
-    let baseRate = isTutorInitiatedDemo
-      ? Number(studentSubjectBudget?.amount || 0)
-      : billingType === "hourly"
-        ? tutorProfile.hourlyRate
-        : tutorProfile.monthlyRate;
+    const studentBudgetRate = isTutorInitiatedDemo
+      ? getStudentBudgetAmountForType(studentProfileDoc, selectedSubject, billingType)
+      : 0;
+    const tutorRate = billingType === "hourly"
+      ? tutorProfile.hourlyRate
+      : tutorProfile.monthlyRate;
+    const priceSource = studentBudgetRate > 0 ? "student_budget" : "tutor_rate";
+    let baseRate = studentBudgetRate > 0 ? studentBudgetRate : Number(tutorRate || 0);
 
     if (!baseRate) {
       return res.status(400).json({
         success: false,
-        message: isTutorInitiatedDemo
-          ? "Student budget is not set for this subject"
-          : `Tutor ${billingType} rate not set`,
+        message: `No ${billingType} rate is available for this regular class`,
       });
     }
 

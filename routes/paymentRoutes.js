@@ -73,6 +73,14 @@ router.delete(
 );
 
 router.delete(
+  "/admin/tutor-payables/pending",
+  authenticate,
+  checkRole(["admin"]),
+  adminActionLimiter,
+  paymentController.deletePendingTutorPayables
+);
+
+router.delete(
   "/admin/tutor-payables/history/:payoutId",
   authenticate,
   checkRole(["admin"]),
