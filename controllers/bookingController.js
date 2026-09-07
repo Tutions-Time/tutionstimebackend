@@ -2392,7 +2392,7 @@ function buildRegularClassSchedule({ date, preferredTime }) {
 exports.startRegularFromDemo = async (req, res) => {
   try {
     const bookingId = req.params.id;
-    const { billingType, numberOfClasses, subject } = req.body;
+    const { billingType, numberOfClasses, subject, selectedPreferredTime } = req.body;
     const userId = req.user.id;
 
     // -------------------------------
@@ -2559,7 +2559,7 @@ exports.startRegularFromDemo = async (req, res) => {
     const startDateStr = startDateObj.toISOString().slice(0, 10);
     const regularTimeSlots = buildRegularClassSchedule({
       date: booking.preferredDate || startDateObj,
-      preferredTime: booking.preferredTime,
+      preferredTime: selectedPreferredTime || booking.preferredTime,
     });
 
     // -------------------------------

@@ -302,6 +302,20 @@ function isSameUtcDate(a, b = new Date()) {
   );
 }
 
+function getUtcWallClockMs(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return NaN;
+  return new Date(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate(),
+    d.getUTCHours(),
+    d.getUTCMinutes(),
+    d.getUTCSeconds(),
+    d.getUTCMilliseconds()
+  ).getTime();
+}
+
 exports.joinSession = async (req, res) => {
   try {
     const sessionId = req.params.id;
@@ -431,7 +445,6 @@ exports.joinSession = async (req, res) => {
     }
 
     // Join window gating (open 10 min before, close 5 min after class end)
-    const start = new Date(session.startDateTime).getTime();
     const classDurationMin = 60;
     let joinBeforeMin = 10;
     let expireAfterMin = 5;
@@ -440,13 +453,26 @@ exports.joinSession = async (req, res) => {
       joinBeforeMin = gb?.accessWindow?.joinBeforeMin ?? joinBeforeMin;
       expireAfterMin = gb?.accessWindow?.expireAfterMin ?? expireAfterMin;
     }
+
+    const realStart = new Date(session.startDateTime).getTime();
+    const wallClockStart = session.groupBatchId ? realStart : getUtcWallClockMs(session.startDateTime);
+    const start = Number.isFinite(wallClockStart) ? wallClockStart : realStart;
     const end = start + classDurationMin * 60 * 1000;
     const openAt = start - joinBeforeMin * 60 * 1000;
     const closeAt = end + expireAfterMin * 60 * 1000;
     const now = Date.now();
     const canJoin = now >= openAt && now <= closeAt;
     if (!canJoin) {
-      return res.status(403).json({ success: false, message: "Join window closed" });
+      return res.status(403).json({
+        success: false,
+        message: "Join window closed",
+        data: {
+          startAt: new Date(start),
+          opensAt: new Date(openAt),
+          closesAt: new Date(closeAt),
+          serverNow: new Date(now),
+        },
+      });
     }
 
     const nowDate = new Date();
