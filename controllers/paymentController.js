@@ -2472,7 +2472,7 @@ exports.listTutorPayables = async (req, res) => {
     }
 
     if (status === "paid") {
-      const payouts = await Payment.find({ type: "payout", status: "settled", ...dateFilter })
+      const payouts = await Payment.find({ type: "payout", status: "settled", hiddenFromPayoutHistory: { $ne: true }, ...dateFilter })
         .sort({ manuallyPaidAt: -1, updatedAt: -1 })
         .populate({ path: "tutorId", select: "userId name email upiId accountHolderName bankAccountNumber ifsc" })
         .lean();
@@ -2712,6 +2712,47 @@ exports.deleteTutorPayoutHistory = async (req, res) => {
     return res.json({ success: true, message: "Payout history deleted" });
   } catch (err) {
     console.error("deleteTutorPayoutHistory error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+/**
+ * Admin: clear this month paid payout history from the admin history view.
+ * DELETE /api/payments/admin/tutor-payables/history/cleanup/current-month
+ */
+exports.deleteTutorPayoutHistoryCurrentMonth = async (req, res) => {
+  try {
+    const now = new Date();
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const filter = {
+      type: "payout",
+      status: "settled",
+      hiddenFromPayoutHistory: { $ne: true },
+      $or: [
+        { manuallyPaidAt: { $gte: currentMonthStart, $lt: nextMonthStart } },
+        { manuallyPaidAt: { $exists: false }, updatedAt: { $gte: currentMonthStart, $lt: nextMonthStart } },
+      ],
+    };
+
+    const result = await Payment.updateMany(filter, {
+      $set: { hiddenFromPayoutHistory: true, hiddenFromPayoutHistoryAt: new Date() },
+    });
+    const deletedCount = Number(result.modifiedCount || 0);
+
+    await createAdminNotification(
+      "This month payout history cleared",
+      "Cleared " + deletedCount + " paid payout history records for this month",
+      { deletedCount, currentMonthStart, nextMonthStart }
+    );
+
+    return res.json({
+      success: true,
+      message: "This month payout history cleared",
+      data: { deletedCount, monthStart: currentMonthStart, monthEnd: nextMonthStart },
+    });
+  } catch (err) {
+    console.error("deleteTutorPayoutHistoryCurrentMonth error:", err);
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };

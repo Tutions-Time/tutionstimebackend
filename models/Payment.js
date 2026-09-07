@@ -49,6 +49,8 @@ const paymentSchema = new mongoose.Schema(
     adminPayoutNote: { type: String, trim: true },
     manuallyPaidBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     manuallyPaidAt: { type: Date },
+    hiddenFromPayoutHistory: { type: Boolean, default: false },
+    hiddenFromPayoutHistoryAt: { type: Date },
 
     // Billing period (for monthly)
     periodStart: { type: Date },
