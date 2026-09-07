@@ -137,6 +137,14 @@ function buildRegularSessionTopic(rc, dateTime) {
   return `${subject} - ${timeLabel} on ${dateLabel}`;
 }
 
+function isSameUtcDate(a, b = new Date()) {
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
+  );
+}
+
 async function schedulePaidRegularClassFromStoredTime(rc) {
   if (!rc || rc.scheduleStatus === "scheduled") return { scheduled: false };
   const time = rc.timeSlots?.[0]?.time;
@@ -163,14 +171,16 @@ async function schedulePaidRegularClassFromStoredTime(rc) {
   for (const dateStr of selectedDates) {
     const startDateTime = buildDateTime(dateStr, time);
     let meeting = {};
-    try {
-      meeting = await zoomService.createZoomMeeting({
-        topic: buildRegularSessionTopic(rc, startDateTime),
-        startTime: startDateTime.toISOString(),
-        duration: REGULAR_SESSION_DURATION_MINUTES,
-      });
-    } catch (err) {
-      console.error("Auto schedule Zoom meeting create failed:", err.message);
+    if (isSameUtcDate(startDateTime)) {
+      try {
+        meeting = await zoomService.createZoomMeeting({
+          topic: buildRegularSessionTopic(rc, startDateTime),
+          startTime: startDateTime.toISOString(),
+          duration: REGULAR_SESSION_DURATION_MINUTES,
+        });
+      } catch (err) {
+        console.error("Auto schedule Zoom meeting create failed:", err.message);
+      }
     }
 
     sessionsToInsert.push({
@@ -473,7 +483,7 @@ exports.createSubscriptionOrder = async (req, res) => {
         regularClassId: rc._id,
       });
     }
-// 🔐 Optional: ensure the logged-in student matches this regular class
+//  Optional: ensure the logged-in student matches this regular class
     // You can map User -> StudentProfile here if needed
 
     let totalAmountINR = billingType === "hourly" ? (Number(rc.amount) * classes) : Number(rc.amount);
@@ -481,7 +491,7 @@ exports.createSubscriptionOrder = async (req, res) => {
     if (discount > 0) totalAmountINR = Math.max(0, totalAmountINR - discount);
     const amountInPaise = Math.round(totalAmountINR * 100);
     if (amountInPaise < 100) {
-      return res.status(400).json({ success: false, message: "Amount too low. Minimum ₹1 required." });
+      return res.status(400).json({ success: false, message: "Amount too low. Minimum \u20b91 required." });
     }
 
     // If student wallet can fully cover, pay via wallet (no Razorpay)
@@ -539,7 +549,7 @@ exports.createSubscriptionOrder = async (req, res) => {
           sp?.userId || userId,
           "student",
           Number(totalAmountINR),
-          `Payment for regular class — Tutor: ${tp?.name || "Tutor"}${discount > 0 && (couponCode || "").trim() ? ` (Coupon ${(couponCode || "").trim()} -₹${discount})` : ""}`,
+          `Payment for regular class \u2014 Tutor: ${tp?.name || "Tutor"}${discount > 0 && (couponCode || "").trim() ? ` (Coupon ${(couponCode || "").trim()} -\u20b9${discount})` : ""}`,
           { type: "booking", id: paymentDoc.regularClassId }
         );
 
@@ -548,7 +558,7 @@ exports.createSubscriptionOrder = async (req, res) => {
           tp?.userId || rc.tutorId,
           "tutor",
           tutorNetAmount,
-          `Payment received for class (locked) — Student: ${sp?.name || "Student"}`,
+          `Payment received for class (locked) \u2014 Student: ${sp?.name || "Student"}`,
           { type: "booking", id: paymentDoc.regularClassId }
         );
 
@@ -595,7 +605,7 @@ exports.createSubscriptionOrder = async (req, res) => {
       return res.status(500).json({ success: false, message: msg });
     }
 
-    // 💾 Upsert Payment record for this regular class
+    //  Upsert Payment record for this regular class
     // type stays "subscription" because it's a recurring-tuition payment
     const paymentDoc = await Payment.findOneAndUpdate(
       { regularClassId },
@@ -656,7 +666,7 @@ exports.createSubscriptionOrder = async (req, res) => {
  * GROUP BATCH: Create Razorpay ORDER for a reserved seat
  * POST /api/payments/group/create-order
  * Body: { batchId, reservationId }
- * Flow: Ensure active hold exists for this student → create order → persist Payment(type="group")
+ * Flow: Ensure active hold exists for this student \u2192 create order \u2192 persist Payment(type="group")
  */
 exports.createGroupOrder = async (req, res) => {
   try {
@@ -742,7 +752,7 @@ exports.createGroupOrder = async (req, res) => {
           userId,
           "student",
           Number(amountINR),
-          `Payment for group batch — Tutor: ${tp?.name || "Tutor"}${discount > 0 && (couponCode || "").trim() ? ` (Coupon ${(couponCode || "").trim()} -₹${discount})` : ""}`,
+          `Payment for group batch \u2014 Tutor: ${tp?.name || "Tutor"}${discount > 0 && (couponCode || "").trim() ? ` (Coupon ${(couponCode || "").trim()} -\u20b9${discount})` : ""}`,
           { type: "group", id: paymentDoc.groupBatchId }
         );
 
@@ -751,7 +761,7 @@ exports.createGroupOrder = async (req, res) => {
           tp?.userId || gb.tutorId,
           "tutor",
           tutorNetAmount,
-          `Payment received for group batch (locked) — Student: ${sp?._id || "Student"}`,
+          `Payment received for group batch (locked) \u2014 Student: ${sp?._id || "Student"}`,
           { type: "group", id: paymentDoc.groupBatchId }
         );
 
@@ -922,7 +932,7 @@ exports.createNoteOrder = async (req, res) => {
           studentUserId,
           "student",
           Number(amountINR),
-          `Payment for note — Tutor: ${tp?.name || "Tutor"}${discount > 0 && (couponCode || "").trim() ? ` (Coupon ${(couponCode || "").trim()} -₹${discount})` : ""}`,
+          `Payment for note \u2014 Tutor: ${tp?.name || "Tutor"}${discount > 0 && (couponCode || "").trim() ? ` (Coupon ${(couponCode || "").trim()} -\u20b9${discount})` : ""}`,
           { type: "note", id: note._id }
         );
 
@@ -931,7 +941,7 @@ exports.createNoteOrder = async (req, res) => {
           tutorUserId,
           "tutor",
           tutorNetAmount,
-          `Payment received for note (locked) — Student: ${sp2?.name || "Student"}`,
+          `Payment received for note (locked) \u2014 Student: ${sp2?.name || "Student"}`,
           { type: "note", id: note._id }
         );
 
@@ -1113,7 +1123,7 @@ exports.razorpayWebhook = async (req, res) => {
         rc.paymentStatus = "paid";
         rc.tutorPaymentStatus = "locked";
 
-        // 🔥 FIX — Update classCount for hourly
+        //  FIX \u2014 Update classCount for hourly
         if (rc.planType === "hourly") {
           const purchased = Number((notes && (notes.numberOfClasses || notes.cls)) || 0);
           rc.classCount = purchased;
@@ -1143,19 +1153,19 @@ exports.razorpayWebhook = async (req, res) => {
               tutorUserId,
               "tutor",
               tutorNetAmount,
-              `Payment received for class (locked) — Student: ${sp?.name || "Student"}`,
+              `Payment received for class (locked) \u2014 Student: ${sp?.name || "Student"}`,
               { type: "booking", id: payment.regularClassId }
             );
 
             // Student wallet history (virtual debit)
             const couponCode = notes && notes.coupon;
             const discountVal = Number(notes && notes.discount ? notes.discount : 0) || 0;
-            const descExtra = discountVal > 0 && couponCode ? ` (Coupon ${couponCode} -₹${discountVal})` : "";
+            const descExtra = discountVal > 0 && couponCode ? ` (Coupon ${couponCode} -\u20b9${discountVal})` : "";
             await walletService.addTransaction({
               userId: studentUserId,
               type: "debit",
               amount,
-              description: `Payment for regular class — Tutor: ${tp?.name || "Tutor"}${descExtra}`,
+              description: `Payment for regular class \u2014 Tutor: ${tp?.name || "Tutor"}${descExtra}`,
               reference: { type: "booking", id: payment.regularClassId },
               status: "completed",
               regularClassId: payment.regularClassId,
@@ -1230,17 +1240,17 @@ exports.razorpayWebhook = async (req, res) => {
               tutorUserId,
               "tutor",
               tutorNetAmount,
-              `Payment received for note (locked) — Student: ${sp?.name || "Student"}`,
+              `Payment received for note (locked) \u2014 Student: ${sp?.name || "Student"}`,
               { type: "note", id: nId }
             );
             const cn = (notes && notes.coupon) || "";
             const dn = Number(notes && notes.discount ? notes.discount : 0) || 0;
-            const descExtraNote = dn > 0 && cn ? ` (Coupon ${cn} -₹${dn})` : "";
+            const descExtraNote = dn > 0 && cn ? ` (Coupon ${cn} -\u20b9${dn})` : "";
             await walletService.addTransaction({
               userId: studentUserId,
               type: "debit",
               amount: amt,
-              description: `Payment for note — Tutor: ${tp?.name || "Tutor"}${descExtraNote}`,
+              description: `Payment for note \u2014 Tutor: ${tp?.name || "Tutor"}${descExtraNote}`,
               reference: { type: "note", id: nId },
               status: "completed",
               paymentId: payment._id,
@@ -1622,7 +1632,7 @@ exports.verifyPayment = async (req, res) => {
               tutorUserId,
               "tutor",
               tutorNetAmount,
-              `Payment received for class (locked) — Student: ${sp?.name || "Student"}`,
+              `Payment received for class (locked) \u2014 Student: ${sp?.name || "Student"}`,
               { type: "booking", id: payment.regularClassId }
             );
 
@@ -1632,12 +1642,12 @@ exports.verifyPayment = async (req, res) => {
             const dm = noteStr.match(/Discount:(\d+)/);
             const code = cm && cm[1] ? cm[1].trim() : "";
             const disc = dm && dm[1] ? Number(dm[1]) : 0;
-            const descExtra = disc > 0 && code ? ` (Coupon ${code} -₹${disc})` : "";
+            const descExtra = disc > 0 && code ? ` (Coupon ${code} -\u20b9${disc})` : "";
             await walletService.addTransaction({
               userId: studentUserId,
               type: "debit",
               amount,
-              description: `Payment for regular class — Tutor: ${tp?.name || "Tutor"}${descExtra}`,
+              description: `Payment for regular class \u2014 Tutor: ${tp?.name || "Tutor"}${descExtra}`,
               reference: { type: "booking", id: payment.regularClassId },
               status: "completed",
               regularClassId: payment.regularClassId,
@@ -1718,7 +1728,7 @@ exports.verifyPayment = async (req, res) => {
             tutorUserId,
             "tutor",
             tutorNetAmount,
-            `Payment received for note (locked) — Student: ${studentProfile?.name || "Student"}`,
+            `Payment received for note (locked) \u2014 Student: ${studentProfile?.name || "Student"}`,
             { type: "note", id: nId }
           );
 
@@ -1727,7 +1737,7 @@ exports.verifyPayment = async (req, res) => {
             userId: studentUserId,
             type: "debit",
             amount,
-            description: `Payment for note — Tutor: ${tutorProfile?.name || "Tutor"}`,
+            description: `Payment for note \u2014 Tutor: ${tutorProfile?.name || "Tutor"}`,
             reference: { type: "note", id: nId },
             status: "completed",
             paymentId: payment._id,
@@ -1930,7 +1940,7 @@ exports.verifyGroupPayment = async (req, res) => {
           tutorUserId,
           "tutor",
           tutorNetAmount,
-          `Payment received for group batch (locked) — Student: ${sp2?.name || "Student"}`,
+          `Payment received for group batch (locked) \u2014 Student: ${sp2?.name || "Student"}`,
           { type: "group", id: gb._id }
         );
         const noteStr2 = String(payment.notes || "");
@@ -1938,12 +1948,12 @@ exports.verifyGroupPayment = async (req, res) => {
         const dm2 = noteStr2.match(/Discount:(\d+)/);
         const code2 = cm2 && cm2[1] ? cm2[1].trim() : "";
         const disc2 = dm2 && dm2[1] ? Number(dm2[1]) : 0;
-        const descExtraGroup = disc2 > 0 && code2 ? ` (Coupon ${code2} -₹${disc2})` : "";
+        const descExtraGroup = disc2 > 0 && code2 ? ` (Coupon ${code2} -\u20b9${disc2})` : "";
         await walletService.addTransaction({
           userId: studentUserId,
           type: "debit",
           amount,
-          description: `Payment for group batch — Tutor: ${tp2?.name || "Tutor"}${descExtraGroup}`,
+          description: `Payment for group batch \u2014 Tutor: ${tp2?.name || "Tutor"}${descExtraGroup}`,
           reference: { type: "group", id: gb._id },
           status: "completed",
           paymentId: payment._id,
@@ -2633,6 +2643,74 @@ exports.listTutorPayables = async (req, res) => {
  * Admin: mark a tutor's pending payout as paid after manual transfer.
  * POST /api/payments/admin/tutor-payables/:tutorId/mark-paid
  */
+
+/**
+ * Admin: delete one paid payout history record.
+ * DELETE /api/payments/admin/tutor-payables/history/:payoutId
+ */
+exports.deleteTutorPayoutHistory = async (req, res) => {
+  try {
+    const { payoutId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(payoutId)) {
+      return res.status(400).json({ success: false, message: "Invalid payout id" });
+    }
+
+    const payout = await Payment.findOne({ _id: payoutId, type: "payout", status: "settled" }).lean();
+    if (!payout) {
+      return res.status(404).json({ success: false, message: "Paid payout history not found" });
+    }
+
+    await Payment.deleteOne({ _id: payoutId, type: "payout", status: "settled" });
+
+    await createAdminNotification(
+      "Payout history deleted",
+      `Deleted paid payout history ${payoutId}`,
+      { payoutId, tutorId: payout.tutorId, amount: Number(payout.tutorNetAmount || payout.amount || 0) }
+    );
+
+    return res.json({ success: true, message: "Payout history deleted" });
+  } catch (err) {
+    console.error("deleteTutorPayoutHistory error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
+
+/**
+ * Admin: delete paid payout history outside the current month.
+ * DELETE /api/payments/admin/tutor-payables/history/cleanup/older-than-current-month
+ */
+exports.deleteTutorPayoutHistoryExceptCurrentMonth = async (req, res) => {
+  try {
+    const now = new Date();
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const filter = {
+      type: "payout",
+      status: "settled",
+      $or: [
+        { manuallyPaidAt: { $lt: currentMonthStart } },
+        { manuallyPaidAt: { $exists: false }, updatedAt: { $lt: currentMonthStart } },
+      ],
+    };
+
+    const result = await Payment.deleteMany(filter);
+    const deletedCount = Number(result.deletedCount || 0);
+
+    await createAdminNotification(
+      "Old payout history deleted",
+      `Deleted ${deletedCount} paid payout history records before ${currentMonthStart.toISOString()}`,
+      { deletedCount, currentMonthStart }
+    );
+
+    return res.json({
+      success: true,
+      message: "Old payout history deleted",
+      data: { deletedCount, keptFrom: currentMonthStart },
+    });
+  } catch (err) {
+    console.error("deleteTutorPayoutHistoryExceptCurrentMonth error:", err);
+    return res.status(500).json({ success: false, message: "Server error", error: err.message });
+  }
+};
 exports.markTutorPayablePaid = async (req, res) => {
   try {
     const { tutorId } = req.params;
@@ -2700,7 +2778,7 @@ exports.markTutorPayablePaid = async (req, res) => {
           }
         );
 
-        const amountLabel = `₹${payableAmount.toLocaleString("en-IN", {
+        const amountLabel = `\u20b9${payableAmount.toLocaleString("en-IN", {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         })}`;
@@ -2716,7 +2794,7 @@ exports.markTutorPayablePaid = async (req, res) => {
 
       await createAdminNotification(
         "Tutor payout marked paid",
-        `Paid ₹${payableAmount.toLocaleString("en-IN")} to ${tutorProfile.name || "Tutor"}`,
+        `Paid \u20b9${payableAmount.toLocaleString("en-IN")} to ${tutorProfile.name || "Tutor"}`,
         { payoutId: payout._id, tutorId: tutorProfile._id, amount: payableAmount }
       );
 
@@ -2822,7 +2900,7 @@ exports.markTutorPayablePaid = async (req, res) => {
         }
       );
 
-      const amountLabel = `₹${payableAmount.toLocaleString("en-IN", {
+      const amountLabel = `\u20b9${payableAmount.toLocaleString("en-IN", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       })}`;
@@ -2839,7 +2917,7 @@ exports.markTutorPayablePaid = async (req, res) => {
 
     await createAdminNotification(
       "Tutor payout marked paid",
-      `Paid ₹${payableAmount.toLocaleString("en-IN")} to ${tutorProfile.name || "Tutor"}`,
+      `Paid \u20b9${payableAmount.toLocaleString("en-IN")} to ${tutorProfile.name || "Tutor"}`,
       { payoutId: payout._id, tutorId: tutorProfile._id, amount: payableAmount }
     );
 
@@ -3540,7 +3618,7 @@ exports.previewRefund = async (req, res) => {
     const reservedAmount = await getOutstandingRefundReservations(paymentId);
     const maximumRefundableAmount = Math.max(0, Number(ctx.remainingRefundable || 0) - reservedAmount);
     const suggestedRefundMethod = payment.gateway === "razorpay" ? "provider" : "payout";
-    const explanation = `Completion ${(Math.round(ctx.completionPercentage * 100))}% → refundable ${(Math.round(ctx.refundablePercentage * 100))}%`;
+    const explanation = `Completion ${(Math.round(ctx.completionPercentage * 100))}% \u2192 refundable ${(Math.round(ctx.refundablePercentage * 100))}%`;
     return res.json({
       success: true,
       data: {
@@ -3558,7 +3636,7 @@ exports.previewRefund = async (req, res) => {
 };
 
 /**
- * Admin: list subscription payments (student → admin)
+ * Admin: list subscription payments (student \u2192 admin)
  * GET /api/payments/admin/history?status=paid&from=YYYY-MM-DD&to=YYYY-MM-DD
  */
 exports.listSubscriptionPayments = async (req, res) => {
@@ -3727,7 +3805,7 @@ exports.requestTutorPayout = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid amount" });
     }
     if (Number(amount) < MIN_PAYOUT) {
-      return res.status(400).json({ success: false, message: `Minimum payout is ₹${MIN_PAYOUT}` });
+      return res.status(400).json({ success: false, message: `Minimum payout is \u20b9${MIN_PAYOUT}` });
     }
 
     const TutorProfile = require("../models/TutorProfile");
@@ -3817,7 +3895,7 @@ exports.requestTutorPayout = async (req, res) => {
 
     await createAdminNotification(
       "Tutor withdrawal requested",
-      `Tutor ${tp.name || tp._id} requested a withdrawal of ₹${Number(amount).toLocaleString("en-IN")}`,
+      `Tutor ${tp.name || tp._id} requested a withdrawal of \u20b9${Number(amount).toLocaleString("en-IN")}`,
       { payoutId: payout._id, tutorId: tp._id, amount: Number(amount), upi: tp.upiId || null }
     );
 

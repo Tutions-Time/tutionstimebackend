@@ -64,6 +64,21 @@ router.get(
   paymentController.listTutorPayables
 );
 
+router.delete(
+  "/admin/tutor-payables/history/cleanup/older-than-current-month",
+  authenticate,
+  checkRole(["admin"]),
+  adminActionLimiter,
+  paymentController.deleteTutorPayoutHistoryExceptCurrentMonth
+);
+
+router.delete(
+  "/admin/tutor-payables/history/:payoutId",
+  authenticate,
+  checkRole(["admin"]),
+  adminActionLimiter,
+  paymentController.deleteTutorPayoutHistory
+);
 router.post(
   "/admin/tutor-payables/:tutorId/mark-paid",
   authenticate,

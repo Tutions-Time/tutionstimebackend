@@ -116,7 +116,7 @@ app.startBackgroundJobs = () => {
   weeklyReportScheduler.start();
   sessionReminderScheduler.start();
   demoExpiryScheduler.start();
-
+ 
   demoExpiryScheduler.runOnce();
   payoutScheduler.runOnce();
 };

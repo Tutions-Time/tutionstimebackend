@@ -294,6 +294,14 @@ async function buildTutorIdentitySet(userId) {
   return ids;
 }
 
+function isSameUtcDate(a, b = new Date()) {
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
+  );
+}
+
 exports.joinSession = async (req, res) => {
   try {
     const sessionId = req.params.id;
@@ -336,7 +344,7 @@ exports.joinSession = async (req, res) => {
 
     let joinLink = session.joinUrl || session.meetingLink;
     let startLink = session.startUrl || session.meetingLink;
-    if (!joinLink && !startLink) {
+    if (!joinLink && !startLink && isSameUtcDate(new Date(session.startDateTime))) {
       try {
         const GroupBatch = require("../models/GroupBatch");
         const { computeDurationMinutes, buildGroupSessionTopic } = require("../utils/sessionZoomUtils");

@@ -136,6 +136,14 @@ function buildRegularSessionTopic(rc, dateTime) {
   return `${subject} - ${timeLabel} on ${dateLabel}`;
 }
 
+function isSameUtcDate(a, b = new Date()) {
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
+  );
+}
+
 
 async function createScheduledSessionsForRegularClass(rc) {
   if (!rc || rc.scheduleStatus === "scheduled") return { scheduled: false };
@@ -163,14 +171,16 @@ async function createScheduledSessionsForRegularClass(rc) {
     const startDateTime = buildDateTime(dateStr, time);
     const topic = buildRegularSessionTopic(rc, startDateTime);
     let meeting = {};
-    try {
-      meeting = await zoomService.createZoomMeeting({
-        topic,
-        startTime: startDateTime.toISOString(),
-        duration: REGULAR_SESSION_DURATION_MINUTES,
-      });
-    } catch (err) {
-      console.error("Regular class Zoom meeting create failed:", err.message);
+    if (isSameUtcDate(startDateTime)) {
+      try {
+        meeting = await zoomService.createZoomMeeting({
+          topic,
+          startTime: startDateTime.toISOString(),
+          duration: REGULAR_SESSION_DURATION_MINUTES,
+        });
+      } catch (err) {
+        console.error("Regular class Zoom meeting create failed:", err.message);
+      }
     }
 
     sessionsToInsert.push({
@@ -403,14 +413,16 @@ exports.scheduleRegularClassSessions = async (req, res) => {
       const startDateTime = buildDateTime(dateStr, time);
       const topic = buildRegularSessionTopic(rc, startDateTime);
       let meeting = {};
-      try {
-        meeting = await zoomService.createZoomMeeting({
-          topic,
-          startTime: startDateTime.toISOString(),
-          duration: REGULAR_SESSION_DURATION_MINUTES,
-        });
-      } catch (err) {
-        console.error("Schedule class Zoom meeting create failed:", err.message);
+      if (isSameUtcDate(startDateTime)) {
+        try {
+          meeting = await zoomService.createZoomMeeting({
+            topic,
+            startTime: startDateTime.toISOString(),
+            duration: REGULAR_SESSION_DURATION_MINUTES,
+          });
+        } catch (err) {
+          console.error("Schedule class Zoom meeting create failed:", err.message);
+        }
       }
 
       sessionsToInsert.push({
