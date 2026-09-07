@@ -103,7 +103,7 @@ app.use("/api/devices", require("./routes/deviceRoutes"));
 app.use("/api/zoom", require("./routes/zoomRoutes"));
 app.use("/api/reschedules", require("./routes/rescheduleRoutes"));
 
-const payoutScheduler = require("./services/cron/payoutScheduler");
+const payoutScheduler = require("./services/cron/payoutScheduler"); 
 const weeklyReportScheduler = require("./services/cron/weeklyReportScheduler");
 const sessionReminderScheduler = require("./services/cron/sessionReminderScheduler");
 require("./services/cron/batchScheduler");
