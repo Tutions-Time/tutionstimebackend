@@ -4,6 +4,8 @@ const Session = require("../models/Session");
 const RegularClass = require("../models/RegularClass");
 const GroupBatch = require("../models/GroupBatch");
 
+const JOIN_TIMEZONE_OFFSET_MIN = Number(process.env.BOOKING_TZ_OFFSET_MIN || 330);
+
 
 /**
  * Helper: find session and check tutor ownership
@@ -305,7 +307,7 @@ function isSameUtcDate(a, b = new Date()) {
 function getUtcWallClockMs(value) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return NaN;
-  return new Date(
+  return Date.UTC(
     d.getUTCFullYear(),
     d.getUTCMonth(),
     d.getUTCDate(),
@@ -313,7 +315,7 @@ function getUtcWallClockMs(value) {
     d.getUTCMinutes(),
     d.getUTCSeconds(),
     d.getUTCMilliseconds()
-  ).getTime();
+  ) - JOIN_TIMEZONE_OFFSET_MIN * 60 * 1000;
 }
 
 exports.joinSession = async (req, res) => {
