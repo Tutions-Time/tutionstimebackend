@@ -2428,61 +2428,7 @@ exports.startRegularFromDemo = async (req, res) => {
       });
     }
 
-    // Prevent duplicate regular class creation for same demo.
-    // Paid classes are already active and must not create another payment option.
-    if (booking.regularClassId) {
-      const rc = await RegularClass.findById(booking.regularClassId);
-      if (!rc) {
-        return res.status(400).json({ success: false, message: "Regular class reference missing" });
-      }
-
-      const existingPayment = await Payment.findOne({ regularClassId: rc._id, type: "subscription" }).sort({ createdAt: -1 });
-      const totalAmountINR = rc.planType === "hourly" ? Number(rc.amount || 0) * Number(rc.classCount || 0) : Number(rc.amount || 0);
-
-      if (rc.paymentStatus === "paid" || existingPayment?.status === "paid") {
-        return res.json({
-          success: true,
-          alreadyActive: true,
-          message: "Regular class is already active. No payment is required.",
-          data: {
-            regularClassId: rc._id,
-            paymentId: existingPayment?._id || null,
-            startDate: rc.startDate,
-            billingType: rc.planType,
-            baseRate: rc.amount,
-            totalAmountINR,
-            paymentStatus: "paid",
-            scheduleStatus: rc.scheduleStatus,
-          },
-        });
-      }
-
-      return res.json({
-        success: true,
-        alreadyActive: false,
-        message: "Regular class already exists. Complete the pending payment to activate it.",
-        data: {
-          regularClassId: rc._id,
-          paymentId: existingPayment?._id || null,
-          startDate: rc.startDate,
-          billingType: rc.planType,
-          baseRate: rc.amount,
-          totalAmountINR,
-          paymentStatus: rc.paymentStatus,
-          scheduleStatus: rc.scheduleStatus,
-        },
-      });
-    }
-    // Auth — Student only
-    if (String(booking.studentId) !== String(userId)) {
-      return res.status(403).json({
-        success: false,
-        message:
-          "You are not allowed to start regular classes for this booking",
-      });
-    }
-
-        const bookingSubjects = Array.isArray(booking.subjects)
+    const bookingSubjects = Array.isArray(booking.subjects)
       ? booking.subjects
       : booking.subject
         ? [booking.subject]
@@ -2509,6 +2455,67 @@ exports.startRegularFromDemo = async (req, res) => {
         message: "Selected subject is not part of this demo booking",
       });
     }
+
+    // Prevent duplicate regular class creation for the same demo and subject.
+    // Paid classes are already active and must not create another payment option.
+    if (booking.regularClassId) {
+      const rc = await RegularClass.findById(booking.regularClassId);
+      if (!rc) {
+        return res.status(400).json({ success: false, message: "Regular class reference missing" });
+      }
+
+      const isSameSubject =
+        String(rc.subject || "").trim().toLowerCase() ===
+        selectedSubject.toLowerCase();
+
+      if (isSameSubject) {
+        const existingPayment = await Payment.findOne({ regularClassId: rc._id, type: "subscription" }).sort({ createdAt: -1 });
+        const totalAmountINR = rc.planType === "hourly" ? Number(rc.amount || 0) * Number(rc.classCount || 0) : Number(rc.amount || 0);
+
+        if (rc.paymentStatus === "paid" || existingPayment?.status === "paid") {
+          return res.json({
+            success: true,
+            alreadyActive: true,
+            message: "Regular class is already active. No payment is required.",
+            data: {
+              regularClassId: rc._id,
+              paymentId: existingPayment?._id || null,
+              startDate: rc.startDate,
+              billingType: rc.planType,
+              baseRate: rc.amount,
+              totalAmountINR,
+              paymentStatus: "paid",
+              scheduleStatus: rc.scheduleStatus,
+            },
+          });
+        }
+
+        return res.json({
+          success: true,
+          alreadyActive: false,
+          message: "Regular class already exists for this subject. Complete the pending payment to activate it.",
+          data: {
+            regularClassId: rc._id,
+            paymentId: existingPayment?._id || null,
+            startDate: rc.startDate,
+            billingType: rc.planType,
+            baseRate: rc.amount,
+            totalAmountINR,
+            paymentStatus: rc.paymentStatus,
+            scheduleStatus: rc.scheduleStatus,
+          },
+        });
+      }
+    }
+    // Auth — Student only
+    if (String(booking.studentId) !== String(userId)) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "You are not allowed to start regular classes for this booking",
+      });
+    }
+
 
     // -------------------------------
     // 2️⃣ Billing type validation
@@ -2552,6 +2559,46 @@ exports.startRegularFromDemo = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Tutor profile not found",
+      });
+    }
+
+    const existingSubjectClass = await RegularClass.findOne({
+      studentId: studentProfileId,
+      tutorId: tutorProfileId,
+      subject: selectedSubject,
+      status: "active",
+      paymentStatus: { $in: ["pending", "paid"] },
+    }).lean();
+
+    if (existingSubjectClass) {
+      const existingPayment = await Payment.findOne({
+        regularClassId: existingSubjectClass._id,
+        type: "subscription",
+      })
+        .sort({ createdAt: -1 })
+        .lean();
+      const totalAmountINR =
+        existingSubjectClass.planType === "hourly"
+          ? Number(existingSubjectClass.amount || 0) * Number(existingSubjectClass.classCount || 0)
+          : Number(existingSubjectClass.amount || 0);
+      const isPaid = existingSubjectClass.paymentStatus === "paid" || existingPayment?.status === "paid";
+
+      return res.json({
+        success: true,
+        alreadyActive: isPaid,
+        message: isPaid
+          ? "Regular class is already active for this subject. No payment is required."
+          : "Regular class already exists for this subject. Complete the pending payment to activate it.",
+        data: {
+          regularClassId: existingSubjectClass._id,
+          paymentId: existingPayment?._id || null,
+          startDate: existingSubjectClass.startDate,
+          billingType: existingSubjectClass.planType,
+          baseRate: existingSubjectClass.amount,
+          totalAmountINR,
+          paymentStatus: isPaid ? "paid" : existingSubjectClass.paymentStatus,
+          scheduleStatus: existingSubjectClass.scheduleStatus,
+        },
       });
     }
 

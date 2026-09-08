@@ -44,6 +44,48 @@ const normalizeArray = (val) => {
 };
 
 
+
+const parseTimeToMinutes = (value) => {
+  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return null;
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const period = match[3].toUpperCase();
+  if (hours < 1 || hours > 12 || minutes < 0 || minutes > 59) return null;
+  if (period === "PM" && hours !== 12) hours += 12;
+  if (period === "AM" && hours === 12) hours = 0;
+  return hours * 60 + minutes;
+};
+
+const parseSlotRange = (slot) => {
+  const parts = String(slot || "").split("-").map((part) => part.trim());
+  if (parts.length !== 2) return null;
+  const start = parseTimeToMinutes(parts[0]);
+  const end = parseTimeToMinutes(parts[1]);
+  if (start === null || end === null || end <= start) return null;
+  return { start, end };
+};
+
+const findSubjectSlotConflict = (subjectTimeSlots) => {
+  const seen = [];
+  for (const item of subjectTimeSlots) {
+    for (const slot of item.slots || []) {
+      const range = parseSlotRange(slot);
+      if (!range) continue;
+      const conflict = seen.find(
+        (entry) =>
+          entry.subject !== item.subject &&
+          range.start < entry.end &&
+          entry.start < range.end
+      );
+      if (conflict) {
+        return { slot, subject: item.subject, conflictSlot: conflict.slot, conflictSubject: conflict.subject };
+      }
+      seen.push({ ...range, slot, subject: item.subject });
+    }
+  }
+  return null;
+};
 const normalizeSubjectBudgets = (val) => {
   const items = normalizeArray(val);
   return items
@@ -156,20 +198,10 @@ const validateStudentProfileData = (data) => {
   const subjectsWithoutSlots = subjects.filter(
     (subject) => !(subjectSlotMap.get(subject) || []).length
   );
-  const slotOwner = new Map();
-  const duplicateSlots = [];
-  subjectTimeSlots.forEach((item) => {
-    (item.slots || []).forEach((slot) => {
-      if (slotOwner.has(slot) && slotOwner.get(slot) !== item.subject) {
-        duplicateSlots.push(`${slot} (${slotOwner.get(slot)} and ${item.subject})`);
-      } else {
-        slotOwner.set(slot, item.subject);
-      }
-    });
-  });
+  const slotConflict = findSubjectSlotConflict(subjectTimeSlots);
 
-  if (duplicateSlots.length) {
-    errors.preferredTimes = `A time slot can be selected for only one subject. Duplicate: ${duplicateSlots[0]}`;
+  if (slotConflict) {
+    errors.preferredTimes = `${slotConflict.slot} for ${slotConflict.subject} overlaps with ${slotConflict.conflictSlot} for ${slotConflict.conflictSubject}. Choose a different slot.`;
   } else if (subjectTimeSlots.length && subjectsWithoutSlots.length) {
     errors.preferredTimes = `Preferred time slot is required for ${subjectsWithoutSlots.join(", ")}`;
   } else if (!subjectTimeSlots.length && !preferredTimes.length) {
