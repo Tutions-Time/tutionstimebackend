@@ -579,9 +579,7 @@ exports.getStudentRegularClasses = async (req, res) => {
         const joinOpenAt = startMs - JOIN_BEFORE_MIN * 60 * 1000;
         const joinCloseAt = endMs + EXPIRE_AFTER_MIN * 60 * 1000;
 
-        if (nowMs >= joinOpenAt && nowMs <= joinCloseAt) {
-          canJoin = true; // link is "live" for present class
-        }
+        canJoin = true;
 
         // schedule time as "HH:MM"
         scheduledTime = startDate.toLocaleTimeString("en-IN", {
@@ -728,9 +726,7 @@ exports.getTutorRegularClasses = async (req, res) => {
         const nowMs = now.getTime();
         const joinOpenAt = startMs - JOIN_BEFORE_MIN * 60 * 1000;
         const joinCloseAt = endMs + EXPIRE_AFTER_MIN * 60 * 1000;
-        if (nowMs >= joinOpenAt && nowMs <= joinCloseAt) {
-          canJoin = true;
-        }
+        canJoin = true;
         scheduledTime = startDate.toLocaleTimeString("en-IN", {
           hour: "2-digit",
           minute: "2-digit",
@@ -831,6 +827,7 @@ exports.getRegularClassSessions = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
 
 
 

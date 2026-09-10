@@ -296,14 +296,6 @@ async function buildTutorIdentitySet(userId) {
   return ids;
 }
 
-function isSameUtcDate(a, b = new Date()) {
-  return (
-    a.getUTCFullYear() === b.getUTCFullYear() &&
-    a.getUTCMonth() === b.getUTCMonth() &&
-    a.getUTCDate() === b.getUTCDate()
-  );
-}
-
 function getUtcWallClockMs(value) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return NaN;
@@ -360,7 +352,7 @@ exports.joinSession = async (req, res) => {
 
     let joinLink = session.joinUrl || session.meetingLink;
     let startLink = session.startUrl || session.meetingLink;
-    if (!joinLink && !startLink && isSameUtcDate(new Date(session.startDateTime))) {
+    if (!joinLink && !startLink) {
       try {
         const GroupBatch = require("../models/GroupBatch");
         const { computeDurationMinutes, buildGroupSessionTopic } = require("../utils/sessionZoomUtils");
@@ -446,37 +438,6 @@ exports.joinSession = async (req, res) => {
       return res.status(403).json({ success: false, message: "Not authorized" });
     }
 
-    // Join window gating (open 10 min before, close 5 min after class end)
-    const classDurationMin = 60;
-    let joinBeforeMin = 10;
-    let expireAfterMin = 5;
-    if (session.groupBatchId) {
-      const gb = await GroupBatch.findById(session.groupBatchId).select("accessWindow");
-      joinBeforeMin = gb?.accessWindow?.joinBeforeMin ?? joinBeforeMin;
-      expireAfterMin = gb?.accessWindow?.expireAfterMin ?? expireAfterMin;
-    }
-
-    const realStart = new Date(session.startDateTime).getTime();
-    const wallClockStart = session.groupBatchId ? realStart : getUtcWallClockMs(session.startDateTime);
-    const start = Number.isFinite(wallClockStart) ? wallClockStart : realStart;
-    const end = start + classDurationMin * 60 * 1000;
-    const openAt = start - joinBeforeMin * 60 * 1000;
-    const closeAt = end + expireAfterMin * 60 * 1000;
-    const now = Date.now();
-    const canJoin = now >= openAt && now <= closeAt;
-    if (!canJoin) {
-      return res.status(403).json({
-        success: false,
-        message: "Join window closed",
-        data: {
-          startAt: new Date(start),
-          opensAt: new Date(openAt),
-          closesAt: new Date(closeAt),
-          serverNow: new Date(now),
-        },
-      });
-    }
-
     const nowDate = new Date();
     if (isStudent) {
       session.studentJoinTime = nowDate;
@@ -501,4 +462,7 @@ exports.joinSession = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+
+
 
