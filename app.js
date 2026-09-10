@@ -106,6 +106,7 @@ app.use("/api/reschedules", require("./routes/rescheduleRoutes"));
 const payoutScheduler = require("./services/cron/payoutScheduler"); 
 const weeklyReportScheduler = require("./services/cron/weeklyReportScheduler");
 const sessionReminderScheduler = require("./services/cron/sessionReminderScheduler");
+const sessionExpiryScheduler = require("./services/cron/sessionExpiryScheduler");
 require("./services/cron/batchScheduler");
 const demoExpiryScheduler = require("./services/cron/demoExpiryScheduler");
 
@@ -115,9 +116,11 @@ app.startBackgroundJobs = () => {
   payoutScheduler.start();
   weeklyReportScheduler.start();
   sessionReminderScheduler.start();
+  sessionExpiryScheduler.start();
   demoExpiryScheduler.start();
  
   demoExpiryScheduler.runOnce();
+  sessionExpiryScheduler.runOnce();
   payoutScheduler.runOnce();
 };
 
@@ -147,3 +150,4 @@ app.use((req, res) => {
 app.use(errorHandler);
 
 module.exports = app; 
+

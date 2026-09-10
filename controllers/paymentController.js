@@ -96,17 +96,13 @@ function buildDailyDateRange(startDate, count) {
 
 function buildMonthlyDateRange(startDate) {
   const start = startOfUtcDay(startDate);
-  const monthStart = new Date(
-    Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1)
-  );
-  const nextMonthStart = new Date(
-    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1)
-  );
+  const end = new Date(start);
+  end.setUTCMonth(end.getUTCMonth() + 1);
   const dates = [];
 
   for (
-    let cursor = new Date(monthStart);
-    cursor < nextMonthStart;
+    let cursor = new Date(start);
+    cursor < end;
     cursor = addUtcDays(cursor, 1)
   ) {
     dates.push(formatDateOnly(cursor));
@@ -4099,6 +4095,7 @@ exports.requestTutorPayout = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
 
 
 

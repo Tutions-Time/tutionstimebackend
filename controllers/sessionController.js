@@ -224,6 +224,7 @@ exports.markAttendanceEvent = async (req, res) => {
 
       if (action === "join") {
         session.studentJoinTime = now;
+        session.studentAttendance = "present";
       } else {
         session.studentLeaveTime = now;
       }
@@ -243,6 +244,7 @@ exports.markAttendanceEvent = async (req, res) => {
 
       if (action === "join") {
         session.tutorJoinTime = now;
+        session.tutorAttendance = "present";
       } else {
         session.tutorLeaveTime = now;
       }
@@ -256,6 +258,8 @@ exports.markAttendanceEvent = async (req, res) => {
     // if both studentJoinTime and tutorJoinTime exist => present
     if (session.studentJoinTime && session.tutorJoinTime) {
       session.attendance = "present";
+      session.studentAttendance = "present";
+      session.tutorAttendance = "present";
     }
 
     await session.save();
@@ -441,12 +445,16 @@ exports.joinSession = async (req, res) => {
     const nowDate = new Date();
     if (isStudent) {
       session.studentJoinTime = nowDate;
+      session.studentAttendance = "present";
     } else if (isTutor) {
       session.tutorJoinTime = nowDate;
+      session.tutorAttendance = "present";
     }
 
     if (session.studentJoinTime && session.tutorJoinTime) {
       session.attendance = "present";
+      session.studentAttendance = "present";
+      session.tutorAttendance = "present";
     }
 
     await session.save();
@@ -462,6 +470,7 @@ exports.joinSession = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
 
 
 

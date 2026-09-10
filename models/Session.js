@@ -38,8 +38,18 @@ const sessionSchema = new mongoose.Schema(
       default: "scheduled",
     },
 
-    // simple present/absent flag
+    // Overall attendance remains for existing reports.
     attendance: {
+      type: String,
+      enum: ["present", "absent", "not-marked"],
+      default: "not-marked",
+    },
+    studentAttendance: {
+      type: String,
+      enum: ["present", "absent", "not-marked"],
+      default: "not-marked",
+    },
+    tutorAttendance: {
       type: String,
       enum: ["present", "absent", "not-marked"],
       default: "not-marked",
@@ -73,3 +83,4 @@ const sessionSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model("Session", sessionSchema);
+

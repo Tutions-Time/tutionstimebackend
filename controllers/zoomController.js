@@ -48,11 +48,11 @@ async function completeSession(session, endTime, options = {}) {
   session.status = "completed";
   session.actualEndTime = endTime || new Date();
 
-  if (session.studentJoinTime) {
-    session.attendance = "present";
-  } else if (session.attendance !== "present") {
-    session.attendance = "absent";
-  }
+  const studentPresent = Boolean(session.studentJoinTime);
+  const tutorPresent = Boolean(session.tutorJoinTime);
+  session.studentAttendance = studentPresent ? "present" : "absent";
+  session.tutorAttendance = tutorPresent ? "present" : "absent";
+  session.attendance = studentPresent && tutorPresent ? "present" : "absent";
 
   await session.save();
   if (options.notify) {
@@ -151,3 +151,4 @@ exports.handleZoomWebhook = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
