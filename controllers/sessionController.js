@@ -442,6 +442,36 @@ exports.joinSession = async (req, res) => {
       return res.status(403).json({ success: false, message: "Not authorized" });
     }
 
+    const classDurationMin = 60;
+    let joinBeforeMin = 10;
+    let expireAfterMin = 5;
+    if (session.groupBatchId) {
+      const gb = await GroupBatch.findById(session.groupBatchId).select("accessWindow");
+      joinBeforeMin = gb?.accessWindow?.joinBeforeMin ?? joinBeforeMin;
+      expireAfterMin = gb?.accessWindow?.expireAfterMin ?? expireAfterMin;
+    }
+
+    const realStart = new Date(session.startDateTime).getTime();
+    const wallClockStart = session.groupBatchId ? realStart : getUtcWallClockMs(session.startDateTime);
+    const start = Number.isFinite(wallClockStart) ? wallClockStart : realStart;
+    const end = start + classDurationMin * 60 * 1000;
+    const openAt = start - joinBeforeMin * 60 * 1000;
+    const closeAt = end + expireAfterMin * 60 * 1000;
+    const now = Date.now();
+    const canJoin = now >= openAt && now <= closeAt;
+    if (!canJoin) {
+      return res.status(403).json({
+        success: false,
+        message: "Join opens 10 minutes before class",
+        data: {
+          startAt: new Date(start),
+          opensAt: new Date(openAt),
+          closesAt: new Date(closeAt),
+          serverNow: new Date(now),
+        },
+      });
+    }
+
     const nowDate = new Date();
     if (isStudent) {
       session.studentJoinTime = nowDate;
@@ -470,6 +500,7 @@ exports.joinSession = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
 
 
 

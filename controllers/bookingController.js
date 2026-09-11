@@ -18,6 +18,8 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || null;
 
 // Demo duration in minutes (business rule)
 const DEMO_DURATION_MINUTES = 15;
+const DEMO_JOIN_BEFORE_MINUTES = 10;
+const DEMO_EXPIRE_AFTER_MINUTES = 5;
 const REGULAR_SESSION_DURATION_MINUTES = Number(
   process.env.REGULAR_SESSION_DURATION_MINUTES || 60
 );
@@ -121,6 +123,15 @@ function getBookingEndDateTime(booking) {
   return minutesAfter(start, DEMO_DURATION_MINUTES);
 }
 
+function isDemoJoinWindowOpen(booking) {
+  const start = getBookingStartDateTime(booking);
+  const end = getBookingEndDateTime(booking);
+  if (!start || !end) return false;
+  const now = Date.now();
+  const openAt = start.getTime() - DEMO_JOIN_BEFORE_MINUTES * 60 * 1000;
+  const closeAt = end.getTime() + DEMO_EXPIRE_AFTER_MINUTES * 60 * 1000;
+  return now >= openAt && now <= closeAt;
+}
 function buildDemoTopic(booking) {
   const subject = booking?.subject || "tuitionstime Demo";
   if (booking?.preferredDate) {
@@ -1382,6 +1393,9 @@ exports.markStudentJoined = async (req, res) => {
     if (booking.status !== "confirmed") {
       return res.status(400).json({ success: false, message: "Demo not confirmed yet" });
     }
+    if (!isDemoJoinWindowOpen(booking)) {
+      return res.status(403).json({ success: false, message: "Join opens 10 minutes before class" });
+    }
     if (!booking.studentJoinedAt) {
       booking.studentJoinedAt = new Date();
       await booking.save();
@@ -1424,6 +1438,9 @@ exports.markTutorJoined = async (req, res) => {
     }
     if (booking.status !== "confirmed") {
       return res.status(400).json({ success: false, message: "Demo not confirmed yet" });
+    }
+    if (!isDemoJoinWindowOpen(booking)) {
+      return res.status(403).json({ success: false, message: "Join opens 10 minutes before class" });
     }
     if (!booking.tutorJoinedAt) {
       booking.tutorJoinedAt = new Date();
@@ -3026,6 +3043,7 @@ exports.getTutorDemoInsights = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error", error: err.message });
   }
 };
+
 
 
 
