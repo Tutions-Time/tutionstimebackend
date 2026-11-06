@@ -112,6 +112,9 @@ const sanitizeTutorCard = (tutor, metrics) => ({
   hourlyRate: tutor.hourlyRate,
   monthlyRate: tutor.monthlyRate,
   subjects: tutor.subjects || [],
+  bio: tutor.bio,
+  boards: tutor.boards || [],
+  exams: tutor.exams || [],
   classLevels: tutor.classLevels || [],
   teachingMode: tutor.teachingMode,
   availability: tutor.availability || [],
@@ -138,7 +141,7 @@ exports.getTopTutors = async (req, res) => {
     const tutors = await TutorProfile.find({ name: { $exists: true, $ne: '' } })
       .populate('userId', 'role status isDeleted isProfileComplete')
       .select(
-        'name photoUrl city state qualification specialization experience hourlyRate monthlyRate subjects classLevels teachingMode availability rating ratingCount isFeatured kycStatus userId createdAt'
+        'name photoUrl city state qualification specialization experience hourlyRate monthlyRate bio boards exams subjects classLevels teachingMode availability rating ratingCount isFeatured kycStatus userId createdAt'
       )
       .lean();
 
